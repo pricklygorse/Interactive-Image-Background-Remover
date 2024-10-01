@@ -1,4 +1,4 @@
-# Background Remover GUI
+# Interactive Image Background Remover
 
 A user interface for several background remover models, currently supporting onnx versions of u2net, disnet, rmbg, BiRefNet and Segment Anything (not V2 yet).
 
@@ -26,7 +26,7 @@ Running the script from the command line with multiple images specified will loa
 
 # Models
 
-Place the models (or symlinks if located elsewhere) in the Models folder. The filenames names are hardcoded currently sorry, so please rename your downloaded files to match if needed.
+Place the models (or symlinks if located elsewhere) in the Models folder. The model filenames are hardcoded currently sorry, so please rename your downloaded files to match if needed.
 
 I highly recommend starting with mobile-sam due to almost instantaneous mask generation, then trying the larger segment anything models if you need a higher quality mask (or just zoom in more)
 
