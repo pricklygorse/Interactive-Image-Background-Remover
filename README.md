@@ -1,6 +1,6 @@
 # Interactive Image Background Remover
 
-A user interface for several background remover models, currently supporting onnx versions of u2net, disnet, rmbg, BiRefNet and Segment Anything (not V2 yet).
+A (work in progress) user interface for several background remover models, currently supporting onnx versions of u2net, disnet, rmbg, BiRefNet and Segment Anything (not V2 yet).
 
 ![Screenshot of main window](Images/main_image.jpg)
 
