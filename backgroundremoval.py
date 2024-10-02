@@ -46,7 +46,7 @@ class ImageClickApp:
         self.pan_start_y = 0
         self.last_x, self.last_y = 0, 0
         
-
+        self.test = 1
         
         self.lines = []
         self.lines_id = []
@@ -64,7 +64,9 @@ class ImageClickApp:
         
         self.root = root
         self.root.title("Background Remover"+file_count)
-        
+        # For some reason maximising the window doesn't work until after __init__ has run
+        # but fortunately can use a resize event to maximise the widgets
+        self.root.bind("<Configure>", self.on_resize)
         
     
         m = [m for m in get_monitors() if m.is_primary][0]
@@ -74,6 +76,9 @@ class ImageClickApp:
         self.canvas_h = m.height-100 
 
         
+        self.init_width = 200
+        self.init_height = 200
+
         if platform.system() == "Windows":
             self.root.state('zoomed')
         elif platform.system() == "Darwin":
@@ -81,7 +86,12 @@ class ImageClickApp:
         else:
             self.root.attributes('-zoomed', True)
 
- 
+        self.root.update_idletasks()
+
+        
+        
+
+
         self.setup_image_display()
         self.build_gui()
         
@@ -97,7 +107,35 @@ class ImageClickApp:
         self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
         
 
-    
+    def on_resize(self, event):
+        
+
+        # Check if window has changed dimensions as this function can get called
+        # multiple times for some reason
+        if not self.root.winfo_height() == self.init_height or not self.root.winfo_width() == self.init_width:
+            if hasattr(self, "encoder_output"):
+                delattr(self, "encoder_output")
+            self.init_width = self.root.winfo_width()
+            self.init_height = self.root.winfo_height()
+            print("window resized")
+            self.canvas_w = (self.init_width -250) //2
+            self.canvas_h = self.init_height  
+            self.canvas.config(width=self.canvas_w, height=self.canvas_h)
+            self.canvas2.config(width=self.canvas_w, height=self.canvas_h)
+            
+            # this is from setup_image_display but without clearing the working image
+            self.lowest_zoom_factor = min(self.canvas_w / self.original_image.width, self.canvas_h / self.original_image.height)
+            self.zoom_factor = self.lowest_zoom_factor
+            self.view_x = 0
+            self.view_y = 0
+            self.min_zoom=True
+            # make a checkerboard that is always larger than preview window
+            # because of rounding error
+            self.checkerboard = self.create_checkerboard(self.canvas_w * 2, self.canvas_h * 2, square_size = 10)
+
+            self.update_zoomed_view()
+
+      
 
     
     def setup_image_display(self):
@@ -344,7 +382,7 @@ class ImageClickApp:
         self.view_x = max(0, min(self.view_x, self.original_image.width - self.canvas_w / self.zoom_factor))
         self.view_y = max(0, min(self.view_y, self.original_image.height - self.canvas_h / self.zoom_factor))
         
-        self.zoom_label.config(text=f"Zoom: {int(self.zoom_factor * 100)}%")
+        
         
         if self.min_zoom==False: 
             self.update_zoomed_view()
@@ -391,6 +429,8 @@ class ImageClickApp:
 
     @profile
     def update_zoomed_view(self):
+        
+        self.zoom_label.config(text=f"Zoom: {int(self.zoom_factor * 100)}%")
         
         # Calculate the size of the visible area in the original image coordinates
         view_width = self.canvas_w / self.zoom_factor
@@ -1169,11 +1209,13 @@ class ImageClickApp:
         self.root.destroy()
         
     def edit_image(self):
-        editor = ImageEditor(self.root, self.original_image, self.file_count)
-        self.root.wait_window(editor.crop_window)
-        if editor.final_image:
-            self.original_image = editor.final_image
-            self.initialise_new_image()
+        if messagebox.askyesno("Continue?", "Editing the original image will reset the current working output image. Would you like to edit the image?"): 
+
+            editor = ImageEditor(self.root, self.original_image, self.file_count)
+            self.root.wait_window(editor.crop_window)
+            if editor.final_image:
+                self.original_image = editor.final_image
+                self.initialise_new_image()
         
     def loadclipboard(self):
         
