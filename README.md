@@ -12,17 +12,43 @@ Press A to add the current mask to your image, Z to remove.
 
 Scroll wheel to zoom, and middle click to pan around the image. The models will be applied only to the visible zoomed image, which enables much higher detail and working in finer detail than just running the models on the whole image
 
-Use paint mode to draw areas that you want to add/remove to the image without using a model.
+Use manual paintbrush mode to draw areas that you want to add/remove to the image without using a model.
 
 Post process mask removes the partial transparency from outputs of whole-image models. 
 
-Other shortcuts are listed on the buttons to the right.
-
-Includes a built in image editor and cropper. Loading this will reset your current working image. 
+Includes a built-in image editor and cropper. Loading this will reset your current working image. 
 
 ![Screenshot of main window](Images/image_editor.jpg)
 
 Running the script from the command line with multiple images specified will load the images one after another for assisted batch usage.
+
+# Usage
+
+Usage:
+
+Right Mouse click: Add coordinate point for segment anything models
+Left Mouse click: Add negative coordinate (area for the model to avoid)
+Right click and drag: Draw box for segment anything models
+
+Hotkeys:
+
+<a> Add current mask to working image
+<z> Remove current mask from working image
+<q> Undo last action
+<p> Manual paintbrush mode
+<c> Clear current mask (and coordinate points)
+<w> Reset the current working image
+<r> Reset everything (image, masks, coordinates)
+<v> Clear the visible area on the working image
+<s> Save as PNG
+<j> Quick save JPG with white background
+
+Whole image models (if downloaded to Models folder)
+<u> u2net
+<i> disnet
+<o> rmbg
+<b> BiRefNet-general-bb_swin_v1_tiny-epoch_232
+
 
 # Models
 
