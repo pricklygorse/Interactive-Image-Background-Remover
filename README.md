@@ -32,22 +32,22 @@ Right click and drag: Draw box for segment anything models
 
 Hotkeys:
 
-<a> Add current mask to working image
-<z> Remove current mask from working image
-<q> Undo last action
-<p> Manual paintbrush mode
-<c> Clear current mask (and coordinate points)
-<w> Reset the current working image
-<r> Reset everything (image, masks, coordinates)
-<v> Clear the visible area on the working image
-<s> Save as PNG
-<j> Quick save JPG with white background
+a : Add current mask to working image
+z : Remove current mask from working image
+q: Undo last action
+p : Manual paintbrush mode
+c : Clear current mask (and coordinate points)
+w : Reset the current working image
+r : Reset everything (image, masks, coordinates)
+v : Clear the visible area on the working image
+s : Save as PNG
+j : Quick save JPG with white background
 
 Whole image models (if downloaded to Models folder)
-<u> u2net
-<i> disnet
-<o> rmbg
-<b> BiRefNet-general-bb_swin_v1_tiny-epoch_232
+u : u2net
+i : disnet
+o : rmbg
+b : BiRefNet-general-bb_swin_v1_tiny-epoch_232
 
 
 # Models
