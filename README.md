@@ -24,30 +24,46 @@ Running the script from the command line with multiple images specified will loa
 
 # Usage
 
-Usage:
+## Mouse
 
 Right Mouse click: Add coordinate point for segment anything models
+
 Left Mouse click: Add negative coordinate (area for the model to avoid)
+
 Right click and drag: Draw box for segment anything models
 
-Hotkeys:
+## Hotkeys:
 
 a : Add current mask to working image
+
 z : Remove current mask from working image
+
 q: Undo last action
+
 p : Manual paintbrush mode
+
 c : Clear current mask (and coordinate points)
+
 w : Reset the current working image
+
 r : Reset everything (image, masks, coordinates)
+
 v : Clear the visible area on the working image
+
 s : Save as PNG
+
 j : Quick save JPG with white background
 
-Whole image models (if downloaded to Models folder)
+_Run whole-image models (if downloaded to Models folder)_
+
 u : u2net
+
 i : disnet
+
 o : rmbg
+
 b : BiRefNet-general-bb_swin_v1_tiny-epoch_232
+
 
 
 # Models
