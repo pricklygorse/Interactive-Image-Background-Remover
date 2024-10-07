@@ -1,6 +1,6 @@
 # Interactive Image Background Remover
 
-A (work in progress) user interface for several background remover models, currently supporting onnx versions of u2net, disnet, rmbg, BiRefNet and Segment Anything (not V2 yet).
+A (work in progress) user interface for several background remover models, currently supporting onnx versions of u2net, disnet, rmbg, BiRefNet and interactive editing using Segment Anything (not V2 yet). Similar idea to Photoroom where you can just run the background remover model, or adjust the finer details by adding/removing points/areas/manual paintbrush.
 
 ![Screenshot of main window](Images/main_image.jpg)
 
@@ -23,6 +23,10 @@ Includes a built-in image editor and cropper. Loading this will reset your curre
 Running the script from the command line with multiple images specified will load the images one after another for assisted batch usage.
 
 # Usage
+
+## Running
+
+`pip install` any missing packages, copy the background removal models you want to use into the Models folder (see model links below) then run `python backgroundremoval.py`. Any images supplied as arguments will be opened sequentially so you can work on the images in a batch.
 
 ## Mouse
 
@@ -50,7 +54,7 @@ r : Reset everything (image, masks, coordinates)
 
 v : Clear the visible area on the working image
 
-s : Save as PNG
+s : Save image as....
 
 j : Quick save JPG with white background
 
@@ -68,7 +72,7 @@ b : BiRefNet-general-bb_swin_v1_tiny-epoch_232
 
 # Models
 
-Onnx Background removal models can be downloaded from these locations:
+Background removal models in onnx format can be downloaded from these locations:
 
 - Segment Anything + mobile-sam: [https://huggingface.co/vietanhdev/segment-anything-onnx-models/tree/main](https://huggingface.co/vietanhdev/segment-anything-onnx-models/tree/main)
 - rembg: [https://huggingface.co/briaai/RMBG-1.4/tree/main/onnx](https://huggingface.co/briaai/RMBG-1.4/tree/main/onnx)
@@ -107,7 +111,7 @@ whole_models = [
 
 Find this useful and want to support my work? [You can buy me a coffee (or whatever) here.](https://ko-fi.com/pricklygorse) :)
 
-I'm fairly new to python and tkinter so any improvements to the code, features, and suggestions are welcome. 
+I'm fairly new to python and tkinter so any improvements to the code, features, and suggestions are welcome. There are likely bugs.
 
 
 # Acknowledgements

@@ -368,9 +368,9 @@ class ImageClickApp:
         self.PostMask.pack(fill="x", side="top")
         self.Options.pack(fill="x", padx=2, pady=3, side="top")
         self.save_png = ttk.Button(self.Controls, name="save_png")
-        self.save_png.configure(text='Save As PNG')
+        self.save_png.configure(text='Save Image As....')
         self.save_png.pack(fill="x", padx=2, pady=3, side="top")
-        self.save_png.configure(command=self.save_as_png)
+        self.save_png.configure(command=self.save_as_image)
         self.save_jpeg = ttk.Button(self.Controls, name="save_jpeg")
         self.save_jpeg.configure(text='Quick Save (JPEG white background)')
         self.save_jpeg.pack(fill="x", padx=2, pady=3, side="top")
@@ -472,7 +472,7 @@ class ImageClickApp:
         self.root.bind("<a>", lambda event: self.add_to_working_image())
         self.root.bind("<z>", lambda event: self.remove_from_working_image())
         self.root.bind("<w>", lambda event: self.clear_working_image())
-        self.root.bind("<s>", lambda event: self.save_as_png())
+        self.root.bind("<s>", lambda event: self.save_as_image())
         self.root.bind("<j>", lambda event: self.save_as_jpeg())
         self.root.bind("<p>", self.paint_mode_toggle)
         self.root.bind("<v>", lambda event: self.clear_visible_area())
@@ -729,9 +729,10 @@ class ImageClickApp:
         self.update_output_preview()
     
     def clear_visible_area(self):
-        
+        mask_old = self.mask.copy()
         self.mask = Image.new("L", self.orig_image_crop.size, 255)
         self.remove_from_working_image()
+        self.mask = mask_old
     
     def apply_zoomed_mask_to_full_image(self, zoomed_mask):
         full_mask = Image.new('L', self.original_image.size, 0)
@@ -1065,12 +1066,13 @@ class ImageClickApp:
             self.sam_encoder = ort.InferenceSession(self.sam_model + ".encoder.onnx")
             self.sam_decoder = ort.InferenceSession(self.sam_model + ".decoder.onnx")
         elif not self.sam_model == MODEL_ROOT + self.sam_model_choice.get():
-            self.status_label.config(text="Loading model", fg=STATUS_PROCESSING)
+            self.status_label.config(text="Loading model " + self.sam_model_choice.get(), fg=STATUS_PROCESSING)
             self.status_label.update()
             self.sam_model = MODEL_ROOT + self.sam_model_choice.get()
             self.sam_encoder = ort.InferenceSession(self.sam_model + ".encoder.onnx")
             self.sam_decoder = ort.InferenceSession(self.sam_model + ".decoder.onnx")
-            delattr(self, "encoder_output")
+            self.clear_coord_overlay()
+            if hasattr(self, "encoder_output"): delattr(self, "encoder_output")
 
 
     def generate_sam_overlay(self, event):
@@ -1265,17 +1267,22 @@ class ImageClickApp:
         return np.array(output_masks)
 
     
-    def save_dialog(self, ext):
+    
+    
+    
+      
+    def save_as_jpeg(self):
+        
 
         self.status_label.config(text="", fg=STATUS_NORMAL)
 
         dir_path = os.path.dirname(file_path)
         file_name = os.path.basename(file_path)
 
-        file_name_nobg = os.path.splitext(file_name)[0] + "_nobg."+ext
+        file_name_nobg = os.path.splitext(file_name)[0] + "_nobg.jpg"
 
         user_filename = asksaveasfilename(title = "Save as", 
-                                          defaultextension='.'+ext, filetypes=[(ext, "."+ext)],
+                                          defaultextension=".jpg", filetypes=[("jpg", ".jpg")],
                                           
                                           initialdir=dir_path, initialfile=file_name_nobg,
                                           )
@@ -1283,36 +1290,8 @@ class ImageClickApp:
         if len(user_filename) == 0:
             return None
         
-        if not user_filename.endswith("."+ext): user_filename+="."+ext
+        if not user_filename.endswith(".jpg"): user_filename+=".jpg"
         
-        return user_filename
-    
-    
-    def save_as_png(self):
-
-        user_filename = self.save_dialog("png")
-        if not user_filename: return
-        
-        if not self.bg_color.get() == "Transparent":
-            workimg = self.apply_background_color(self.working_image, self.bg_color.get()) 
-        else: 
-            workimg = self.working_image
-        
-        self.status_label.config(text="Saving to PNG (slow)", fg=STATUS_PROCESSING)
-        self.root.update()
-        if self.image_exif:
-            workimg.save(user_filename, lossless=True, optimize=True, exif=self.image_exif) #lossless is for webp, optimize is for png. doesnt seem to matter if unused parameters added here
-        else:
-            workimg.save(user_filename, lossless=True, optimize=True)
-        print("Saved to "+ user_filename)
-        self.status_label.config(text="Saved to "+ user_filename, fg=STATUS_NORMAL)
-        self.canvas.update()
-        
-    def save_as_jpeg(self):
-        
-        user_filename = self.save_dialog("jpg")
-        if not user_filename: return
-
         print(user_filename)
 
         workimg = self.apply_background_color(self.working_image, "White")
@@ -1324,7 +1303,114 @@ class ImageClickApp:
         print("Saved to "+ user_filename)
         self.status_label.config(text="Saved to "+ user_filename)
         self.canvas.update()
+
+    
+    def show_save_options(self):
+        option_window = tk.Toplevel(self.root)
+        option_window.title("Save Options")
+        option_window.geometry("300x250")
+        option_window.resizable(False, False)
+
+        file_type = tk.StringVar(value="png")
+        quality = tk.IntVar(value=90)
+
+        def update_quality_state(*args):
+            if file_type.get() in ["lossy_webp", "jpg"]:
+                quality_slider.config(state="normal")
+                quality_label.config(state="normal")
+            else:
+                quality_slider.config(state="disabled")
+                quality_label.config(state="disabled")
+
+        tk.Label(option_window, text="Select file type:").pack(anchor="w", padx=10, pady=(10, 5))
+        tk.Radiobutton(option_window, text="PNG", variable=file_type, value="png").pack(anchor="w", padx=20)
+        tk.Radiobutton(option_window, text="Lossless WebP", variable=file_type, value="lossless_webp").pack(anchor="w", padx=20)
+        tk.Radiobutton(option_window, text="Lossy WebP", variable=file_type, value="lossy_webp").pack(anchor="w", padx=20)
+        tk.Radiobutton(option_window, text="JPEG", variable=file_type, value="jpg").pack(anchor="w", padx=20)
+
+        quality_label = tk.Label(option_window, text="Quality (for Lossy WebP and JPEG):")
+        quality_label.pack(anchor="w", padx=10, pady=(10, 0))
+        quality_slider = tk.Scale(option_window, from_=1, to=100, orient=tk.HORIZONTAL, variable=quality)
+        quality_slider.pack(fill="x", padx=10)
+
+        file_type.trace("w", update_quality_state)
+        update_quality_state()
+
+        result = {"file_type": None, "quality": None}
+
+        def on_ok():
+            result["file_type"] = file_type.get()
+            result["quality"] = quality.get()
+            option_window.destroy()
+
+        tk.Button(option_window, text="OK", command=on_ok).pack(pady=10)
+
+        option_window.wait_window()
+        return result   
+    
+    def save_as_image(self):
+        options = self.show_save_options()
+        if not options["file_type"]:
+            return
+
+        file_types = {
+            "png": (".png", "PNG files"),
+            "lossless_webp": (".webp", "WebP files"),
+            "lossy_webp": (".webp", "WebP files"),
+            "jpg": (".jpg", "JPEG files")
+        }
+
+        ext, file_type = file_types[options["file_type"]]
         
+        initial_file = os.path.splitext(os.path.basename(self.save_file))[0] + ext
+        user_filename = asksaveasfilename(
+            title="Save as",
+            defaultextension=ext,
+            filetypes=[(file_type, "*" + ext)],
+            initialdir=os.path.dirname(self.save_file),
+            initialfile=initial_file
+        )
+
+        if not user_filename:
+            return
+
+        if not user_filename.lower().endswith(ext):
+            user_filename += ext
+
+        if not self.bg_color.get() == "Transparent":
+            workimg = self.apply_background_color(self.working_image, self.bg_color.get())
+        else:
+            workimg = self.working_image
+
+        save_params = {}
+        if self.image_exif:
+            save_params['exif'] = self.image_exif
+
+        if options["file_type"] == "png":
+            save_params['optimize'] = True
+        elif options["file_type"] == "lossless_webp":
+            save_params['lossless'] = True
+        elif options["file_type"] == "lossy_webp":
+            save_params['lossless'] = False
+            save_params['quality'] = options["quality"]
+        elif options["file_type"] == "jpg":
+            save_params['quality'] = options["quality"]
+            workimg = workimg.convert("RGB")
+
+        self.status_label.config(text=f"Saving to {ext.upper()[1:]}", fg=STATUS_PROCESSING)
+        self.root.update()
+
+        try:
+            workimg.save(user_filename, **save_params)
+            print(f"Saved to {user_filename}")
+            self.status_label.config(text=f"Saved to {user_filename}", fg=STATUS_NORMAL)
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to save image: {str(e)}")
+
+        self.canvas.update()
+
+    
+
     def update_bg_color(self):
                 
         if self.bg_color_var.get() == 1:
@@ -1445,7 +1531,7 @@ Hotkeys:
 <w> Reset the current working image
 <r> Reset everything (image, masks, coordinates)
 <v> Clear the visible area on the working image
-<s> Save as PNG
+<s> Save as....
 <j> Quick save JPG with white background
 
 Whole image models (if downloaded to Models folder)
