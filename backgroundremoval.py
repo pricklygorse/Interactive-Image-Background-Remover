@@ -2,6 +2,7 @@
 #!/usr/bin/env python3
 from line_profiler import profile
 import tkinter as tk
+import tkinter.ttk as ttk
 from tkinter import Checkbutton, Frame, Button, OptionMenu, messagebox
 from tkinter import Canvas, IntVar, StringVar, BooleanVar
 from tkinter.filedialog import askopenfilename, asksaveasfilename
@@ -46,7 +47,7 @@ class ImageClickApp:
         self.pan_start_y = 0
         self.last_x, self.last_y = 0, 0
         
-        self.test = 1
+
         
         self.lines = []
         self.lines_id = []
@@ -64,20 +65,34 @@ class ImageClickApp:
         
         self.root = root
         self.root.title("Background Remover"+file_count)
-        # For some reason maximising the window doesn't work until after __init__ has run
-        # but fortunately can use a resize event to maximise the widgets
-        self.root.bind("<Configure>", self.on_resize)
         
-    
+        
+        s = ttk.Style()
+        s.theme_use('alt')
+        
+
+
+
+
         m = [m for m in get_monitors() if m.is_primary][0]
         
-        
-        self.canvas_w = (m.width -250) //2
+        self.canvas_w = (m.width -300) //2
         self.canvas_h = m.height-100 
 
-        
+        # This is the default tkinter initalisation size
+        # If the script notices these dimensions have changed, widgets have been added to the canvas
+
         self.init_width = 200
         self.init_height = 200
+
+        
+        self.setup_image_display()
+        self.build_gui()
+        
+        # Maximising the window doesn't work until after __init__ has run
+        # (although full screen would work)
+        # so use the resize event to maximise the interface, and allow user resizing the window
+        self.root.bind("<Configure>", self.on_resize)
 
         if platform.system() == "Windows":
             self.root.state('zoomed')
@@ -88,14 +103,7 @@ class ImageClickApp:
 
         self.root.update_idletasks()
 
-        
-        
-
-
-        self.setup_image_display()
-        self.build_gui()
-        
-        self.update_zoomed_view()
+        #self.update_zoomed_view()
 
 
         self.mask = Image.new("L", (int(self.orig_image_crop.width), 
@@ -108,18 +116,22 @@ class ImageClickApp:
         
 
     def on_resize(self, event):
-        
-
         # Check if window has changed dimensions as this function can get called
-        # multiple times for some reason
+        # multiple times for some reason, even just when clicking the canvas
+
+        self.root.update_idletasks()
         if not self.root.winfo_height() == self.init_height or not self.root.winfo_width() == self.init_width:
+            
+            # The currently displayed preview that is being used will change, so 
+            # a new encoding has to be calculated
             if hasattr(self, "encoder_output"):
                 delattr(self, "encoder_output")
             self.init_width = self.root.winfo_width()
             self.init_height = self.root.winfo_height()
             print("window resized")
-            self.canvas_w = (self.init_width -250) //2
-            self.canvas_h = self.init_height  
+
+            self.canvas_w = (self.init_width -300) //2
+            self.canvas_h = self.init_height - 40
             self.canvas.config(width=self.canvas_w, height=self.canvas_h)
             self.canvas2.config(width=self.canvas_w, height=self.canvas_h)
             
@@ -142,19 +154,14 @@ class ImageClickApp:
 
         self.lowest_zoom_factor = min(self.canvas_w / self.original_image.width, self.canvas_h / self.original_image.height)
   
-
         self.working_image = Image.new("RGBA", self.original_image.size, (0, 0, 0, 0))
         self.old_working_image = self.working_image.copy()
 
-        
-        
-        
         self.zoom_factor = self.lowest_zoom_factor
         self.view_x = 0
         self.view_y = 0
         self.min_zoom=True
-        
-        
+      
         # make a checkerboard that is always larger than preview window
         # because of rounding error
         self.checkerboard = self.create_checkerboard(self.canvas_w * 2, self.canvas_h * 2, square_size = 10)
@@ -178,144 +185,225 @@ class ImageClickApp:
         
         return img
     
-    def build_gui(self):
-
-        self.imgFrame = Frame(root)
-
-        self.canvas = Canvas(self.imgFrame, width=self.canvas_w, height=self.canvas_h,
-                             highlightthickness=1, highlightbackground="black")
-        self.canvas.pack(side=tk.LEFT)
-
-        
-        self.canvas2 = Canvas(self.imgFrame, width=self.canvas_w, height=self.canvas_h,
-                              highlightthickness=1, highlightbackground="black")
-        self.canvas2.pack(side=tk.LEFT)
-
-        
-        self.imgFrame.pack(side=tk.LEFT)
-        
-        self.checkbox_frame = Frame(root)
-        self.checkbox_frame.pack()
-        
-        self.bg_color_var = IntVar()
-        self.ppm_var = BooleanVar()
-        self.paint_mode = BooleanVar()
-        
-        self.load_frame= Frame(self.checkbox_frame)
-        
-        self.load_image_button = Button(self.load_frame, text="Open File", command=self.load_image )
-        self.load_image_button.pack(side=tk.LEFT)
-        
-        self.loadfromclipboardbutton = Button(self.load_frame, text="Open Clipboard", command=self.loadclipboard )
-        self.loadfromclipboardbutton.pack(side=tk.LEFT)
-        
-        self.load_frame.pack()
-        
-        
-        
-        
-        self.preprocess_image = Button(self.checkbox_frame, text="EDIT IMAGE (clears all) <e>", command=self.edit_image )
-        self.preprocess_image.pack(pady=(10,20))
-
-
-        
-
-
-        
-        
-        
-        
-        self.clearbutton2 = Button(self.checkbox_frame, text="Clear points and overlay <c>", command=self.clear_coord_overlay)
-        
-        self.clearbutton2.pack()
-        
-        self.clearbutton3 = Button(self.checkbox_frame, text="Reset Output Image <w>", command=self.clear_working_image)
-        self.clearbutton3.pack()
-        
-        self.clearbutton = Button(self.checkbox_frame, text="Reset everything <r>", command=self.reset_all)
-        self.clearbutton.pack()
-        
-        
-        self.whole_image_label = tk.Label(self.checkbox_frame, text="Whole-image (preview area) models")
-        self.whole_image_label.pack(pady=(20,0))
-        
-        self.whole_model_choice = StringVar(self.checkbox_frame)
-        self.whole_model_choice.set("rmbg1_4 <o>") # default value
-
-        self.model_map = {
-            "u2net <u>": "u2net",
-            "isnet-general-use <i>": "isnet-general-use",
-            "rmbg1_4 <o>": "rmbg1_4",
-            "BiRefNet-general_swin_tiny <b>": "BiRefNet-general-bb_swin_v1_tiny-epoch_232",
-            "BiRefNet-DIS-bb_pvt": "BiRefNet-DIS-bb_pvt_v2_b0-epoch_590",
-            "BiRefNet-general_swin_tiny_FP16": "iRefNet-general-bb_swin_v1_tiny-epoch_232_FP16",
-        }
     
-        self.image_model = OptionMenu(self.checkbox_frame, self.whole_model_choice, 
-                                       *self.model_map.keys())
-        self.image_model.pack(pady=(0,0))
-        
-        self.ppm_check = Checkbutton(self.checkbox_frame, text="Post Process Mask", variable=self.ppm_var)
-        self.ppm_check.pack()
-        
-        self.whole_button = Button(self.checkbox_frame, text="Run model", command=lambda: self.run_unet_model(None))
-        self.whole_button.pack(pady=(0,20))
 
-        
-        self.sam_label = tk.Label(self.checkbox_frame, text="Segment Anything Model:")
-        self.sam_label.pack()
-        
-        self.sam_model_choice = StringVar(self.checkbox_frame)
-        self.sam_model_choice.set("mobile_sam") # default value
 
-        self.sam_dropdown = OptionMenu(self.checkbox_frame, self.sam_model_choice, 
-                                       "mobile_sam", "sam_vit_b_01ec64", 
-                                       "sam_vit_b_01ec64.quant", "sam_vit_l_0b3195.quant", "sam_vit_h_4b8939.quant", "sam2_hiera_tiny")
-        self.sam_dropdown.pack(pady=(0,0))    
+    def build_gui(self):
         
+        self.root.minsize(width=800, height=600)  
         
-        
-        self.undobutton = Button(self.checkbox_frame, text="Undo <q>", command=self.undo)
-        self.undobutton.pack(pady=(20,0))
-        
-        self.appendbutton = Button(self.checkbox_frame, text="Add to Image <a>", command=self.add_to_working_image)
-        self.appendbutton.pack()
-        
-        self.removebutton = Button(self.checkbox_frame, text="Remove from Image <z>", command=self.remove_from_working_image)
-        self.removebutton.pack()
-        
-        self.copy_button = Button(self.checkbox_frame, text="Copy original to canvas <d>", command=self.copy_entire_image)
-        self.copy_button.pack()
-        
-        self.clear_visible_button = Button(self.checkbox_frame, text="Clear visible area <v>", command=self.clear_visible_area)
-        self.clear_visible_button.pack()
-        
-        self.bg_color_check = Checkbutton(self.checkbox_frame, text="White Background", variable=self.bg_color_var, command=self.update_bg_color)
-        self.bg_color_check.pack(pady=(20,0))
-        
-        self.paintmodebutton = Checkbutton(self.checkbox_frame, text="Manual Paint <p>", variable=self.paint_mode, command=self.paint_mode_toggle)
-        self.paintmodebutton.pack(pady=(20,0))
-        
-        
-        
-        
+        # self.root.option_add("*Background", "white") # doesnt do everything
+        # self.root.option_add("*Button*Background", "white") # individual widget types
 
-        self.savebutton = Button(self.checkbox_frame, text="Save PNG <s>", command=self.save_as_png)
-        self.savebutton.pack(pady=(20,0))
-        
-        self.savebuttonjpg = Button(self.checkbox_frame, text="Save JPG white background <j>", command=self.save_as_jpeg)
-        self.savebuttonjpg.pack()
-        
-        
-        self.status_title = tk.Label(self.checkbox_frame, text="Current Status:")
-        self.status_title.pack(pady=(20,0))
-        self.status_label = tk.Label(self.checkbox_frame, text="", wraplength=200)
-        self.status_label.pack()
-        
-        self.zoom_label = tk.Label(self.checkbox_frame, text="Zoom: "+ str(int(self.zoom_factor *100))+"%")
-        self.zoom_label.pack(pady=(20,0))
-        
-        
+        # Generated by pybubu designer. 
+        self.main_frame = tk.Frame(self.root, container=False, name="main_frame")
+        self.main_frame.configure(height=200, width=200)
+
+        self.editor_frame = ttk.Frame(self.main_frame, name="editor_frame")
+        self.editor_frame.configure(height=200, width=200)
+        self.input_frame = tk.Frame(self.editor_frame, name="input_frame")
+        self.input_frame.configure(height=10, width=10)
+        self.canvas_input_label = ttk.Label(
+            self.input_frame, name="canvas_input_label")
+        self.canvas_input_label.configure(text='Input')
+        self.canvas_input_label.pack(padx=10, side="top")
+        self.canvas = tk.Canvas(self.input_frame, name="canvas")
+        self.canvas.pack(expand=True, fill="both", side="top")
+        self.input_frame.pack(expand=True, fill="both", side="left")
+        separator_1 = ttk.Separator(self.editor_frame)
+        separator_1.configure(orient="vertical")
+        separator_1.pack(expand=False, fill="y", side="left")
+        self.output_frame = tk.Frame(self.editor_frame, name="output_frame")
+        self.output_frame.configure(height=10, width=10)
+        self.output = ttk.Label(self.output_frame, name="output")
+        self.output.configure(text='Output')
+        self.output.pack(padx=10, side="top")
+        self.canvas2 = tk.Canvas(self.output_frame, name="canvas2")
+        self.canvas2.pack(expand=True, fill="both", side="top")
+        self.output_frame.pack(expand=True, fill="both", side="left")
+        separator_3 = ttk.Separator(self.editor_frame)
+        separator_3.configure(orient="vertical")
+        separator_3.pack(expand=False, fill="y", side="left")
+        self.Controls = tk.Frame(self.editor_frame, name="controls")
+        self.Controls.configure(height=500, width=300)
+        self.OpenImage = tk.Frame(self.Controls, name="openimage")
+        self.OpenImage.configure(borderwidth=1, relief="groove")
+        self.openimageclipboard = ttk.Frame(
+            self.OpenImage, name="openimageclipboard")
+        self.openimageclipboard.configure(width=200)
+        self.OpnImg = ttk.Button(self.openimageclipboard, name="opnimg")
+        self.OpnImg.configure(text='Open Image')
+        self.OpnImg.pack(side="left")
+        self.OpnImg.configure(command=self.load_image)
+        self.OpnClp = ttk.Button(self.openimageclipboard, name="opnclp")
+        self.OpnClp.configure(text='Open Clipboard')
+        self.OpnClp.pack(side="left")
+        self.OpnClp.configure(command=self.loadclipboard)
+        self.openimageclipboard.pack(side="top")
+        self.EditImage = ttk.Button(self.OpenImage, name="editimage")
+        self.EditImage.configure(text='Edit Image')
+        self.EditImage.pack(side="top")
+        self.EditImage.configure(command=self.edit_image)
+        self.OpenImage.pack(fill="x", padx=2, pady=3, side="top")
+        self.ModelSelection = tk.Frame(self.Controls, name="modelselection")
+        self.ModelSelection.configure(
+            borderwidth=1, height=200, relief="groove", width=200)
+        self.model_select_label = tk.Label(
+            self.ModelSelection, name="model_select_label")
+        self.model_select_label.configure(text='Model Selection:')
+        self.model_select_label.pack(
+            anchor="center", fill="x", pady=2, side="top")
+        self.SegmentAnything = tk.Frame(
+            self.ModelSelection, name="segmentanything")
+        self.SegmentAnything.configure(height=200, width=200)
+        self.sam_label = tk.Label(self.SegmentAnything, name="sam_label")
+        self.sam_label.configure(text='Segment Anything')
+        self.sam_label.pack(side="left")
+        self.sam_combo = ttk.Combobox(self.SegmentAnything, name="sam_combo")
+        self.sam_model_choice = tk.StringVar()
+        self.sam_combo.configure(
+            state="readonly",
+            takefocus=False,
+            textvariable=self.sam_model_choice,
+            values='mobile_sam sam_vit_b_01ec64 sam_vit_b_01ec64.quant sam_vit_l_0b3195.quant sam_vit_h_4b8939.quant',
+            width=22)
+        self.sam_combo.pack(side="right")
+        self.SegmentAnything.pack(fill="x", padx=2, pady=2, side="top")
+        self.Whole = tk.Frame(self.ModelSelection, name="whole")
+        self.Whole.configure(height=200, width=200)
+        self.whole_image_label = tk.Label(self.Whole, name="whole_image_label")
+        self.whole_image_label.configure(text='Whole-Image')
+        self.whole_image_label.pack(side="left")
+        self.whole_image_combo = ttk.Combobox(
+            self.Whole, name="whole_image_combo")
+        self.whole_image_combo.configure(
+            state="readonly",
+            takefocus=False,
+            values='rmbg1_4 isnet-general-use u2net BiRefNet-general-bb_swin_v1_tiny-epoch_232 BiRefNet-DIS-bb_pvt_v2_b0-epoch_590 ',
+            width=22)
+        self.whole_image_combo.pack(side="right")
+        self.Whole.pack(fill="x", padx=2, side="top")
+        self.ModelSelection.pack(fill="x", padx=2, pady=3, side="top")
+        self.Edit = tk.Frame(self.Controls, name="edit")
+        self.Edit.configure(
+            borderwidth=1,
+            height=200,
+            relief="groove",
+            width=200)
+        label_9 = tk.Label(self.Edit)
+        label_9.configure(text='Edit:')
+        label_9.pack(anchor="center", fill="x", pady=2, side="top")
+        self.SubEdit = tk.Frame(self.Edit, name="subedit")
+        self.SubEdit.configure(height=200, width=200)
+        self.EditCluster = tk.Frame(self.SubEdit, name="editcluster")
+        self.EditCluster.configure(height=200, width=200)
+        self.Add = ttk.Button(self.EditCluster, name="add")
+        self.Add.configure(text='Add mask')
+        self.Add.pack(expand=True, side="left")
+        self.Add.configure(command=self.add_to_working_image)
+        self.Remove = ttk.Button(self.EditCluster, name="remove")
+        self.Remove.configure(text='Remove mask')
+        self.Remove.pack(expand=True, side="left")
+        self.Remove.configure(command=self.remove_from_working_image)
+        self.Undo = ttk.Button(self.EditCluster, name="undo")
+        self.Undo.configure(text='Undo')
+        self.Undo.pack(expand=True, side="left")
+        self.Undo.configure(command=self.undo)
+        self.EditCluster.pack(expand=True, fill="x", pady=3, side="top")
+        self.SubEdit.pack(fill="x", side="top")
+        self.whole_image_button = ttk.Button(
+            self.Edit, name="whole_image_button")
+        self.whole_image_button.configure(text='Run whole-image model')
+        self.whole_image_button.pack(fill="x", padx=2, pady=2, side="top")
+        self.ClrPoint = ttk.Button(self.Edit, name="clrpoint")
+        self.ClrPoint.configure(text='Clear Points and Mask Overlay')
+        self.ClrPoint.pack(fill="x", padx=2, pady=2, side="top")
+        self.ClrPoint.configure(command=self.clear_coord_overlay)
+        self.ClrArea = ttk.Button(self.Edit, name="clrarea")
+        self.ClrArea.configure(text='Clear Visible Area')
+        self.ClrArea.pack(fill="x", padx=2, pady=2, side="top")
+        self.ClrArea.configure(command=self.clear_visible_area)
+        self.RstOut = ttk.Button(self.Edit, name="rstout")
+        self.RstOut.configure(text='Clear Output Image')
+        self.RstOut.pack(fill="x", padx=2, pady=2, side="top")
+        self.RstOut.configure(command=self.clear_working_image)
+        self.RstEverything = ttk.Button(self.Edit, name="rsteverything")
+        self.RstEverything.configure(text='Reset Everything!')
+        self.RstEverything.pack(fill="x", padx=2, pady=2, side="top")
+        self.RstEverything.configure(command=self.reset_all)
+        self.copy_in_out = ttk.Button(self.Edit, name="copy_in_out")
+        self.copy_in_out.configure(text='Copy Input to Output')
+        self.copy_in_out.pack(fill="x", padx=2, pady=2, side="top")
+        self.copy_in_out.configure(command=self.copy_entire_image)
+        self.Edit.pack(fill="x", padx=2, pady=3, side="top")
+        self.Options = tk.Frame(self.Controls, name="options")
+        self.Options.configure(
+            borderwidth=1,
+            height=200,
+            relief="groove",
+            width=200)
+        label_12 = tk.Label(self.Options)
+        label_12.configure(text='Options:')
+        label_12.pack(anchor="center", fill="x", pady=2, side="top")
+        self.BgSel = tk.Frame(self.Options, name="bgsel")
+        self.BgSel.configure(height=200, width=200)
+        label_15 = tk.Label(self.BgSel)
+        label_15.configure(text='Background')
+        label_15.pack(side="left")
+        self.bg_color = ttk.Combobox(self.BgSel, name="bg_color")
+        self.bg_color.configure(
+            state="readonly",
+            values='Transparent White Black Red Blue Orange Yellow Green',
+            width=16)
+        self.bg_color.pack(expand=False, side="right")
+        self.BgSel.pack(fill="x", padx=2, pady=2, side="top")
+        self.ManPaint = tk.Checkbutton(self.Options, name="manpaint")
+        self.paint_mode = tk.BooleanVar()
+        self.ManPaint.configure(
+            text='Manual Paintbrush',
+            variable=self.paint_mode)
+        self.ManPaint.pack(fill="x", side="left")
+        self.ManPaint.configure(command=self.paint_mode_toggle)
+        self.PostMask = tk.Checkbutton(self.Options, name="postmask")
+        self.ppm_var = tk.BooleanVar()
+        self.PostMask.configure(
+            text='Post Process Mask',
+            variable=self.ppm_var)
+        self.PostMask.pack(fill="x", side="top")
+        self.Options.pack(fill="x", padx=2, pady=3, side="top")
+        self.save_png = ttk.Button(self.Controls, name="save_png")
+        self.save_png.configure(text='Save As PNG')
+        self.save_png.pack(fill="x", padx=2, pady=3, side="top")
+        self.save_png.configure(command=self.save_as_png)
+        self.save_jpeg = ttk.Button(self.Controls, name="save_jpeg")
+        self.save_jpeg.configure(text='Save As JPEG (white background)')
+        self.save_jpeg.pack(fill="x", padx=2, pady=3, side="top")
+        self.save_jpeg.configure(command=self.save_as_jpeg)
+        self.HelpAbout = ttk.Button(self.Controls, name="helpabout")
+        self.HelpAbout.configure(text='Help / About')
+        self.HelpAbout.pack(fill="x", padx=2, pady=3, side="bottom")
+        self.HelpAbout.configure(command=self.show_help)
+        self.Controls.pack(expand=True, fill="both", side="right")
+        self.editor_frame.pack(expand=True, fill="both", side="top")
+        self.messagerow = tk.Frame(self.main_frame, name="messagerow")
+        self.messagerow.configure(background="#ffffff", height=30)
+        self.status_label = tk.Label(self.messagerow, name="status_label")
+        self.status_label.configure(justify="left", text='Status: Idle')
+        self.status_label.pack(expand=True, fill="x", side="left")
+        self.zoom_label = tk.Label(self.messagerow, name="zoom_label")
+        self.zoom_label.configure(text='Zoom: 23%', width=20)
+        self.zoom_label.pack(side="left")
+        self.messagerow.pack(fill="x", side="right")
+        self.main_frame.pack(expand=True, fill="both", side="top")
+        # Main widget
+        #self.mainwindow = self.main_frame
+
+        self.bg_color.bind("<<ComboboxSelected>>", lambda event: self.update_output_preview())
+        self.bg_color.current(0)
+        self.sam_combo.current(0)
+        self.whole_image_combo.current(0)
+        self.whole_image_button.configure(command = lambda: self.run_unet_model(None))
+
         
     def set_keybindings(self):
 
@@ -427,11 +515,11 @@ class ImageClickApp:
         self.panning = False    
         self.update_zoomed_view()
 
-    @profile
+    
     def update_zoomed_view(self):
         
         self.zoom_label.config(text=f"Zoom: {int(self.zoom_factor * 100)}%")
-        
+
         # Calculate the size of the visible area in the original image coordinates
         view_width = self.canvas_w / self.zoom_factor
         view_height = self.canvas_h / self.zoom_factor
@@ -476,7 +564,7 @@ class ImageClickApp:
 
         self.update_output_preview()
         
-    @profile
+    
     def update_output_preview(self):
         
         # Calculate the size of the visible area in the original image coordinates
@@ -503,13 +591,13 @@ class ImageClickApp:
         crop_height = min(self.canvas_h, 
                             self.working_image.height * self.zoom_factor)
 
-        if self.bgcolor:
+        if not self.bg_color.get() == "Transparent":
             # crop away the overcropped (padded) bit at low zoom levels
             preview = self.apply_background_color(preview.crop((0,0,
                                                         min(self.canvas_w, self.orig_img_preview_w),
                                                         min(self.canvas_h,self.orig_img_preview_h)
                                                         )), 
-                                                    self.bgcolor)
+                                                    self.bg_color.get())
         else:
             # Composite a checkerboard to improve performance. imagetk.photoimage struggles with alpha
             # Crop checkerboard to either canvas size or preview image, if smaller
@@ -708,8 +796,10 @@ class ImageClickApp:
     def load_unet_model(self, model_name):
         
         if not hasattr(self, f"{model_name}_session"):
+            
             self.status_label.config(text=f"Loading {model_name}", fg=STATUS_PROCESSING)
             self.status_label.update()
+
             setattr(self, f"{model_name}_session", ort.InferenceSession(f'{MODEL_ROOT}{model_name}.onnx'))
         return getattr(self, f"{model_name}_session")
     
@@ -719,14 +809,23 @@ class ImageClickApp:
         
         # if button has been clicked
         if model_name == None:
-            selected = self.whole_model_choice.get()
-            model_name = self.model_map.get(selected)
+            #selected = self.whole_model_choice.get()
+            #model_name = self.model_map.get(selected)
+            model_name = self.whole_image_combo.get()
             target_size = 320 if model_name == "u2net" else 1024
 
-        session = self.load_unet_model(model_name)
+        try: 
+            session = self.load_unet_model(model_name)
+        except Exception as e:
+            print(e)
+            self.status_label.config(text=f"ERROR: {e}", fg=STATUS_PROCESSING)
+            self.root.update()
+            messagebox.showerror("Error", e)
+            return
+
 
         self.status_label.config(text=f"Processing {model_name}", fg=STATUS_PROCESSING)
-        self.canvas.update()
+        self.status_label.update()
 
         self.mask = self.generate_unet_mask(self.orig_image_crop, session, self.ppm_var.get(), target_size)
         
@@ -1006,13 +1105,13 @@ class ImageClickApp:
             }
             
             
-            self.status_label.config(text="Calculating Image Embedding\nMay take a while", fg=STATUS_PROCESSING)
+            self.status_label.config(text="Calculating Image Embedding. May take a while", fg=STATUS_PROCESSING)
             self.root.update()
             
             start = timer()
             self.encoder_output = sam_encoder.run(None, encoder_inputs)
 
-            status = f"{round(timer()-start,2)} seconds embedding\n"
+            status = f"{round(timer()-start,2)} seconds to calculate embedding | "
 
             self.status_label.config(text=status, fg=STATUS_NORMAL)
             
@@ -1059,8 +1158,8 @@ class ImageClickApp:
         
         
         
-        status += f"{round(timer()-start,2)} seconds inference"
-        status += f"\n{round(float(a[0][0]),2)} confidence score"
+        status += f"{round(timer()-start,2)} seconds inference | "
+        status += f"{round(float(a[0][0]),2)} confidence score"
 
         self.status_label.config(text=status)
 
@@ -1152,8 +1251,8 @@ class ImageClickApp:
         user_filename = self.save_dialog("png")
         if not user_filename: return
         
-        if self.bgcolor: 
-            workimg = self.apply_background_color(self.working_image, self.bgcolor) 
+        if not self.bg_color.get() == "Transparent":
+            workimg = self.apply_background_color(self.working_image, self.bg_color.get()) 
         else: 
             workimg = self.working_image
         
@@ -1174,7 +1273,7 @@ class ImageClickApp:
 
         print(user_filename)
 
-        workimg = self.apply_background_color(self.working_image, (255, 255, 255, 255))
+        workimg = self.apply_background_color(self.working_image, "White")
         workimg = workimg.convert("RGB")
         if self.image_exif:
             workimg.save(user_filename, quality=90, exif=self.image_exif)
@@ -1197,8 +1296,8 @@ class ImageClickApp:
 
     def apply_background_color(self, img, color):
 
-        r, g, b, a = color
-        colored_image = Image.new("RGBA", img.size, (r, g, b, a))
+        #r, g, b, a = color
+        colored_image = Image.new("RGBA", img.size, color)
         colored_image.paste(img, mask=img)
 
         return colored_image
@@ -1268,7 +1367,75 @@ class ImageClickApp:
         self.clear_coord_overlay()
         self.reset_all()
         
-    
+    def show_help(self):
+        message = """
+            Interactive Background Remover by Sean (Prickly Gorse)
+
+A user interface for removing backgrounds using interactive models (Segment Anything) and Whole Image Models (u2net, disnet, rmbg, BirefNet)
+
+Load your image, and either run one of the whole image models (u2net <u>, disnet <i>, rmbg <o>, BiRefNet) or click/draw a box to run Segment Anything. Left click is a positive point, right is a negative (avoid this area) point.
+
+The original image is displayed on the left, the current image you are working on is displayed to the right.
+
+Type A to add the current mask to your image, Z to remove.
+
+Scroll wheel to zoom, and middle click to pan around the image. The models will be applied only to the visible zoomed image, which enables much higher detail and working in finer detail than just running the models on the whole image
+
+Use paintbrush mode <p> to draw areas that you want to add/remove to the image without using a model.
+
+Post process mask removes the partial transparency from outputs of whole-image models. 
+
+Includes a built in image editor and cropper. Using this will reset your current working image.
+
+Usage:
+
+Right Mouse click: Add coordinate point for segment anything models
+Left Mouse click: Add negative coordinate (area for the model to avoid)
+Rigth click and drag: Draw box for segment anything models
+
+Hotkeys:
+
+<a> Add current mask to working image
+<z> Remove current mask from working image
+<q> Undo last action
+<p> Manual paintbrush mode
+<c> Clear current mask (and coordinate points)
+<w> Reset the current working image
+<r> Reset everything (image, masks, coordinates)
+<v> Clear the visible area on the working image
+
+Whole image models (if downloaded to Models folder)
+<u> u2net
+<i> disnet
+<o> rmbg
+<b> BiRefNet-general-bb_swin_v1_tiny-epoch_232
+
+            """
+        
+        info_window = tk.Toplevel(self.root)
+        info_window.title("Help/About")
+        info_window.geometry("800x500")
+        
+        frame = tk.Frame(info_window)
+        frame.pack(expand=True, fill=tk.BOTH, padx=10, pady=10)
+        
+        # Create the text widget
+        text_widget = tk.Text(frame, wrap=tk.WORD)
+        text_widget.pack(side=tk.LEFT, expand=True, fill=tk.BOTH)
+        
+        # Create the scrollbar
+        scrollbar = tk.Scrollbar(frame, command=text_widget.yview)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        
+        # Configure the text widget to use the scrollbar
+        text_widget.config(yscrollcommand=scrollbar.set)
+        
+        # Insert the content and disable editing
+        text_widget.insert(tk.END, message)
+        text_widget.config(state=tk.DISABLED)
+        
+        close_button = tk.Button(info_window, text="Close", command=info_window.destroy)
+        close_button.pack(pady=10)
 
 
 class ImageEditor:
@@ -1340,7 +1507,9 @@ class ImageEditor:
         self.slider_frame.pack(side=tk.LEFT)
         
         
-        
+        self.croplabel = ttk.Label(self.slider_frame)
+        self.croplabel.configure(text='Click and drag to draw a crop box')
+        self.croplabel.pack(pady=5)
         
         
         self.sliders = {}
@@ -1418,7 +1587,7 @@ class ImageEditor:
         
         self.crop_window.bind("<Return>", lambda x: self.crop_image())
          
-    
+    @profile
     def apply_unsharp_mask(self, image, radius, amount, threshold):
         if amount == 0:
             return image
@@ -1473,7 +1642,7 @@ class ImageEditor:
              self.sliders[param].set(value)     
 
     
-     
+    @profile 
     def update_crop_preview(self, *args):
         params = {param: self.sliders[param].get() for param in self.sliders}
         img_adjusted = self.adjust_image_levels(self.display_image, **params)
@@ -1562,7 +1731,7 @@ class ImageEditor:
         
         self.update_crop_preview()
 
-
+    @profile
     def adjust_image_levels(self, image, highlight, midtone, shadow, brightness, contrast, 
                             saturation, steepness, white_balance,
                             unsharp_radius, unsharp_amount, unsharp_threshold):
@@ -1604,6 +1773,7 @@ class ImageEditor:
      
          return adjusted_image
     
+    @profile
     def adjust_white_balance(self, image, temperature):
         rgb = self.kelvin_to_rgb(temperature)
         r_factor, g_factor, b_factor = [x / max(rgb) for x in rgb]
