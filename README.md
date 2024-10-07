@@ -52,36 +52,37 @@ Whole image models (if downloaded to Models folder)
 
 # Models
 
-Place the models (or symlinks if located elsewhere) in the Models folder. The model filenames are hardcoded currently sorry, so please rename your downloaded files to match what is listed below if needed. Quantised Segment Anything models require the .quant suffix before .encoder in the filename, which is the opposite of how they are downloaded from the links below.
-
-I highly recommend starting with mobile-sam as it has almost instantaneous mask generation even on older cpu only computers, then trying the larger segment anything models if you need a higher quality mask. Zooming in and using mobile-sam however has been very effective for me.
-
-Models can be downloaded from:
+Onnx Background removal models can be downloaded from these locations:
 
 - Segment Anything + mobile-sam: [https://huggingface.co/vietanhdev/segment-anything-onnx-models/tree/main](https://huggingface.co/vietanhdev/segment-anything-onnx-models/tree/main)
 - rembg: [https://huggingface.co/briaai/RMBG-1.4/tree/main/onnx](https://huggingface.co/briaai/RMBG-1.4/tree/main/onnx)
 - u2net, disnet, BiRefNet, Segment Anything, and more: [https://github.com/danielgatis/rembg/releases/tag/v0.0.0](https://github.com/danielgatis/rembg/releases/tag/v0.0.0)
 
-I've no idea what the different versions of BiRefNet are so the hardcoded 3 are not necessarily the best. 
+Place the models (or symlinks if located elsewhere) in the Models folder. The script checks for models at each start up. 
 
-```
-BiRefNet-DIS-bb_pvt_v2_b0-epoch_590.onnx
-BiRefNet-general-bb_swin_v1_tiny-epoch_232_FP16.onnx
-BiRefNet-general-bb_swin_v1_tiny-epoch_232.onnx
-isnet-general-use.onnx
-mobile_sam.decoder.onnx
-mobile_sam.encoder.onnx
-rmbg1_4.onnx
-rmbg1_4-quant.onnx
-sam_vit_b_01ec64.decoder.onnx
-sam_vit_b_01ec64.decoder.quant.onnx
-sam_vit_b_01ec64.encoder.onnx
-sam_vit_b_01ec64.encoder.quant.onnx
-sam_vit_h_4b8939.decoder.quant.onnx
-sam_vit_h_4b8939.encoder.quant.onnx
-sam_vit_l_0b3195.decoder.quant.onnx
-sam_vit_l_0b3195.encoder.quant.onnx
-u2net.onnx
+If using quantised Segment Anything models, these require the .quant suffix before .encoder in the filename, which is the opposite of how they are downloaded from the links above.
+
+I highly recommend starting with mobile-sam as it has almost instantaneous mask generation even on older cpu-only computers, then trying the larger segment anything models if you need a higher quality mask. Only using mobile-sam and just zooming in when I need more detail however has been very effective for me.
+
+The following models are hardcoded, simply add to this section if you want to include a different model.
+
+``` python
+# will also match quantised versions .quant
+sam_models = [
+            "mobile_sam",
+            "sam_vit_b_01ec64", 
+            "sam_vit_h_4b8939",
+            "sam_vit_l_0b3195",
+            ]
+
+whole_models = [
+        "rmbg1_4",
+        "rmbg1_4-quant",
+        "isnet-general-use",
+        "isnet-anime",
+        "u2net",
+        "BiRefNet", # matches all birefnet variations
+]
 ```
 
 

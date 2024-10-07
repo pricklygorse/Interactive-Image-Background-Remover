@@ -261,7 +261,7 @@ class ImageClickApp:
             state="readonly",
             takefocus=False,
             textvariable=self.sam_model_choice,
-            values='mobile_sam sam_vit_b_01ec64 sam_vit_b_01ec64.quant sam_vit_l_0b3195.quant sam_vit_h_4b8939.quant',
+            values='mobile_sam',
             width=22)
         self.sam_combo.pack(side="right")
         self.SegmentAnything.pack(fill="x", padx=2, pady=2, side="top")
@@ -275,7 +275,7 @@ class ImageClickApp:
         self.whole_image_combo.configure(
             state="readonly",
             takefocus=False,
-            values='rmbg1_4 isnet-general-use u2net BiRefNet-general-bb_swin_v1_tiny-epoch_232 BiRefNet-DIS-bb_pvt_v2_b0-epoch_590 ',
+            values='rmbg1_4',
             width=22)
         self.whole_image_combo.pack(side="right")
         self.Whole.pack(fill="x", padx=2, side="top")
@@ -397,7 +397,54 @@ class ImageClickApp:
         self.bg_color.current(0)
         self.sam_combo.current(0)
         self.whole_image_combo.current(0)
-        self.whole_image_button.configure(command = lambda: self.run_unet_model(None))
+        self.whole_image_button.configure(command = lambda: self.run_whole_image_model(None))
+
+        # will also match quantised versions .quant
+        sam_models = [
+            "mobile_sam",
+            "sam_vit_b_01ec64",
+            "sam_vit_h_4b8939",
+            "sam_vit_l_0b3195",
+            ]
+
+        whole_models = [
+                "rmbg1_4",
+                "rmbg1_4-quant",
+                "isnet-general-use",
+                "isnet-anime",
+                "u2net",
+                "BiRefNet", # all birefnet variations
+        ]
+
+        matches = []
+
+        for partial_name in sam_models:
+            for filename in os.listdir('Models/'):
+                filename = filename.replace(".encoder.onnx","").replace(".decoder.onnx","")
+                if partial_name in filename:
+                    matches.append(filename)
+
+        if len(matches) == 0:
+            messagebox.showerror("No segment anything models found in Models folder")
+
+        models = " ".join(list(dict.fromkeys(matches)))
+        print("SAM models found:", models)
+        self.sam_combo.configure(values=models)
+
+        matches = []
+
+        for partial_name in whole_models:
+            for filename in os.listdir('Models/'):
+                if partial_name in filename and ".onnx" in filename:
+                    matches.append(filename.replace(".onnx",""))
+
+        if len(matches) == 0:
+            messagebox.showerror("No whole-image models found in Models folder")
+
+        models = " ".join(list(dict.fromkeys(matches)))
+        print("Whole image models found:", models)
+        self.whole_image_combo.configure(values=models)
+
 
         
     def set_keybindings(self):
@@ -430,12 +477,12 @@ class ImageClickApp:
         self.root.bind("<p>", self.paint_mode_toggle)
         self.root.bind("<v>", lambda event: self.clear_visible_area())
         self.root.bind("<e>", lambda event: self.edit_image())
-        self.root.bind("<u>", lambda event: self.run_unet_model("u2net", target_size=320))
-        self.root.bind("<i>", lambda event: self.run_unet_model("isnet-general-use"))
-        self.root.bind("<o>", lambda event: self.run_unet_model("rmbg1_4"))
-        self.root.bind("<b>", lambda event: self.run_unet_model("BiRefNet-general-bb_swin_v1_tiny-epoch_232"))
-        self.root.bind("<n>", lambda event: self.run_unet_model("BiRefNet-DIS-bb_pvt_v2_b0-epoch_590"))
-        self.root.bind("<m>", lambda event: self.run_unet_model("BiRefNet-general-bb_swin_v1_tiny-epoch_232_FP16"))        
+        self.root.bind("<u>", lambda event: self.run_whole_image_model("u2net", target_size=320))
+        self.root.bind("<i>", lambda event: self.run_whole_image_model("isnet-general-use"))
+        self.root.bind("<o>", lambda event: self.run_whole_image_model("rmbg1_4"))
+        self.root.bind("<b>", lambda event: self.run_whole_image_model("BiRefNet-general-bb_swin_v1_tiny-epoch_232"))
+        self.root.bind("<n>", lambda event: self.run_whole_image_model("BiRefNet-DIS-bb_pvt_v2_b0-epoch_590"))
+        self.root.bind("<m>", lambda event: self.run_whole_image_model("BiRefNet-general-bb_swin_v1_tiny-epoch_232_FP16"))        
         self.root.bind("<q>", lambda event: self.undo())
         
     
@@ -788,7 +835,7 @@ class ImageClickApp:
         self.coordinates = []
         self.labels =[]
     
-    def load_unet_model(self, model_name):
+    def load_whole_image_model(self, model_name):
         
         if not hasattr(self, f"{model_name}_session"):
             
@@ -800,7 +847,7 @@ class ImageClickApp:
     
     
     
-    def run_unet_model(self, model_name, target_size = 1024):
+    def run_whole_image_model(self, model_name, target_size = 1024):
         
         # if button has been clicked
         if model_name == None:
@@ -810,7 +857,7 @@ class ImageClickApp:
             target_size = 320 if model_name == "u2net" else 1024
 
         try: 
-            session = self.load_unet_model(model_name)
+            session = self.load_whole_image_model(model_name)
         except Exception as e:
             print(e)
             self.status_label.config(text=f"ERROR: {e}", fg=STATUS_PROCESSING)
@@ -822,12 +869,12 @@ class ImageClickApp:
         self.status_label.config(text=f"Processing {model_name}", fg=STATUS_PROCESSING)
         self.status_label.update()
 
-        self.mask = self.generate_unet_mask(self.orig_image_crop, session, self.ppm_var.get(), target_size)
+        self.mask = self.generate_whole_image_model_mask(self.orig_image_crop, session, self.ppm_var.get(), target_size)
         
         self.generate_coloured_overlay()            
      
         
-    def generate_unet_mask(self, image,  session, ppm=False, target_size=1024):
+    def generate_whole_image_model_mask(self, image,  session, ppm=False, target_size=1024):
         
         def sigmoid(mat):
             # For BiRefNet
