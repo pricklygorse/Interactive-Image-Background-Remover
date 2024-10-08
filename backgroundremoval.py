@@ -33,14 +33,17 @@ class ImageClickApp:
         self.file_count  = file_count
         self.save_file = image_path[0:-4]+"_nobg.png"
         self.save_file_jpg = image_path[0:-4]+"_nobg.jpg"
+        self.save_file_type = "png"
+        self.save_file_quality = 90
         self.coordinates = []
         self.labels=[]
         self.bgcolor = None
         self.dots=[]
         
+        # For segment anything models, to stop the user accidently drawing a tiny rectangle
+        # instead of clicking to make a point
         self.min_rect_size = 5
         
-                
         self.panning = False
         self.pan_start_x = 0
         self.pan_start_y = 0
@@ -374,7 +377,7 @@ class ImageClickApp:
         self.save_jpeg = ttk.Button(self.Controls, name="save_jpeg")
         self.save_jpeg.configure(text='Quick Save (JPEG white background)')
         self.save_jpeg.pack(fill="x", padx=2, pady=3, side="top")
-        self.save_jpeg.configure(command=self.save_as_jpeg)
+        self.save_jpeg.configure(command=self.quick_save_jpeg)
         self.HelpAbout = ttk.Button(self.Controls, name="helpabout")
         self.HelpAbout.configure(text='Help / About')
         self.HelpAbout.pack(fill="x", padx=2, pady=3, side="bottom")
@@ -473,7 +476,7 @@ class ImageClickApp:
         self.root.bind("<z>", lambda event: self.remove_from_working_image())
         self.root.bind("<w>", lambda event: self.clear_working_image())
         self.root.bind("<s>", lambda event: self.save_as_image())
-        self.root.bind("<j>", lambda event: self.save_as_jpeg())
+        self.root.bind("<j>", lambda event: self.quick_save_jpeg())
         self.root.bind("<p>", self.paint_mode_toggle)
         self.root.bind("<v>", lambda event: self.clear_visible_area())
         self.root.bind("<e>", lambda event: self.edit_image())
@@ -1271,7 +1274,7 @@ class ImageClickApp:
     
     
       
-    def save_as_jpeg(self):
+    def quick_save_jpeg(self):
         
 
         self.status_label.config(text="", fg=STATUS_NORMAL)
@@ -1308,45 +1311,62 @@ class ImageClickApp:
     def show_save_options(self):
         option_window = tk.Toplevel(self.root)
         option_window.title("Save Options")
-        option_window.geometry("300x250")
+        option_window.geometry("300x280")  
         option_window.resizable(False, False)
-
-        file_type = tk.StringVar(value="png")
-        quality = tk.IntVar(value=90)
-
-        def update_quality_state(*args):
+        
+        file_type = tk.StringVar(value=self.save_file_type)
+        quality = tk.IntVar(value=self.save_file_quality)
+        
+        def update_quality_state(event=None):
             if file_type.get() in ["lossy_webp", "jpg"]:
                 quality_slider.config(state="normal")
                 quality_label.config(state="normal")
+                quality_value_label.config(state="normal")
             else:
                 quality_slider.config(state="disabled")
                 quality_label.config(state="disabled")
-
+                quality_value_label.config(state="disabled")
+        
+        def update_quality_value(event=None):
+            quality_value_label.config(text=str(quality.get()))
+        
         tk.Label(option_window, text="Select file type:").pack(anchor="w", padx=10, pady=(10, 5))
-        tk.Radiobutton(option_window, text="PNG", variable=file_type, value="png").pack(anchor="w", padx=20)
-        tk.Radiobutton(option_window, text="Lossless WebP", variable=file_type, value="lossless_webp").pack(anchor="w", padx=20)
-        tk.Radiobutton(option_window, text="Lossy WebP", variable=file_type, value="lossy_webp").pack(anchor="w", padx=20)
-        tk.Radiobutton(option_window, text="JPEG", variable=file_type, value="jpg").pack(anchor="w", padx=20)
-
+        
+        radio_buttons = []
+        for text, value in [("PNG", "png"), ("Lossless WebP", "lossless_webp"), 
+                            ("Lossy WebP", "lossy_webp"), ("JPEG", "jpg")]:
+            rb = tk.Radiobutton(option_window, text=text, variable=file_type, value=value)
+            rb.pack(anchor="w", padx=20)
+            rb.bind("<ButtonRelease-1>", update_quality_state)
+            radio_buttons.append(rb)
+        
         quality_label = tk.Label(option_window, text="Quality (for Lossy WebP and JPEG):")
         quality_label.pack(anchor="w", padx=10, pady=(10, 0))
-        quality_slider = tk.Scale(option_window, from_=1, to=100, orient=tk.HORIZONTAL, variable=quality)
-        quality_slider.pack(fill="x", padx=10)
-
-        file_type.trace("w", update_quality_state)
-        update_quality_state()
-
+        
+        quality_frame = ttk.Frame(option_window)
+        quality_frame.pack(fill="x", padx=10)
+        
+        quality_slider = ttk.Scale(quality_frame, from_=1, to=100, orient=tk.HORIZONTAL, variable=quality, command=update_quality_value)
+        quality_slider.pack(side="left", fill="x", expand=True)
+        
+        quality_value_label = ttk.Label(quality_frame, text=str(quality.get()), width=3)
+        quality_value_label.pack(side="left", padx=(5, 0))
+        
+        update_quality_state() 
+        
         result = {"file_type": None, "quality": None}
-
+        
         def on_ok():
             result["file_type"] = file_type.get()
             result["quality"] = quality.get()
+            self.save_file_type = file_type.get()
+            self.save_file_quality = quality.get()
             option_window.destroy()
-
+        
         tk.Button(option_window, text="OK", command=on_ok).pack(pady=10)
-
         option_window.wait_window()
-        return result   
+        
+        return result
     
     def save_as_image(self):
         options = self.show_save_options()
@@ -1946,12 +1966,13 @@ if __name__ == "__main__":
         print("No arguments were given")
         
         pillow_formats = [
-            ("All Image Files", "*.bmp *.gif *.jpg *.jpeg *.png *.tif *.tiff"),
+            ("All Image Files", "*.bmp *.gif *.jpg *.jpeg *.png *.tif *.tiff *.webp"),
             ("BMP", "*.bmp"),
             ("GIF", "*.gif"),
             ("JPEG", "*.jpg *.jpeg"),
             ("PNG", "*.png"),
             ("TIFF", "*.tif *.tiff"),
+            ("WEBP", "*.webp"),
             ("All Files", "*.*")
         ]
         
