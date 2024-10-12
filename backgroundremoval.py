@@ -1364,6 +1364,7 @@ class ImageClickApp:
             option_window.destroy()
         
         tk.Button(option_window, text="OK", command=on_ok).pack(pady=10)
+        option_window.bind("<Return>", lambda event: on_ok())
         option_window.wait_window()
         
         return result
