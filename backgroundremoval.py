@@ -492,7 +492,7 @@ class ImageClickApp:
     
     
     def zoom(self, event):
-        print(event.delta)
+        
         # Calculate mouse position in original image coordinates
         mouse_x = self.view_x + event.x / self.zoom_factor
         mouse_y = self.view_y + event.y / self.zoom_factor
