@@ -27,6 +27,7 @@ STATUS_NORMAL = "#000000"
 PAINT_BRUSH_DIAMETER = 18
 
 
+
 class ImageClickApp:
     def __init__(self, root, image_path, file_count=""):
         
@@ -48,6 +49,7 @@ class ImageClickApp:
         self.pan_start_x = 0
         self.pan_start_y = 0
         self.last_x, self.last_y = 0, 0
+        self.pan_step = 30
         
 
         
@@ -487,12 +489,37 @@ class ImageClickApp:
         self.root.bind("<n>", lambda event: self.run_whole_image_model("BiRefNet-DIS-bb_pvt_v2_b0-epoch_590"))
         self.root.bind("<m>", lambda event: self.run_whole_image_model("BiRefNet-general-bb_swin_v1_tiny-epoch_232_FP16"))        
         self.root.bind("<q>", lambda event: self.undo())
+        self.root.bind("<Left>", self.pan_left)
+        self.root.bind("<Right>", self.pan_right)
+        self.root.bind("<Up>", self.pan_up)
+        self.root.bind("<Down>", self.pan_down)
         
     
-    
+    def pan_left(self, event):
+        print("Panning left")
+        self.view_x = max(0, self.view_x - self.pan_step)
+        self.update_zoomed_view()
+
+    def pan_right(self, event):
+        print("Panning right")
+        self.view_x = min(self.original_image.width - self.canvas_w / self.zoom_factor, self.view_x + self.pan_step)
+        self.update_zoomed_view()
+
+    def pan_up(self, event):
+        print("Panning up")
+        self.view_y = max(0, self.view_y - self.pan_step)
+        self.update_zoomed_view()
+
+    def pan_down(self, event):
+        print("Panning down")
+        self.view_y = min(self.original_image.height - self.canvas_h / self.zoom_factor, self.view_y + self.pan_step)
+        self.update_zoomed_view()
+
     
     def zoom(self, event):
         
+        self.pan_step = 30 / self.zoom_factor
+
         # Calculate mouse position in original image coordinates
         mouse_x = self.view_x + event.x / self.zoom_factor
         mouse_y = self.view_y + event.y / self.zoom_factor
