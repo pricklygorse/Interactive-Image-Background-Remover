@@ -1665,7 +1665,7 @@ class ImageEditor:
         self.canvas_crop_window = Canvas(self.crop_window, width=screen_width, height=self.scaled_height)
         self.canvas_crop_window.pack(side=tk.LEFT)
         
-        self.canvas_crop_window.create_image(screen_width/2, screen_height/2, image=self.crop_window_tk_image)
+        #self.canvas_crop_window.create_image(screen_width/2, screen_height/2, image=self.crop_window_tk_image)
         
         
         self.slider_frame = tk.Frame(self.crop_window, width=300)
@@ -1751,6 +1751,10 @@ class ImageEditor:
         self.canvas_crop_window.bind("<ButtonRelease-1>", self.crop_canvas_on_release)
         
         self.crop_window.bind("<Return>", lambda x: self.crop_image())
+
+        self.crop_window.update_idletasks()
+        self.crop_window.update()
+        self.update_crop_preview()
          
     @profile
     def apply_unsharp_mask(self, image, radius, amount, threshold):
@@ -1817,6 +1821,14 @@ class ImageEditor:
         self.canvas_crop_window.create_image( self.canvas_crop_window.winfo_width()/2,
                                              self.canvas_crop_window.winfo_height()/2,
                                              image=self.tk_image)
+        
+        self.canvas_crop_window.create_rectangle(
+            self.canvas_crop_window.winfo_width()/2 - img_adjusted.width/2,
+            self.canvas_crop_window.winfo_height()/2 - img_adjusted.height/2,
+            self.canvas_crop_window.winfo_width()/2 + img_adjusted.width/2 -1,
+            self.canvas_crop_window.winfo_height()/2 + img_adjusted.height/2 -1,
+            outline="black"
+        )
 
         
         if self.rectangle_crop_window:
