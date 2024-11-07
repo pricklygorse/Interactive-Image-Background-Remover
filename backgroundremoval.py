@@ -91,7 +91,7 @@ class ImageClickApp:
 
         
         self.setup_image_display()
-        self.build_gui()
+        
         
         # Maximising the window doesn't work until after __init__ has run
         # (although full screen would work)
@@ -106,8 +106,8 @@ class ImageClickApp:
             self.root.attributes('-zoomed', True)
 
         self.root.update_idletasks()
-
-        #self.update_zoomed_view()
+        self.build_gui()
+        self.update_zoomed_view()
 
 
         self.mask = Image.new("L", (int(self.orig_image_crop.width), 

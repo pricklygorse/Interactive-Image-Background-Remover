@@ -2,6 +2,8 @@
 
 A (work in progress) user interface for several background remover models, currently supporting onnx versions of u2net, disnet, rmbg, BiRefNet and interactive editing using Segment Anything (not V2 yet). Similar idea to Photoroom where you can just run the background remover model, or adjust the finer details by adding/removing points/areas/manual paintbrush.
 
+Only tested on Linux (Fedora) currently.
+
 ![Screenshot of main window](Images/main_image.jpg)
 
 Load your image, and either run one of the whole image models (u2net, disnet, rmbg, BiRefNet) or click/draw a box to run Segment Anything. Left click is a positive point, right is a negative (avoid this area) point.
@@ -26,7 +28,7 @@ Running the script from the command line with multiple images specified will loa
 
 ## Running
 
-`pip install` any missing packages, copy the background removal models you want to use into the Models folder (see model links below) then run `python backgroundremoval.py`. Any images supplied as arguments will be opened sequentially so you can work on the images in a batch.
+`pip install` any missing packages, copy the background removal models you want to use into the Models folder (see model links below) then run `python backgroundremoval.py`. Any images supplied as arguments will be opened sequentially so you can work on the images in a batch, or it will open a file picker dialog to open a file if no arguements provided.
 
 ## Mouse
 
