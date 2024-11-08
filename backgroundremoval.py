@@ -28,11 +28,11 @@ PAINT_BRUSH_DIAMETER = 18
 class ImageClickApp:
     def __init__(self, root, image_path, file_count=""):
         
+        self.root = root
+        self.root.title("Background Remover"+file_count)
+
         self.file_count  = file_count
-        self.save_file = image_path[0:-4]+"_nobg.png"
-        self.save_file_jpg = image_path[0:-4]+"_nobg.jpg"
-        self.save_file_type = "png"
-        self.save_file_quality = 90
+        
         self.coordinates = []
         self.labels=[]
         self.bgcolor = None
@@ -53,19 +53,27 @@ class ImageClickApp:
         self.lines = []
         self.lines_id = []
         self.lines_id2 = []
+        print(type(image_path))
+        if image_path:
+            self.save_file = image_path[0:-4]+"_nobg.png"
+            self.save_file_jpg = image_path[0:-4]+"_nobg.jpg"
+            self.original_image = Image.open(image_path)
+            self.original_image = ImageOps.exif_transpose(self.original_image)
+            try:
+                self.image_exif = self.original_image.info['exif']
+                print("EXIF data found")
+            except KeyError:
+                self.image_exif = None
+                print("No EXIF data found.")
+        else:
+            self.original_image = Image.new("RGBA",(500,500),0)
+            self.save_file = "image_nobg.png"
+            self.save_file_jpg = "image_nobg.jpg"
         
-        self.original_image = Image.open(image_path)
-        self.original_image = ImageOps.exif_transpose(self.original_image)
-        try:
-            self.image_exif = self.original_image.info['exif']
-            print("EXIF data found")
-        except KeyError:
-            self.image_exif = None
-            print("No EXIF data found.")
-
+        self.save_file_type = "png"
+        self.save_file_quality = 90
         
-        self.root = root
-        self.root.title("Background Remover"+file_count)
+        
         
         
         s = ttk.Style()
@@ -865,6 +873,8 @@ class ImageClickApp:
             
             self.status_label.config(text=f"Loading {model_name}", fg=STATUS_PROCESSING)
             self.status_label.update()
+            self.whole_image_button.configure(text=f"Loading {model_name}")
+            self.whole_image_button.update()
 
             setattr(self, f"{model_name}_session", ort.InferenceSession(f'{MODEL_ROOT}{model_name}.onnx'))
         return getattr(self, f"{model_name}_session")
@@ -892,9 +902,13 @@ class ImageClickApp:
 
         self.status_label.config(text=f"Processing {model_name}", fg=STATUS_PROCESSING)
         self.status_label.update()
+        self.whole_image_button.configure(text=f"Processing {model_name}")
+        self.whole_image_button.update()
 
         self.mask = self.generate_whole_image_model_mask(self.orig_image_crop, session, self.ppm_var.get(), target_size)
         
+        self.whole_image_button.configure(text=f"Run whole-image model")
+
         self.generate_coloured_overlay()            
      
         
