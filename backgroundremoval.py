@@ -53,7 +53,7 @@ class ImageClickApp:
         self.lines = []
         self.lines_id = []
         self.lines_id2 = []
-        print(type(image_path))
+        
         if image_path:
             self.save_file = image_path[0:-4]+"_nobg.png"
             self.save_file_jpg = image_path[0:-4]+"_nobg.jpg"
@@ -435,7 +435,7 @@ class ImageClickApp:
                     matches.append(filename)
 
         if len(matches) == 0:
-            messagebox.showerror("No segment anything models found in Models folder")
+            messagebox.showerror("No segment anything models found in Models folder", "Please see the readme on Github for model download links.")
 
         models = " ".join(list(dict.fromkeys(matches)))
         print("SAM models found:", models)
@@ -449,10 +449,10 @@ class ImageClickApp:
                     matches.append(filename.replace(".onnx",""))
 
         if len(matches) == 0:
-            messagebox.showerror("No whole-image models found in Models folder")
+            messagebox.showerror("No whole-image models found in Models folder","Please see the readme on Github for model download links.")
 
         models = " ".join(list(dict.fromkeys(matches)))
-        print("Whole image models found:", models)
+        print("Whole image models found: ", models)
         self.whole_image_combo.configure(values=models)
 
 
