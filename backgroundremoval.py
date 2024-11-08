@@ -1,12 +1,9 @@
 #!/usr/bin/env python3
-from line_profiler import profile
 import tkinter as tk
 import tkinter.ttk as ttk
-from tkinter import Checkbutton, Frame, Button, OptionMenu, messagebox
-from tkinter import Canvas, IntVar, StringVar, BooleanVar
+from tkinter import Canvas, Frame, Button, messagebox
 from tkinter.filedialog import askopenfilename, asksaveasfilename
 from PIL import Image, ImageTk, ImageOps, ImageDraw, ImageEnhance, ImageGrab
-#from PIL.ExifTags import TAGS, GPSTAGS
 from scipy.special import expit
 import os
 import math
@@ -466,10 +463,6 @@ class ImageClickApp:
             canvas.bind("<ButtonPress-2>", self.start_pan)
             canvas.bind("<B2-Motion>", self.pan)
             canvas.bind("<ButtonRelease-2>", self.end_pan)
-        
-        #In Python, when you pass a function as a callback (e.g., for a button click or a keypress), 
-        #you should pass the function itself without parentheses, so that it is not called immediately. 
-        #Instead, it should be triggered by the event.
         
         self.root.bind("<c>", lambda event: self.clear_coord_overlay())
         self.root.bind("<d>", lambda event: self.copy_entire_image())
@@ -1009,7 +1002,6 @@ class ImageClickApp:
         img = Image.new('L', (self.orig_image_crop.width, self.orig_image_crop.height), color='black')
         draw = ImageDraw.Draw(img)
         
-        #self.inv_zoom = 1/ self.zoom_factor
         
         ellipse_radius = PAINT_BRUSH_DIAMETER/2 / self.zoom_factor
         line_width = int(PAINT_BRUSH_DIAMETER / self.zoom_factor)
@@ -1043,8 +1035,7 @@ class ImageClickApp:
                 canvas.bind("<ButtonRelease-1>", self.paint_reset_coords)
             
         else:    
-            
-            
+#      
             self.clear_coord_overlay()
 
             for canvas in [self.canvas, self.canvas2]:
@@ -1053,11 +1044,7 @@ class ImageClickApp:
                 
             self.set_keybindings()
 
-       
-            
-            
-    
-    
+#
     def paint_draw_point(self, event):
         x, y = event.x / self.zoom_factor, event.y / self.zoom_factor
         brush_radius = PAINT_BRUSH_DIAMETER/2
@@ -1302,7 +1289,6 @@ class ImageClickApp:
     
       
     def quick_save_jpeg(self):
-        
 
         self.status_label.config(text="", fg=STATUS_NORMAL)
 
@@ -1507,7 +1493,6 @@ class ImageClickApp:
             
             file_path = asksaveasfilename(
                 title="Image File Name (no file extension)",
-                #filetypes=pillow_formats
             )
             self.save_file = file_path+"_nobg.png"
             print(self.save_file)
@@ -1565,9 +1550,9 @@ Includes a built in image editor and cropper. Using this will reset your current
 
 Usage:
 
-Right Mouse click: Add coordinate point for segment anything models
-Left Mouse click: Add negative coordinate (area for the model to avoid)
-Right click and drag: Draw box for segment anything models
+Left Mouse click: Add coordinate point for segment anything models
+Right Mouse click: Add negative coordinate (area for the model to avoid)
+Left click and drag: Draw box for segment anything models
 
 Hotkeys:
 
@@ -1702,8 +1687,6 @@ class ImageEditor:
                 resolution=0.01,
                 orient=tk.HORIZONTAL,
                 label=param.capitalize(),
-                #add this later to stop the lag during gui initialisation
-                #command=self.update_crop_preview,
                 length=300,
                 width=20
             )
@@ -1712,22 +1695,19 @@ class ImageEditor:
             self.sliders[param].pack(pady=0)
         
         # Add the command after all sliders are created and set
+        # to avoid the function being called
         for slider in self.sliders.values():
             slider.config(command=self.update_crop_preview)
             
-        # Create a frame for rotation buttons
         self.rotation_frame = Frame(self.slider_frame)
         self.rotation_frame.pack(pady=10)
            
-        # Add rotation buttons
         self.rotate_left_button = Button(self.rotation_frame, text="Rotate Left", command=lambda: self.rotate_image(90))
         self.rotate_left_button.pack(side=tk.LEFT, padx=5)
            
         self.rotate_right_button = Button(self.rotation_frame, text="Rotate Right", command=lambda: self.rotate_image(-90))
         self.rotate_right_button.pack(side=tk.LEFT, padx=5)
-        
-        
-        
+
         self.reset_frame = Frame(self.slider_frame)
         self.reset_frame.pack(pady=10)
         self.reset_button = Button(self.reset_frame, text="Reset to Original", command=self.reset_sliders)
@@ -1756,7 +1736,6 @@ class ImageEditor:
         self.crop_window.update()
         self.update_crop_preview()
          
-    @profile
     def apply_unsharp_mask(self, image, radius, amount, threshold):
         if amount == 0:
             return image
@@ -1811,7 +1790,6 @@ class ImageEditor:
              self.sliders[param].set(value)     
 
     
-    @profile 
     def update_crop_preview(self, *args):
         params = {param: self.sliders[param].get() for param in self.sliders}
         img_adjusted = self.adjust_image_levels(self.display_image, **params)
@@ -1856,7 +1834,6 @@ class ImageEditor:
     def crop_image(self):
         if self.rectangle_crop_window and self.end_x is not None and self.end_y is not None:
             # Convert the coordinates back to the original image dimensions
-            
             x1,y1,x2,y2 = self.canvas_crop_window.coords(self.rectangle_crop_window)
             
             x1 = x1 - (self.canvas_crop_window.winfo_width()/2) + self.display_image.width/2
@@ -1878,8 +1855,7 @@ class ImageEditor:
         # Apply color adjustments
         params = {param: self.sliders[param].get() for param in self.sliders}
         self.final_image = self.adjust_image_levels(self.original_image, **params)
-        
-        
+
         self.crop_window.destroy()
 
 
@@ -1908,13 +1884,10 @@ class ImageEditor:
         
         self.update_crop_preview()
 
-    @profile
     def adjust_image_levels(self, image, highlight, midtone, shadow, brightness, contrast, 
                             saturation, steepness, white_balance,
                             unsharp_radius, unsharp_amount, unsharp_threshold):
-         
-         
-         
+
          img_array = np.array(image)
 
          # Combine all masks into a single operation
@@ -1950,7 +1923,6 @@ class ImageEditor:
      
          return adjusted_image
     
-    @profile
     def adjust_white_balance(self, image, temperature):
         rgb = self.kelvin_to_rgb(temperature)
         r_factor, g_factor, b_factor = [x / max(rgb) for x in rgb]
