@@ -28,15 +28,15 @@ Running the script from the command line with multiple images specified will loa
 
 ## Running
 
-`pip install` any missing packages, copy the background removal models you want to use into the Models folder (see model links below) then run `python backgroundremoval.py`. Any images supplied as arguments will be opened sequentially so you can work on the images in a batch, or it will open a file picker dialog to open a file if no arguements provided.
+`pip install` any missing packages or set up a new python environment, copy the background removal models you want to use into the Models folder (see model links below) then run `python backgroundremoval.py`. Any images supplied as arguments will be opened sequentially so you can work on the images in a batch, or it will open a file picker dialog to open a file if no arguements provided.
 
 ## Mouse
 
-Right Mouse click: Add coordinate point for segment anything models
+Left Mouse click: Add coordinate point for segment anything models
 
-Left Mouse click: Add negative coordinate (area for the model to avoid)
+Right Mouse click: Add negative coordinate (area for the model to avoid)
 
-Right click and drag: Draw box for segment anything models
+Left click and drag: Draw box for segment anything models
 
 ## Hotkeys:
 

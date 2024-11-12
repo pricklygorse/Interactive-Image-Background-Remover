@@ -1726,7 +1726,7 @@ class ImageEditor:
         self.reset_frame.pack(pady=10)
         self.reset_button = Button(self.reset_frame, text="Reset to Original", command=self.reset_sliders)
         self.reset_button.pack(side=tk.LEFT, padx=5)
-        self.common_adjustments = Button(self.reset_frame, text="Common Adjustments", command=self.common_slider_adjustment)
+        self.common_adjustments = Button(self.reset_frame, text="Use Preset", command=self.common_slider_adjustment)
         self.common_adjustments.pack(side=tk.LEFT, padx=5)
         
         
