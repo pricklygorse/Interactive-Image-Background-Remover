@@ -3,7 +3,7 @@ import tkinter as tk
 import tkinter.ttk as ttk
 from tkinter import Canvas, Frame, Button, messagebox
 from tkinter.filedialog import askopenfilename, asksaveasfilename
-from PIL import Image, ImageTk, ImageOps, ImageDraw, ImageEnhance, ImageGrab
+from PIL import Image, ImageTk, ImageOps, ImageDraw, ImageEnhance, ImageGrab, ImageFilter
 from scipy.special import expit
 import os
 import math
@@ -16,6 +16,7 @@ import cv2
 from copy import deepcopy
 import platform
 from screeninfo import get_monitors
+from line_profiler import profile
 
 DEFAULT_ZOOM_FACTOR = 1.5
 MODEL_ROOT = "./Models/"
@@ -128,7 +129,7 @@ class ImageClickApp:
         # Check if window has changed dimensions as this function can get called
         # multiple times for some reason, even just when clicking the canvas
 
-        self.root.update_idletasks()
+        #self.root.update_idletasks()
         if not self.root.winfo_height() == self.init_height or not self.root.winfo_width() == self.init_width:
             
             # The currently displayed preview that is being used will change, so 
@@ -196,7 +197,7 @@ class ImageClickApp:
     
     
 
-
+    @profile
     def build_gui(self):
         
         self.root.minsize(width=800, height=600)  
@@ -363,19 +364,73 @@ class ImageClickApp:
             width=16)
         self.bg_color.pack(expand=False, side="right")
         self.BgSel.pack(fill="x", padx=2, pady=2, side="top")
-        self.ManPaint = tk.Checkbutton(self.Options, name="manpaint")
+        self.paint_ppm_frame = tk.Frame(self.Options, name="paint_ppm_frame")
+        self.paint_ppm_frame.configure(height=200, width=200)
+        self.ManPaint = tk.Checkbutton(self.paint_ppm_frame, name="manpaint")
         self.paint_mode = tk.BooleanVar()
         self.ManPaint.configure(
             text='Manual Paintbrush',
             variable=self.paint_mode)
         self.ManPaint.pack(fill="x", side="left")
         self.ManPaint.configure(command=self.paint_mode_toggle)
-        self.PostMask = tk.Checkbutton(self.Options, name="postmask")
+        self.PostMask = tk.Checkbutton(self.paint_ppm_frame, name="postmask")
         self.ppm_var = tk.BooleanVar()
         self.PostMask.configure(
             text='Post Process Mask',
             variable=self.ppm_var)
-        self.PostMask.pack(fill="x", side="top")
+        self.PostMask.pack(fill="x", side="left")
+        self.paint_ppm_frame.pack(side="top")
+
+        self.enable_shadow_var = tk.BooleanVar()
+        self.EnableShadow = tk.Checkbutton(self.Options, text="Enable Drop Shadow", variable=self.enable_shadow_var)
+        self.EnableShadow.pack(fill="x", side="top", pady=5)
+        self.EnableShadow.configure(command=self.toggle_shadow_options)
+
+        # Frame for shadow options (initially hidden)
+        self.shadow_options_frame = tk.Frame(self.Options)
+        self.shadow_options_frame.pack(fill="x", padx=5, pady=5)
+
+        self.shadow_opacity_label = tk.Label(self.shadow_options_frame, text="Opacity:")
+        self.shadow_opacity_slider = ttk.Scale(self.shadow_options_frame, from_=0, to=1, orient="horizontal")
+        self.shadow_opacity_slider.set(0.5)
+        self.shadow_opacity_slider.configure(command=lambda event: self.update_output_preview())
+
+        self.shadow_x_label = tk.Label(self.shadow_options_frame, text="X Offset:")
+        self.shadow_x_slider = ttk.Scale(
+            self.shadow_options_frame, 
+            from_=-200, 
+            to=200, 
+            orient="horizontal",
+        )
+        self.shadow_x_slider.set(30)
+        self.shadow_x_slider.configure(command=lambda event: self.update_output_preview())
+
+        self.shadow_y_label = tk.Label(self.shadow_options_frame, text="Y Offset:")
+        self.shadow_y_slider = ttk.Scale(
+            self.shadow_options_frame, 
+            from_=-200, 
+            to=200, 
+            orient="horizontal",
+        )
+        self.shadow_y_slider.set(30)
+        self.shadow_y_slider.configure(command=lambda event: self.update_output_preview())
+
+        self.shadow_radius_label = tk.Label(self.shadow_options_frame, text="Blur Radius:")
+        self.shadow_radius_slider = ttk.Scale(
+                    self.shadow_options_frame, 
+                    from_=1, 
+                    to=50, 
+                    orient="horizontal",
+                )
+        self.shadow_radius_slider.set(10)
+        self.shadow_radius_slider.configure(command=lambda event: self.update_output_preview())
+
+        # Initially hide the shadow options
+        #self.toggle_shadow_options()
+
+
+
+
         self.Options.pack(fill="x", padx=2, pady=3, side="top")
         self.save_png = ttk.Button(self.Controls, name="save_png")
         self.save_png.configure(text='Save Image As....')
@@ -640,16 +695,17 @@ class ImageClickApp:
     
     def update_output_preview(self):
         
+        preview = self.add_drop_shadow()
+
         # Calculate the size of the visible area in the original image coordinates
         view_width = self.canvas_w / self.zoom_factor
         view_height = self.canvas_h / self.zoom_factor
 
-        preview = self.working_image.crop((
+        preview = preview.crop((
             int(self.view_x), int(self.view_y),
             int(self.view_x + view_width),
             int(self.view_y + view_height)
-        ))
-
+        ))       
                 
         if self.zoom_factor > 1 or self.panning == True:
 
@@ -658,7 +714,6 @@ class ImageClickApp:
             # Nicer downsample to avoid moire
             preview = preview.resize((self.canvas_w, self.canvas_h), Image.BOX)
         
-
         crop_width = min(self.canvas_w, 
                             self.working_image.width * self.zoom_factor)
         crop_height = min(self.canvas_h, 
@@ -1324,7 +1379,8 @@ class ImageClickApp:
         
         print(user_filename)
 
-        workimg = self.apply_background_color(self.working_image, "White")
+        workimg = self.add_drop_shadow()
+        workimg = self.apply_background_color(workimg, "White")
         workimg = workimg.convert("RGB")
         if self.image_exif:
             workimg.save(user_filename, quality=90, exif=self.image_exif)
@@ -1424,11 +1480,11 @@ class ImageClickApp:
 
         if not user_filename.lower().endswith(ext):
             user_filename += ext
-
+        
+        workimg = self.add_drop_shadow()
         if not self.bg_color.get() == "Transparent":
-            workimg = self.apply_background_color(self.working_image, self.bg_color.get())
-        else:
-            workimg = self.working_image
+            workimg = self.apply_background_color(workimg, self.bg_color.get())
+
 
         save_params = {}
         if self.image_exif:
@@ -1472,9 +1528,10 @@ class ImageClickApp:
 
     def apply_background_color(self, img, color):
 
-        #r, g, b, a = color
         colored_image = Image.new("RGBA", img.size, color)
-        colored_image.paste(img, mask=img)
+        
+        colored_image = Image.alpha_composite(colored_image, img)
+        #colored_image.paste(img, mask=img)
 
         return colored_image
     
@@ -1525,6 +1582,62 @@ class ImageClickApp:
             print("No EXIF data found.")
         
         self.initialise_new_image()
+
+    def add_drop_shadow(self):
+        
+        if not self.enable_shadow_var.get():
+            return self.working_image
+
+        shadow_opacity = self.shadow_opacity_slider.get()          
+        shadow_x = int(self.shadow_x_slider.get())           
+        shadow_y = int(self.shadow_y_slider.get())            
+        shadow_radius = int(self.shadow_radius_slider.get())  
+
+        _, _, _, alpha = self.working_image.split()
+
+        black_image = Image.new("RGB", self.working_image.size, (0, 0, 0))
+        shadow_image = Image.merge("RGBA", (black_image.getchannel("R"),
+                                            black_image.getchannel("G"),
+                                            black_image.getchannel("B"),
+                                            alpha))
+        
+        blurred_shadow = shadow_image.filter(ImageFilter.GaussianBlur(radius=shadow_radius))
+
+        shadow_opacity_alpha = blurred_shadow.split()[3].point(lambda p: int(p * shadow_opacity))
+        blurred_shadow.putalpha(shadow_opacity_alpha)
+
+        shadow_with_offset = Image.new("RGBA", self.working_image.size, (0, 0, 0, 0))
+        shadow_with_offset.paste(blurred_shadow, (shadow_x, shadow_y), blurred_shadow)
+
+        composite = Image.alpha_composite(shadow_with_offset, self.working_image)
+
+        return composite
+
+
+
+    def toggle_shadow_options(self):
+        if self.enable_shadow_var.get():
+            # Show shadow options when checkbox is checked
+            self.shadow_opacity_label.pack(fill="x")
+            self.shadow_opacity_slider.pack(fill="x")
+            self.shadow_x_label.pack(fill="x")
+            self.shadow_x_slider.pack(fill="x")
+            self.shadow_y_label.pack(fill="x")
+            self.shadow_y_slider.pack(fill="x")
+            self.shadow_radius_label.pack(fill="x")
+            self.shadow_radius_slider.pack(fill="x")
+            self.shadow_options_frame.pack(fill="x", padx=5, pady=5)
+        else:
+            self.shadow_opacity_label.pack_forget()
+            self.shadow_opacity_slider.pack_forget()
+            self.shadow_x_label.pack_forget()
+            self.shadow_x_slider.pack_forget()
+            self.shadow_y_label.pack_forget()
+            self.shadow_y_slider.pack_forget()
+            self.shadow_radius_label.pack_forget()
+            self.shadow_radius_slider.pack_forget()
+            self.shadow_options_frame.pack_forget()
+        self.update_output_preview()
         
     def initialise_new_image(self):
         
