@@ -244,7 +244,7 @@ class ImageClickApp:
         self.OpnClp = ttk.Button(self.openimageclipboard, name="opnclp")
         self.OpnClp.configure(text='Open Clipboard')
         self.OpnClp.pack(side="left")
-        self.OpnClp.configure(command=self.loadclipboard)
+        self.OpnClp.configure(command=self.load_clipboard)
         self.openimageclipboard.pack(side="top")
         self.EditImage = ttk.Button(self.OpenImage, name="editimage")
         self.EditImage.configure(text='Edit Image')
@@ -1492,7 +1492,7 @@ class ImageClickApp:
                 self.original_image = editor.final_image
                 self.initialise_new_image()
         
-    def loadclipboard(self):
+    def load_clipboard(self):
         
         img = ImageGrab.grabclipboard()
         
@@ -1502,16 +1502,10 @@ class ImageClickApp:
             
             
             self.initialise_new_image()
-            self.save_file = None
-            self.save_file_jpg = None
-            
-            file_path = asksaveasfilename(
-                title="Image File Name (no file extension)",
-            )
-            self.save_file = file_path+"_nobg.png"
-            print(self.save_file)
+            self.save_file = "clipboard_nobg.png"
+            self.save_file_jpg = "clipboard_nobg.jpg"
             self.status_label.config(text=f"File will be saved to {self.save_file}")
-            self.save_file_jpg = file_path+"_nobg.jpg"
+            
             
         else:
             messagebox.showerror("Error", f"No image found on clipboard.\nClipboard contains {type(img)}")
