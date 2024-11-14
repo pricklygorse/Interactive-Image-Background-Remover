@@ -1747,7 +1747,7 @@ class ImageEditor:
         # Get the usable screen dimensions
         m = [m for m in get_monitors() if m.is_primary][0]
 
-        screen_width = (m.width -250)
+        screen_width = (m.width -350)
         screen_height = m.height-100 
         # subtract 100 because maximising window doesnt work until __init__ finished,
         # so we have to start application using full screen dimensions
@@ -1768,7 +1768,7 @@ class ImageEditor:
         self.crop_window_tk_image = ImageTk.PhotoImage(self.display_image)
         
 
-        self.canvas_crop_window = Canvas(self.crop_window, width=screen_width, height=self.scaled_height)
+        self.canvas_crop_window = Canvas(self.crop_window, width=screen_width, height=screen_height)
         self.canvas_crop_window.pack(side=tk.LEFT)
         
         #self.canvas_crop_window.create_image(screen_width/2, screen_height/2, image=self.crop_window_tk_image)
@@ -1788,10 +1788,10 @@ class ImageEditor:
             'highlight': (0.1, 2.0, 1.0),
             'midtone': (0.1, 2.0, 1.0),
             'shadow': (0.1, 3.0, 1.0),
+            'tone_curve': (0.01, 0.5, 0.1),
             'brightness': (0.1, 2.0, 1.0),
             'contrast': (0.1, 2.0, 1.0),
             'saturation': (0.1, 2.0, 1.0),
-            'steepness': (0.01, 0.5, 0.1),
             'white_balance': (2000, 10000, 6500),
             'unsharp_radius': (0.1, 50, 1.0),
             'unsharp_amount': (0, 5, 0),
@@ -1800,21 +1800,28 @@ class ImageEditor:
         
         
         
+        label_width = 15
+
         for param, (min_val, max_val, default) in slider_params.items():
+            frame = tk.Frame(self.slider_frame)
+            frame.pack(fill=tk.X, pady=2)  
+
+            label = ttk.Label(frame, text=param.replace("_"," ").capitalize(), width=label_width, anchor="w")
+            label.pack(side=tk.LEFT, padx=(5, 10))  #
+
+            # Slider widget
             self.sliders[param] = tk.Scale(
-                self.slider_frame,
+                frame,
                 from_=min_val,
                 to=max_val,
                 resolution=0.01,
                 orient=tk.HORIZONTAL,
-                label=param.capitalize(),
-                length=300,
+                length=300,   
                 width=20
             )
-            # this command triggers the function to run
             self.sliders[param].set(default)
-            self.sliders[param].pack(pady=0)
-        
+            self.sliders[param].pack(side=tk.LEFT) 
+                
         # Add the command after all sliders are created and set
         # to avoid the function being called
         for slider in self.sliders.values():
@@ -1865,7 +1872,7 @@ class ImageEditor:
              'brightness': 1.0,
              'contrast': 1.0,
              'saturation': 1.0,
-             'steepness': 0.1,
+             'tone_curve': 0.1,
              'white_balance': 6500,
              'unsharp_radius': 1.0,
              'unsharp_amount': 0,
@@ -1883,7 +1890,7 @@ class ImageEditor:
              'brightness': 1.50,
              'contrast': 1.25,
              'saturation': 1.07,
-             'steepness': 0.1,
+             'tone_curve': 0.1,
              'white_balance': 7000,
              'unsharp_radius': 1.0,
              'unsharp_amount': 1.0,
@@ -1970,7 +1977,7 @@ class ImageEditor:
         self.rotated_original = self.original_image.rotate(self.total_rotation, expand=True)
         
         # Resize the rotated image to fit the screen
-        screen_width = self.crop_window.winfo_width() - 300
+        screen_width = self.crop_window.winfo_width() - 350
         screen_height = self.crop_window.winfo_height() - 100
         self.image_ratio = min(screen_width / self.rotated_original.width, screen_height / self.rotated_original.height)
         self.scaled_width = int(self.rotated_original.width * self.image_ratio)
@@ -1988,15 +1995,15 @@ class ImageEditor:
         self.update_crop_preview()
 
     def adjust_image_levels(self, image, highlight, midtone, shadow, brightness, contrast, 
-                            saturation, steepness, white_balance,
+                            saturation, tone_curve, white_balance,
                             unsharp_radius, unsharp_amount, unsharp_threshold):
 
         img_array = np.array(image)
 
         # Combine all masks into a single operation
         x = np.arange(256, dtype=np.float32)
-        highlight_mask = self.smooth_transition(x, 192, steepness)
-        shadow_mask = 1 - self.smooth_transition(x, 64, steepness)
+        highlight_mask = self.smooth_transition(x, 192, tone_curve)
+        shadow_mask = 1 - self.smooth_transition(x, 64, tone_curve)
         midtone_mask = 1 - highlight_mask - shadow_mask
     
         # Create a lookup table
