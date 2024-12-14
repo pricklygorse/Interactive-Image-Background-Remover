@@ -80,7 +80,8 @@ class ImageClickApp:
         s = ttk.Style()
         s.theme_use('alt')
         
-
+        self.style = ttk.Style()
+        self.style.configure("Processing.TButton", foreground="red")
 
 
 
@@ -360,7 +361,7 @@ class ImageClickApp:
         self.bg_color = ttk.Combobox(self.BgSel, name="bg_color")
         self.bg_color.configure(
             state="readonly",
-            values='Transparent White Black Red Blue Orange Yellow Green',
+            values='Transparent White Black Red Blue Orange Yellow Green Grey Brown',
             width=16)
         self.bg_color.pack(expand=False, side="right")
         self.BgSel.pack(fill="x", padx=2, pady=2, side="top")
@@ -923,29 +924,28 @@ class ImageClickApp:
         self.labels =[]
     
     def load_whole_image_model(self, model_name):
-        
         if not hasattr(self, f"{model_name}_session"):
-            
             self.status_label.config(text=f"Loading {model_name}", fg=STATUS_PROCESSING)
             self.status_label.update()
-            self.whole_image_button.configure(text=f"Loading {model_name}")
+
+            self.whole_image_button.configure(text=f"Loading {model_name}"[0:30]+"...", style="Processing.TButton")
             self.whole_image_button.update()
 
             setattr(self, f"{model_name}_session", ort.InferenceSession(f'{MODEL_ROOT}{model_name}.onnx'))
+
+            self.whole_image_button.configure(style="TButton")
+            self.whole_image_button.update()
+
         return getattr(self, f"{model_name}_session")
     
     
     
-    def run_whole_image_model(self, model_name, target_size = 1024):
-        
-        # if button has been clicked
+    def run_whole_image_model(self, model_name, target_size=1024):
         if model_name == None:
-            #selected = self.whole_model_choice.get()
-            #model_name = self.model_map.get(selected)
             model_name = self.whole_image_combo.get()
             target_size = 320 if model_name == "u2net" else 1024
 
-        try: 
+        try:
             session = self.load_whole_image_model(model_name)
         except Exception as e:
             print(e)
@@ -954,17 +954,19 @@ class ImageClickApp:
             messagebox.showerror("Error", e)
             return
 
-
         self.status_label.config(text=f"Processing {model_name}", fg=STATUS_PROCESSING)
         self.status_label.update()
-        self.whole_image_button.configure(text=f"Processing {model_name}")
+
+        # Trim the text to 30 characters to fit the text box
+        self.whole_image_button.configure(text=f"Processing {model_name}"[0:30]+"...", style="Processing.TButton")
         self.whole_image_button.update()
 
         self.mask = self.generate_whole_image_model_mask(self.orig_image_crop, session, self.ppm_var.get(), target_size)
-        
-        self.whole_image_button.configure(text=f"Run whole-image model")
 
-        self.generate_coloured_overlay()            
+        self.whole_image_button.configure(text=f"Run whole-image model", style="TButton")
+        self.whole_image_button.update()
+
+        self.generate_coloured_overlay()
      
         
     def generate_whole_image_model_mask(self, image,  session, ppm=False, target_size=1024):
