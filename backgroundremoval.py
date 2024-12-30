@@ -77,8 +77,8 @@ class BackgroundRemoverGUI:
         self.save_file_type = "png"
         self.save_file_quality = 90
         
-        
-        
+        self.after_id = None  # ID of the scheduled after() call to render higher quality preview if no futher zooming
+        self.zoom_delay = 0.2
         
         s = ttk.Style()
         s.theme_use('alt')
@@ -159,7 +159,7 @@ class BackgroundRemoverGUI:
             # because of rounding error
             self.checkerboard = self.create_checkerboard(self.canvas_w * 2, self.canvas_h * 2, square_size = 10)
 
-            self.update_original_image_preview()
+            self.update_original_image_preview(Image.BOX)
 
       
 
@@ -630,12 +630,12 @@ class BackgroundRemoverGUI:
             self.mask = None
             
             
-            self.update_original_image_preview()
+            self.update_original_image_preview(Image.NEAREST)
             
     
     def end_pan(self, event):
         self.panning = False    
-        self.update_original_image_preview()
+        self.update_original_image_preview(Image.BOX)
 
     def zoom(self, event):
         
@@ -662,19 +662,27 @@ class BackgroundRemoverGUI:
         self.view_x = max(0, min(self.view_x, self.original_image.width - self.canvas_w / self.zoom_factor))
         self.view_y = max(0, min(self.view_y, self.original_image.height - self.canvas_h / self.zoom_factor))
         
-        
-        
         if self.min_zoom==False: 
-            self.update_original_image_preview()
+            self.update_original_image_preview(resampling_filter=Image.NEAREST)
             if hasattr(self, "encoder_output"):
                 delattr(self, "encoder_output")
             self.clear_coord_overlay()
 
         if self.lowest_zoom_factor == self.zoom_factor: self.min_zoom=True
 
-    @profile
-    def update_original_image_preview(self):
+        # Cancel any existing timer and schedule a nicer preview image
+        if self.after_id:
+            self.root.after_cancel(self.after_id)
+
+        self.after_id = self.root.after(int(self.zoom_delay * 1000), self.update_preview_delayed)
+      
+    def update_preview_delayed(self):
+        self.update_original_image_preview(resampling_filter=Image.BOX)
+        self.after_id = None
         
+    @profile
+    def update_original_image_preview(self, resampling_filter=Image.BOX):
+
         self.zoom_label.config(text=f"Zoom: {int(self.zoom_factor * 100)}%")
 
         # Calculate the size of the visible area in the original image coordinates
@@ -694,26 +702,19 @@ class BackgroundRemoverGUI:
         image_preview_w = int(self.orig_image_crop.width * self.zoom_factor)
         image_preview_h = int(self.orig_image_crop.height * self.zoom_factor)
 
-        print(f"{image_preview_w} {image_preview_h}")
-
         self.pad_x = max(0, (self.canvas_w - image_preview_w) // 2)
         self.pad_y = max(0, (self.canvas_h - image_preview_h) // 2)
-        print(f"pad: {self.pad_x} {self.pad_y}")
 
-        # use better downsampler to avoid moire. nearest when zooming so user can see the pixels
-        resampling_filter = Image.NEAREST if self.zoom_factor > 1 or self.panning else Image.BOX
-
-        # Resize the cropped area to fit the canvas
         displayed_image = self.orig_image_crop.resize((image_preview_w, image_preview_h), resampling_filter)
         
         self.canvas.delete("all")
         self.tk_image = ImageTk.PhotoImage(displayed_image)
         self.canvas.create_image(self.pad_x, self.pad_y, anchor=tk.NW, image=self.tk_image)
 
-        self.update_output_preview()
+        self.update_output_preview(resampling_filter=resampling_filter)
         
     @profile
-    def update_output_preview(self):
+    def update_output_preview(self, resampling_filter = Image.NEAREST):
         
         preview = self.add_drop_shadow()
 
@@ -727,16 +728,11 @@ class BackgroundRemoverGUI:
         bottom = int(self.view_y + min(math.ceil(view_height), self.original_image.height))
 
         preview = preview.crop((left, top, right, bottom))        
-        
-        # use better downsampler to avoid moire. nearest when zooming so user can see the pixels
-        resampling_filter = Image.NEAREST if self.zoom_factor > 1 or self.panning else Image.BOX
 
         image_preview_w = int(self.orig_image_crop.width * self.zoom_factor)
         image_preview_h = int(self.orig_image_crop.height * self.zoom_factor)
 
         preview = preview.resize((image_preview_w, image_preview_h), resampling_filter)
-
-
 
         if not self.bg_color.get() == "Transparent":
             preview = self.apply_background_color(preview, 
