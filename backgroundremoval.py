@@ -589,25 +589,26 @@ class BackgroundRemoverGUI:
         
     
     def pan_left(self, event):
-        print("Panning left")
         self.view_x = max(0, self.view_x - self.pan_step)
-        self.update_original_image_preview()
+        self.update_original_image_preview(Image.NEAREST)
+        self.schedule_preview_update()
 
     def pan_right(self, event):
-        print("Panning right")
-        self.view_x = min(self.original_image.width - self.canvas_w / self.zoom_factor, self.view_x + self.pan_step)
-        self.update_original_image_preview()
+        max_view_x = max(0, self.original_image.width - self.canvas_w / self.zoom_factor)
+        self.view_x = min(max_view_x, self.view_x + self.pan_step)
+        self.update_original_image_preview(Image.NEAREST)
+        self.schedule_preview_update()
 
     def pan_up(self, event):
-        print("Panning up")
         self.view_y = max(0, self.view_y - self.pan_step)
-        self.update_original_image_preview()
+        self.update_original_image_preview(Image.NEAREST)
+        self.schedule_preview_update()
 
     def pan_down(self, event):
-        print("Panning down")
-        self.view_y = min(self.original_image.height - self.canvas_h / self.zoom_factor, self.view_y + self.pan_step)
-        self.update_original_image_preview()
-
+        max_view_y = max(0, self.original_image.height - self.canvas_h / self.zoom_factor)
+        self.view_y = min(max_view_y, self.view_y + self.pan_step)
+        self.update_original_image_preview(Image.NEAREST)
+        self.schedule_preview_update()
     
     
     
@@ -637,8 +638,7 @@ class BackgroundRemoverGUI:
                 delattr(self, "encoder_output")
             self.clear_coord_overlay()
             self.mask = None
-            
-            
+
             self.update_original_image_preview(Image.NEAREST)
             
     
@@ -679,12 +679,16 @@ class BackgroundRemoverGUI:
 
         if self.lowest_zoom_factor == self.zoom_factor: self.min_zoom=True
 
+        self.schedule_preview_update()
+        
+
+    def schedule_preview_update(self):
         # Cancel any existing timer and schedule a nicer preview image
         if self.after_id:
             self.root.after_cancel(self.after_id)
 
         self.after_id = self.root.after(int(self.zoom_delay * 1000), self.update_preview_delayed)
-      
+
     def update_preview_delayed(self):
         self.update_original_image_preview(resampling_filter=Image.BOX)
         self.after_id = None
