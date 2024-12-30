@@ -23,6 +23,7 @@ MODEL_ROOT = "./Models/"
 STATUS_PROCESSING = "#f00"
 STATUS_NORMAL = "#000000"
 PAINT_BRUSH_DIAMETER = 18
+UNDO_STEPS=20
 
 
 
@@ -168,7 +169,9 @@ class BackgroundRemoverGUI:
         self.lowest_zoom_factor = min(self.canvas_w / self.original_image.width, self.canvas_h / self.original_image.height)
   
         self.working_image = Image.new("RGBA", self.original_image.size, (0, 0, 0, 0))
-        self.old_working_image = self.working_image.copy()
+        
+        self.working_image_history = []
+        self.working_image_history.append(self.working_image.copy())
 
         self.zoom_factor = self.lowest_zoom_factor
         self.view_x = 0
@@ -749,9 +752,14 @@ class BackgroundRemoverGUI:
         # zooming out can be laggy especially with multiple scroll wheel clicks, so let tkinter show each zoom out step.
         self.root.update_idletasks()
 
-
+    def add_undo_step(self):
+        self.working_image_history.append(self.working_image.copy())
+        if len(self.working_image_history) > UNDO_STEPS:
+            self.working_image_history.pop(0)  # Keep only the last n states
     
     def clear_working_image(self):
+
+        self.add_undo_step()
 
         self.canvas2.delete(self.outputpreviewtk)
         self.working_image = Image.new(mode="RGBA",size=(self.original_image.width, self.original_image.height)) 
@@ -761,7 +769,7 @@ class BackgroundRemoverGUI:
     
     def reset_all(self):
         
-        self.old_working_image = self.working_image
+        self.add_undo_step()
         
         self.coordinates=[]
         self.labels=[]
@@ -784,7 +792,9 @@ class BackgroundRemoverGUI:
         
     def undo(self):
         
-        self.old_working_image, self.working_image = self.working_image, self.old_working_image
+        if len(self.working_image_history) > 1:
+            self.working_image_history.pop()  # Remove the current state
+            self.working_image = self.working_image_history[-1].copy()  # Restore to the previous state
         
         if hasattr(self, "cached_blurred_shadow"):
             delattr(self,"cached_blurred_shadow")
@@ -792,7 +802,8 @@ class BackgroundRemoverGUI:
         self.update_output_preview()
     
     def copy_entire_image(self):
-        self.old_working_image = self.working_image.copy()
+        self.add_undo_step()
+
         self.working_image=self.original_image.convert(mode="RGBA")
         if hasattr(self, "cached_blurred_shadow"):
             delattr(self,"cached_blurred_shadow")
@@ -801,7 +812,7 @@ class BackgroundRemoverGUI:
  
     def add_to_working_image(self):
 
-        self.old_working_image = self.working_image.copy()
+        self.add_undo_step()
         
         if self.paint_mode.get():
             mask = self.generate_paint_mode_mask()
@@ -823,7 +834,7 @@ class BackgroundRemoverGUI:
         
     def remove_from_working_image(self):
         
-        self.old_working_image = self.working_image.copy()
+        self.add_undo_step()
         
         if self.paint_mode.get():
             mask = self.generate_paint_mode_mask()
