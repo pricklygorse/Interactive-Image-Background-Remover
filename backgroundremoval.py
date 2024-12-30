@@ -24,7 +24,16 @@ STATUS_PROCESSING = "#f00"
 STATUS_NORMAL = "#000000"
 PAINT_BRUSH_DIAMETER = 18
 UNDO_STEPS=20
-
+pillow_formats = [
+            ("All Image Files", "*.bmp *.gif *.jpg *.jpeg *.png *.tif *.tiff *.webp"),
+            ("BMP", "*.bmp"),
+            ("GIF", "*.gif"),
+            ("JPEG", "*.jpg *.jpeg"),
+            ("PNG", "*.png"),
+            ("TIFF", "*.tif *.tiff"),
+            ("WEBP", "*.webp"),
+            ("All Files", "*.*")
+        ]
 
 
 class BackgroundRemoverGUI:
@@ -2163,16 +2172,7 @@ if __name__ == "__main__":
     if len(sys.argv) <= 1:
         print("No arguments were given")
         
-        pillow_formats = [
-            ("All Image Files", "*.bmp *.gif *.jpg *.jpeg *.png *.tif *.tiff *.webp"),
-            ("BMP", "*.bmp"),
-            ("GIF", "*.gif"),
-            ("JPEG", "*.jpg *.jpeg"),
-            ("PNG", "*.png"),
-            ("TIFF", "*.tif *.tiff"),
-            ("WEBP", "*.webp"),
-            ("All Files", "*.*")
-        ]
+        
         
         file_path = askopenfilename(
             title="Select an Image",
