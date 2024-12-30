@@ -18,7 +18,7 @@ import platform
 from screeninfo import get_monitors
 from line_profiler import profile
 
-DEFAULT_ZOOM_FACTOR = 1.5
+DEFAULT_ZOOM_FACTOR = 1.2
 MODEL_ROOT = "./Models/"
 STATUS_PROCESSING = "#f00"
 STATUS_NORMAL = "#000000"
@@ -26,7 +26,7 @@ PAINT_BRUSH_DIAMETER = 18
 
 
 
-class ImageClickApp:
+class BackgroundRemoverGUI:
     def __init__(self, root, image_path, file_count=""):
         
         self.root = root
@@ -54,6 +54,8 @@ class ImageClickApp:
         self.lines = []
         self.lines_id = []
         self.lines_id2 = []
+
+        self.image_exif = None # set now so exists when loading clipboard images
         
         if image_path:
             self.save_file = image_path[0:-4]+"_nobg.png"
@@ -114,7 +116,7 @@ class ImageClickApp:
 
         self.root.update_idletasks()
         self.build_gui()
-        self.update_zoomed_view()
+        self.update_original_image_preview()
 
 
         self.mask = Image.new("L", (int(self.orig_image_crop.width), 
@@ -156,7 +158,7 @@ class ImageClickApp:
             # because of rounding error
             self.checkerboard = self.create_checkerboard(self.canvas_w * 2, self.canvas_h * 2, square_size = 10)
 
-            self.update_zoomed_view()
+            self.update_original_image_preview()
 
       
 
@@ -198,7 +200,7 @@ class ImageClickApp:
     
     
 
-    @profile
+
     def build_gui(self):
         
         self.root.minsize(width=800, height=600)  
@@ -476,6 +478,7 @@ class ImageClickApp:
         whole_models = [
                 "rmbg1_4",
                 "rmbg1_4-quant",
+                "rmbg2_q8",
                 "isnet-general-use",
                 "isnet-anime",
                 "u2net",
@@ -555,59 +558,25 @@ class ImageClickApp:
     def pan_left(self, event):
         print("Panning left")
         self.view_x = max(0, self.view_x - self.pan_step)
-        self.update_zoomed_view()
+        self.update_original_image_preview()
 
     def pan_right(self, event):
         print("Panning right")
         self.view_x = min(self.original_image.width - self.canvas_w / self.zoom_factor, self.view_x + self.pan_step)
-        self.update_zoomed_view()
+        self.update_original_image_preview()
 
     def pan_up(self, event):
         print("Panning up")
         self.view_y = max(0, self.view_y - self.pan_step)
-        self.update_zoomed_view()
+        self.update_original_image_preview()
 
     def pan_down(self, event):
         print("Panning down")
         self.view_y = min(self.original_image.height - self.canvas_h / self.zoom_factor, self.view_y + self.pan_step)
-        self.update_zoomed_view()
+        self.update_original_image_preview()
 
     
-    def zoom(self, event):
-        
-        self.pan_step = 30 / self.zoom_factor
-
-        # Calculate mouse position in original image coordinates
-        mouse_x = self.view_x + event.x / self.zoom_factor
-        mouse_y = self.view_y + event.y / self.zoom_factor
-        
-        # Update zoom factor
-        if event.num == 4 or event.delta>0:  # Zoom in
-            self.zoom_factor *= DEFAULT_ZOOM_FACTOR
-            self.min_zoom= False
-        elif event.num == 5 or event.delta<0:  # Zoom out
-            
-            self.zoom_factor = max(self.zoom_factor / DEFAULT_ZOOM_FACTOR, 
-                                   self.lowest_zoom_factor)
-            
-
-        # Calculate new view coordinates to keep the zoom centered around the mouse position
-        self.view_x = mouse_x - event.x / self.zoom_factor
-        self.view_y = mouse_y - event.y / self.zoom_factor
-        
-        # Ensure the view stays within the image bounds
-        self.view_x = max(0, min(self.view_x, self.original_image.width - self.canvas_w / self.zoom_factor))
-        self.view_y = max(0, min(self.view_y, self.original_image.height - self.canvas_h / self.zoom_factor))
-        
-        
-        
-        if self.min_zoom==False: 
-            self.update_zoomed_view()
-            if hasattr(self, "encoder_output"):
-                delattr(self, "encoder_output")
-            self.clear_coord_overlay()
-
-        if self.lowest_zoom_factor == self.zoom_factor: self.min_zoom=True
+    
     
 
     def start_pan(self, event):
@@ -637,15 +606,50 @@ class ImageClickApp:
             self.mask = None
             
             
-            self.update_zoomed_view()
+            self.update_original_image_preview()
             
     
     def end_pan(self, event):
         self.panning = False    
-        self.update_zoomed_view()
+        self.update_original_image_preview()
 
-    
-    def update_zoomed_view(self):
+    def zoom(self, event):
+        
+        self.pan_step = 30 / self.zoom_factor
+
+        # Calculate mouse position in original image coordinates
+        mouse_x = self.view_x + event.x / self.zoom_factor
+        mouse_y = self.view_y + event.y / self.zoom_factor
+        
+        # Update zoom factor
+        if event.num == 4 or event.delta>0:  # Zoom in
+            self.zoom_factor *= DEFAULT_ZOOM_FACTOR
+            self.min_zoom= False
+        elif event.num == 5 or event.delta<0:  # Zoom out
+            
+            self.zoom_factor = max(self.zoom_factor / DEFAULT_ZOOM_FACTOR,
+                                   self.lowest_zoom_factor)
+            
+        # Calculate new view coordinates to keep the zoom centered around the mouse position
+        self.view_x = mouse_x - event.x / self.zoom_factor
+        self.view_y = mouse_y - event.y / self.zoom_factor
+        
+        # Ensure the view stays within the image bounds
+        self.view_x = max(0, min(self.view_x, self.original_image.width - self.canvas_w / self.zoom_factor))
+        self.view_y = max(0, min(self.view_y, self.original_image.height - self.canvas_h / self.zoom_factor))
+        
+        
+        
+        if self.min_zoom==False: 
+            self.update_original_image_preview()
+            if hasattr(self, "encoder_output"):
+                delattr(self, "encoder_output")
+            self.clear_coord_overlay()
+
+        if self.lowest_zoom_factor == self.zoom_factor: self.min_zoom=True
+
+    @profile
+    def update_original_image_preview(self):
         
         self.zoom_label.config(text=f"Zoom: {int(self.zoom_factor * 100)}%")
 
@@ -653,47 +657,38 @@ class ImageClickApp:
         view_width = self.canvas_w / self.zoom_factor
         view_height = self.canvas_h / self.zoom_factor
 
-        # Crop the visible area from the original image
-        self.orig_image_crop = self.original_image.crop((
-            int(self.view_x), 
-            int(self.view_y),
-            int(self.view_x + view_width), 
-            int(self.view_y + view_height)
-        ))
+        left = int(self.view_x)
+        top = int(self.view_y)
+        right = int(self.view_x + min(math.ceil(view_width), self.original_image.width))
+        bottom = int(self.view_y + min(math.ceil(view_height), self.original_image.height))
+
+        self.orig_image_crop = self.original_image.crop((left, top, right, bottom))
+
+        print(f"crop box: {left} {top} {right} {bottom}")
+        print(f"orig size: {self.original_image.size} crop size: {self.orig_image_crop.size} canvas size: {self.canvas_w} {self.canvas_h}")
         
+        image_preview_w = int(self.orig_image_crop.width * self.zoom_factor)
+        image_preview_h = int(self.orig_image_crop.height * self.zoom_factor)
+
+        print(f"{image_preview_w} {image_preview_h}")
+
+        self.pad_x = max(0, (self.canvas_w - image_preview_w) // 2)
+        self.pad_y = max(0, (self.canvas_h - image_preview_h) // 2)
+        print(f"pad: {self.pad_x} {self.pad_y}")
+
+        # use better downsampler to avoid moire. nearest when zooming so user can see the pixels
+        resampling_filter = Image.NEAREST if self.zoom_factor > 1 or self.panning else Image.BOX
+
         # Resize the cropped area to fit the canvas
-        if self.zoom_factor > 1 or self.panning == True:
-            displayed_image = self.orig_image_crop.resize((self.canvas_w, self.canvas_h), Image.NEAREST)
-        
-        else:
-            # Use a nicer downsampler to avoid moire in the preview window
-            displayed_image = self.orig_image_crop.resize((self.canvas_w, self.canvas_h), Image.BOX)
-            
-        # If input image has lots of alpha this may be needed for performance reasons when panning.
-        # checkerboard = self.create_checkerboard(displayed_image.width, displayed_image.height, 10)
-        # displayed_image = Image.alpha_composite(checkerboard, displayed_image)
+        displayed_image = self.orig_image_crop.resize((image_preview_w, image_preview_h), resampling_filter)
 
-        self.orig_img_preview_w = int(self.original_image.width * self.zoom_factor)
-        self.orig_img_preview_h = int(self.original_image.height * self.zoom_factor)
-
-        # Remove the expanded area from the previous crop
-        displayed_image = displayed_image.crop((0,0,
-                                                min(self.canvas_w, self.orig_img_preview_w),
-                                                min(self.canvas_h,self.orig_img_preview_h)
-                                                ))
-
-        self.pad_x = max(0, (self.canvas_w - self.orig_img_preview_w) // 2)
-        self.pad_y = max(0, (self.canvas_h - self.orig_img_preview_h) // 2)
-
-        
         self.canvas.delete("all")
         self.tk_image = ImageTk.PhotoImage(displayed_image)
         self.canvas.create_image(self.pad_x, self.pad_y, anchor=tk.NW, image=self.tk_image)
 
-
         self.update_output_preview()
         
-    
+    @profile
     def update_output_preview(self):
         
         preview = self.add_drop_shadow()
@@ -702,42 +697,37 @@ class ImageClickApp:
         view_width = self.canvas_w / self.zoom_factor
         view_height = self.canvas_h / self.zoom_factor
 
-        preview = preview.crop((
-            int(self.view_x), int(self.view_y),
-            int(self.view_x + view_width),
-            int(self.view_y + view_height)
-        ))       
-                
-        if self.zoom_factor > 1 or self.panning == True:
+        left = int(self.view_x)
+        top = int(self.view_y)
+        right = int(self.view_x + min(math.ceil(view_width), self.original_image.width))
+        bottom = int(self.view_y + min(math.ceil(view_height), self.original_image.height))
 
-            preview = preview.resize((self.canvas_w, self.canvas_h), Image.NEAREST)
-        else:
-            # Nicer downsample to avoid moire
-            preview = preview.resize((self.canvas_w, self.canvas_h), Image.BOX)
+        preview = preview.crop((left, top, right, bottom))        
         
-        crop_width = min(self.canvas_w, 
-                            self.working_image.width * self.zoom_factor)
-        crop_height = min(self.canvas_h, 
-                            self.working_image.height * self.zoom_factor)
+        # use better downsampler to avoid moire. nearest when zooming so user can see the pixels
+        resampling_filter = Image.NEAREST if self.zoom_factor > 1 or self.panning else Image.BOX
+
+        image_preview_w = int(self.orig_image_crop.width * self.zoom_factor)
+        image_preview_h = int(self.orig_image_crop.height * self.zoom_factor)
+
+        preview = preview.resize((image_preview_w, image_preview_h), resampling_filter)
+
+
 
         if not self.bg_color.get() == "Transparent":
-            # crop away the overcropped (padded) bit at low zoom levels
-            preview = self.apply_background_color(preview.crop((0,0,
-                                                        min(self.canvas_w, self.orig_img_preview_w),
-                                                        min(self.canvas_h,self.orig_img_preview_h)
-                                                        )), 
+            preview = self.apply_background_color(preview, 
                                                     self.bg_color.get())
         else:
-            # Composite a checkerboard to improve performance. imagetk.photoimage struggles with alpha
-            # Crop checkerboard to either canvas size or preview image, if smaller
-            checkerboard = self.checkerboard.crop((0,0,crop_width, crop_height))
-            # crop (expand) to fit canvas size)
-            checkerboard = checkerboard.crop((0,0,preview.width,preview.height))
-            
+            checkerboard = self.checkerboard.crop((0,0,image_preview_w, image_preview_h))
             preview = Image.alpha_composite(checkerboard, preview)
        
         self.outputpreviewtk = ImageTk.PhotoImage(preview)
-        self.canvas2.create_image(self.pad_x, self.pad_y, anchor=tk.NW, image=self.outputpreviewtk)    
+        self.canvas2.delete("all")
+        self.canvas2.create_image(self.pad_x, self.pad_y, anchor=tk.NW, image=self.outputpreviewtk)
+        
+        # zooming out can be laggy especially with multiple scroll wheel clicks, so let tkinter show each zoom out step.
+        self.root.update_idletasks()
+
 
     
     def clear_working_image(self):
@@ -765,7 +755,7 @@ class ImageClickApp:
             
         self.canvas2.delete(self.outputpreviewtk)
         self.working_image = Image.new(mode="RGBA",size=(self.original_image.width, self.original_image.height)) 
-        self.update_zoomed_view()
+        self.update_original_image_preview()
         
     def undo(self):
         
@@ -1060,8 +1050,10 @@ class ImageClickApp:
         self.overlay = ImageOps.colorize(self.orig_image_crop.convert("L"), black="blue", white="white") 
         self.overlay.putalpha(self.mask) 
     
+        image_preview_w = int(self.orig_image_crop.width * self.zoom_factor)
+        image_preview_h = int(self.orig_image_crop.height * self.zoom_factor)
         
-        self.scaled_overlay = self.overlay.resize((self.canvas_w, self.canvas_h), Image.NEAREST)
+        self.scaled_overlay = self.overlay.resize((image_preview_w, image_preview_h), Image.NEAREST)
         
         self.tk_overlay = ImageTk.PhotoImage(self.scaled_overlay)
         self.overlay_item = self.canvas.create_image(self.pad_x, self.pad_y, anchor=tk.NW, image=self.tk_overlay)
@@ -1647,7 +1639,7 @@ class ImageClickApp:
         self.canvas2.delete("all")
         
         self.setup_image_display()
-        self.update_zoomed_view()
+        self.update_original_image_preview()
         self.clear_coord_overlay()
         self.reset_all()
         
@@ -1693,7 +1685,7 @@ Hotkeys:
 Whole image models (if downloaded to Models folder)
 <u> u2net
 <i> disnet
-<o> rmbg
+<o> rmbg1.4
 <b> BiRefNet-general-bb_swin_v1_tiny-epoch_232
 
             """
@@ -2125,13 +2117,13 @@ if __name__ == "__main__":
 
 
         root = tk.Tk()
-        app = ImageClickApp(root, file_path)
+        app = BackgroundRemoverGUI(root, file_path)
         root.mainloop()
     else:
         files = sys.argv[1:]
         for count, file_path in enumerate(files):
             #file_path = sys.argv[1]   
             root = tk.Tk()
-            app = ImageClickApp(root, file_path, f' - Image {count+1} of {len(files)}')
+            app = BackgroundRemoverGUI(root, file_path, f' - Image {count+1} of {len(files)}')
             root.mainloop()
     
