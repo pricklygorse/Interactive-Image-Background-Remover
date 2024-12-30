@@ -681,7 +681,7 @@ class BackgroundRemoverGUI:
 
         # Resize the cropped area to fit the canvas
         displayed_image = self.orig_image_crop.resize((image_preview_w, image_preview_h), resampling_filter)
-
+        
         self.canvas.delete("all")
         self.tk_image = ImageTk.PhotoImage(displayed_image)
         self.canvas.create_image(self.pad_x, self.pad_y, anchor=tk.NW, image=self.tk_image)
@@ -734,6 +734,8 @@ class BackgroundRemoverGUI:
 
         self.canvas2.delete(self.outputpreviewtk)
         self.working_image = Image.new(mode="RGBA",size=(self.original_image.width, self.original_image.height)) 
+        if hasattr(self, "cached_blurred_shadow"):
+            delattr(self,"cached_blurred_shadow")
         self.update_output_preview()
     
     def reset_all(self):
@@ -745,7 +747,9 @@ class BackgroundRemoverGUI:
 
         self.clear_coord_overlay()
 
-        
+        if hasattr(self, "cached_blurred_shadow"):
+            delattr(self,"cached_blurred_shadow")
+
         self.canvas.delete(self.dots)
         if hasattr(self, 'overlay_item'):
             self.canvas.delete(self.overlay_item)
@@ -761,11 +765,16 @@ class BackgroundRemoverGUI:
         
         self.old_working_image, self.working_image = self.working_image, self.old_working_image
         
+        if hasattr(self, "cached_blurred_shadow"):
+            delattr(self,"cached_blurred_shadow")
+        
         self.update_output_preview()
     
     def copy_entire_image(self):
         self.old_working_image = self.working_image.copy()
         self.working_image=self.original_image.convert(mode="RGBA")
+        if hasattr(self, "cached_blurred_shadow"):
+            delattr(self,"cached_blurred_shadow")
         self.update_output_preview()
     
  
@@ -786,6 +795,9 @@ class BackgroundRemoverGUI:
         
         self.working_image = Image.alpha_composite(self.working_image, full_output)
 
+        if hasattr(self, "cached_blurred_shadow"):
+            delattr(self,"cached_blurred_shadow")
+
         self.update_output_preview()    
         
     def remove_from_working_image(self):
@@ -802,6 +814,9 @@ class BackgroundRemoverGUI:
         
         empty = Image.new("RGBA", self.original_image.size, 0)
         self.working_image = Image.composite(self.working_image, empty, ImageOps.invert(full_mask))
+
+        if hasattr(self, "cached_blurred_shadow"):
+            delattr(self,"cached_blurred_shadow")
 
         self.update_output_preview()
     
@@ -1582,26 +1597,32 @@ class BackgroundRemoverGUI:
         if not self.enable_shadow_var.get():
             return self.working_image
 
-        shadow_opacity = self.shadow_opacity_slider.get()          
-        shadow_x = int(self.shadow_x_slider.get())           
-        shadow_y = int(self.shadow_y_slider.get())            
-        shadow_radius = int(self.shadow_radius_slider.get())  
+        # Cache the blurred shadow
+        if not hasattr(self, "cached_blurred_shadow") or \
+           self.cached_shadow_params != (self.shadow_opacity_slider.get(), int(self.shadow_radius_slider.get())):
+            shadow_opacity = self.shadow_opacity_slider.get()
+            shadow_radius = int(self.shadow_radius_slider.get())
 
-        _, _, _, alpha = self.working_image.split()
+            _, _, _, alpha = self.working_image.split()
 
-        black_image = Image.new("RGB", self.working_image.size, (0, 0, 0))
-        shadow_image = Image.merge("RGBA", (black_image.getchannel("R"),
-                                            black_image.getchannel("G"),
-                                            black_image.getchannel("B"),
-                                            alpha))
-        
-        blurred_shadow = shadow_image.filter(ImageFilter.GaussianBlur(radius=shadow_radius))
+            black_image = Image.new("RGB", self.working_image.size, (0, 0, 0))
+            shadow_image = Image.merge("RGBA", (black_image.getchannel("R"),
+                                                black_image.getchannel("G"),
+                                                black_image.getchannel("B"),
+                                                alpha))
 
-        shadow_opacity_alpha = blurred_shadow.split()[3].point(lambda p: int(p * shadow_opacity))
-        blurred_shadow.putalpha(shadow_opacity_alpha)
+            blurred_shadow = shadow_image.filter(ImageFilter.GaussianBlur(radius=shadow_radius))
+            shadow_opacity_alpha = blurred_shadow.split()[3].point(lambda p: int(p * shadow_opacity))
+            blurred_shadow.putalpha(shadow_opacity_alpha)
+
+            self.cached_blurred_shadow = blurred_shadow
+            self.cached_shadow_params = (shadow_opacity, shadow_radius)
+
+        shadow_x = int(self.shadow_x_slider.get())
+        shadow_y = int(self.shadow_y_slider.get())
 
         shadow_with_offset = Image.new("RGBA", self.working_image.size, (0, 0, 0, 0))
-        shadow_with_offset.paste(blurred_shadow, (shadow_x, shadow_y), blurred_shadow)
+        shadow_with_offset.paste(self.cached_blurred_shadow, (shadow_x, shadow_y), self.cached_blurred_shadow)
 
         composite = Image.alpha_composite(shadow_with_offset, self.working_image)
 
