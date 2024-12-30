@@ -367,8 +367,10 @@ class BackgroundRemoverGUI:
             width=16)
         self.bg_color.pack(expand=False, side="right")
         self.BgSel.pack(fill="x", padx=2, pady=2, side="top")
+        
         self.paint_ppm_frame = tk.Frame(self.Options, name="paint_ppm_frame")
         self.paint_ppm_frame.configure(height=200, width=200)
+        
         self.ManPaint = tk.Checkbutton(self.paint_ppm_frame, name="manpaint")
         self.paint_mode = tk.BooleanVar()
         self.ManPaint.configure(
@@ -376,13 +378,32 @@ class BackgroundRemoverGUI:
             variable=self.paint_mode)
         self.ManPaint.pack(fill="x", side="left")
         self.ManPaint.configure(command=self.paint_mode_toggle)
-        self.PostMask = tk.Checkbutton(self.paint_ppm_frame, name="postmask")
+        
+        self.soften_brush = tk.Checkbutton(self.paint_ppm_frame, name="soften_brush")
+        self.soften_var = tk.BooleanVar()
+        self.soften_brush.configure(
+            text='Soften Paintbrush',
+            variable=self.soften_var)
+        self.soften_brush.pack(fill="x", side="left")
+
+        
+        self.paint_ppm_frame.pack(side="top")
+
+        
+
+        self.PostMask = tk.Checkbutton(self.Options, name="postmask")
         self.ppm_var = tk.BooleanVar()
         self.PostMask.configure(
-            text='Post Process Mask',
+            text='Post Process Whole-Image Mask',
             variable=self.ppm_var)
-        self.PostMask.pack(fill="x", side="left")
-        self.paint_ppm_frame.pack(side="top")
+        self.PostMask.pack()
+
+        self.soften_sam = tk.Checkbutton(self.Options, name="soften_sam")
+        self.soften_sam_var = tk.BooleanVar()
+        self.soften_sam.configure(
+            text='Soften Segment Anything Mask',
+            variable=self.soften_sam_var)
+        self.soften_sam.pack()
 
         self.enable_shadow_var = tk.BooleanVar()
         self.EnableShadow = tk.Checkbutton(self.Options, text="Enable Drop Shadow", variable=self.enable_shadow_var)
@@ -966,7 +987,7 @@ class BackgroundRemoverGUI:
         self.whole_image_button.configure(text=f"Processing {model_name}"[0:30]+"...", style="Processing.TButton")
         self.whole_image_button.update()
 
-        self.mask = self.generate_whole_image_model_mask(self.orig_image_crop, session, self.ppm_var.get(), target_size)
+        self.mask = self.generate_whole_image_model_mask(self.orig_image_crop, session, target_size)
 
         self.whole_image_button.configure(text=f"Run whole-image model", style="TButton")
         self.whole_image_button.update()
@@ -974,7 +995,7 @@ class BackgroundRemoverGUI:
         self.generate_coloured_overlay()
      
         
-    def generate_whole_image_model_mask(self, image,  session, ppm=False, target_size=1024):
+    def generate_whole_image_model_mask(self, image,  session, target_size=1024):
         
         def sigmoid(mat):
             # For BiRefNet
@@ -1040,10 +1061,11 @@ class BackgroundRemoverGUI:
             mask = Image.fromarray((mask * 255).astype(np.uint8)).resize(image.size, Image.BICUBIC)
         
 
-        if ppm:
+        if self.ppm_var.get():
             #Apply morphological operations to smooth edges
             mask = mask.point(lambda p: p > 128 and 255)  # Binarize the mask
             mask_array = np.array(mask)
+            #morphological opening. removes isolated noise and smoothes the boundaries
             mask_array = binary_dilation(mask_array, iterations=1)
             mask_array = binary_erosion(mask_array, iterations=1)
             mask = Image.fromarray(mask_array.astype(np.uint8) * 255)
@@ -1089,6 +1111,8 @@ class BackgroundRemoverGUI:
             draw.line((x1, y1, x2, y2), fill='white', width=line_width)
             draw.ellipse((x1-ellipse_radius, y1-ellipse_radius, x1+ellipse_radius, y1+ellipse_radius), fill='white')
             draw.ellipse((x2-ellipse_radius, y2-ellipse_radius, x2+ellipse_radius, y2+ellipse_radius), fill='white')
+        if self.soften_var.get():
+            img = img.filter(ImageFilter.GaussianBlur(radius=1))
         
         return img
     
@@ -1311,6 +1335,18 @@ class BackgroundRemoverGUI:
             mask[m > 0.0] = [255, 255, 255]
 
         mask = Image.fromarray(mask).convert("L")
+
+        if self.soften_sam_var.get():
+            
+
+            mask_array = np.array(mask)
+            #morphological opening. removes isolated noise and smoothes the boundaries
+            mask_array = binary_dilation(mask_array, iterations=1)
+            mask_array = binary_erosion(mask_array, iterations=1)
+            mask = Image.fromarray(mask_array.astype(np.uint8) * 255)
+
+            mask = mask.filter(ImageFilter.GaussianBlur(radius=1))
+
         return mask
     
     def get_preprocess_shape(self, oldh: int, oldw: int, long_side_length: int):
