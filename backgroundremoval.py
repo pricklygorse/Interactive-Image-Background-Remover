@@ -730,9 +730,9 @@ class BackgroundRemoverGUI:
         
     @profile
     def update_output_image_preview(self, resampling_filter = Image.BOX):
-        
+        s = timer()
         preview = self.add_drop_shadow()
-        
+        print(f"drop shadow func: {timer()-s}")
         preview, _ = self._calculate_preview_image(preview, resampling_filter)
         
         if not self.bg_color.get() == "Transparent":
@@ -1646,35 +1646,41 @@ class BackgroundRemoverGUI:
         if not self.enable_shadow_var.get():
             return self.working_image
 
-        # Cache the blurred shadow
+        # Cache the shadow as it is quite computationally heavy
         if not hasattr(self, "cached_blurred_shadow") or \
-           self.cached_shadow_params != (self.shadow_opacity_slider.get(), int(self.shadow_radius_slider.get())):
+                self.cached_shadow_params != (self.shadow_opacity_slider.get(),
+                                            int(self.shadow_radius_slider.get()),
+                                            int(self.shadow_x_slider.get()),
+                                            int(self.shadow_y_slider.get())):
             shadow_opacity = self.shadow_opacity_slider.get()
             shadow_radius = int(self.shadow_radius_slider.get())
+            shadow_x = int(self.shadow_x_slider.get())
+            shadow_y = int(self.shadow_y_slider.get())
 
-            _, _, _, alpha = self.working_image.split()
+            alpha = self.working_image.getchannel('A')
 
-            black_image = Image.new("RGB", self.working_image.size, (0, 0, 0))
-            shadow_image = Image.merge("RGBA", (black_image.getchannel("R"),
-                                                black_image.getchannel("G"),
-                                                black_image.getchannel("B"),
-                                                alpha))
-            start=timer()
-            blurred_shadow = shadow_image.filter(ImageFilter.BoxBlur(radius=shadow_radius))
-            print(timer()-start)
-            shadow_opacity_alpha = blurred_shadow.split()[3].point(lambda p: int(p * shadow_opacity))
-            blurred_shadow.putalpha(shadow_opacity_alpha)
+            # Downsample for performance
+            original_size = alpha.size
+            downsample_factor = 0.5  
+            new_size = (int(original_size[0] * downsample_factor), int(original_size[1] * downsample_factor))
+            alpha_resized = alpha.resize(new_size, Image.NEAREST)
 
-            self.cached_blurred_shadow = blurred_shadow
-            self.cached_shadow_params = (shadow_opacity, shadow_radius)
+            blurred_alpha_resized = alpha_resized.filter(ImageFilter.BoxBlur(radius=shadow_radius * downsample_factor))
 
-        shadow_x = int(self.shadow_x_slider.get())
-        shadow_y = int(self.shadow_y_slider.get())
+            blurred_alpha = blurred_alpha_resized.resize(original_size, Image.NEAREST)
 
-        shadow_with_offset = Image.new("RGBA", self.working_image.size, (0, 0, 0, 0))
-        shadow_with_offset.paste(self.cached_blurred_shadow, (shadow_x, shadow_y), self.cached_blurred_shadow)
+            shadow_opacity_alpha = blurred_alpha.point(lambda p: int(p * shadow_opacity))
 
-        composite = Image.alpha_composite(shadow_with_offset, self.working_image)
+            shadow_image = Image.new("RGBA", self.working_image.size, (0, 0, 0, 0))
+            shadow_image.putalpha(shadow_opacity_alpha)
+
+            shadow_with_offset = Image.new("RGBA", self.working_image.size, (0, 0, 0, 0))
+            shadow_with_offset.paste(shadow_image, (shadow_x, shadow_y), shadow_image)
+
+            self.cached_blurred_shadow = shadow_with_offset
+            self.cached_shadow_params = (shadow_opacity, shadow_radius, shadow_x, shadow_y)
+
+        composite = Image.alpha_composite(self.cached_blurred_shadow, self.working_image)
 
         return composite
 
