@@ -126,7 +126,7 @@ class BackgroundRemoverGUI:
 
         self.root.update_idletasks()
         self.build_gui()
-        self.update_original_image_preview()
+        self.update_input_image_preview()
 
 
         self.mask = Image.new("L", (int(self.orig_image_crop.width), 
@@ -168,7 +168,7 @@ class BackgroundRemoverGUI:
             # because of rounding error
             self.checkerboard = self.create_checkerboard(self.canvas_w * 2, self.canvas_h * 2, square_size = 10)
 
-            self.update_original_image_preview(Image.BOX)
+            self.update_input_image_preview(Image.BOX)
 
       
 
@@ -429,7 +429,7 @@ class BackgroundRemoverGUI:
         self.shadow_opacity_label = tk.Label(self.shadow_options_frame, text="Opacity:")
         self.shadow_opacity_slider = ttk.Scale(self.shadow_options_frame, from_=0, to=1, orient="horizontal")
         self.shadow_opacity_slider.set(0.5)
-        self.shadow_opacity_slider.configure(command=lambda event: self.update_output_preview())
+        self.shadow_opacity_slider.configure(command=lambda event: self.update_output_image_preview())
 
         self.shadow_x_label = tk.Label(self.shadow_options_frame, text="X Offset:")
         self.shadow_x_slider = ttk.Scale(
@@ -439,7 +439,7 @@ class BackgroundRemoverGUI:
             orient="horizontal",
         )
         self.shadow_x_slider.set(30)
-        self.shadow_x_slider.configure(command=lambda event: self.update_output_preview())
+        self.shadow_x_slider.configure(command=lambda event: self.update_output_image_preview())
 
         self.shadow_y_label = tk.Label(self.shadow_options_frame, text="Y Offset:")
         self.shadow_y_slider = ttk.Scale(
@@ -449,7 +449,7 @@ class BackgroundRemoverGUI:
             orient="horizontal",
         )
         self.shadow_y_slider.set(30)
-        self.shadow_y_slider.configure(command=lambda event: self.update_output_preview())
+        self.shadow_y_slider.configure(command=lambda event: self.update_output_image_preview())
 
         self.shadow_radius_label = tk.Label(self.shadow_options_frame, text="Blur Radius:")
         self.shadow_radius_slider = ttk.Scale(
@@ -459,7 +459,7 @@ class BackgroundRemoverGUI:
                     orient="horizontal",
                 )
         self.shadow_radius_slider.set(10)
-        self.shadow_radius_slider.configure(command=lambda event: self.update_output_preview())
+        self.shadow_radius_slider.configure(command=lambda event: self.update_output_image_preview())
 
         # Initially hide the shadow options
         #self.toggle_shadow_options()
@@ -494,7 +494,7 @@ class BackgroundRemoverGUI:
         self.main_frame.pack(expand=True, fill="both", side="top")
 
 
-        self.bg_color.bind("<<ComboboxSelected>>", lambda event: self.update_output_preview())
+        self.bg_color.bind("<<ComboboxSelected>>", lambda event: self.update_output_image_preview())
         self.bg_color.current(0)
         self.sam_combo.current(0)
         self.whole_image_combo.current(0)
@@ -560,9 +560,9 @@ class BackgroundRemoverGUI:
             canvas.bind("<Button-4>", self.zoom)  # Linux scroll up
             canvas.bind("<Button-5>", self.zoom)  # Linux scroll down
             canvas.bind("<MouseWheel>", self.zoom) #windows scroll
-            canvas.bind("<ButtonPress-2>", self.start_pan)
-            canvas.bind("<B2-Motion>", self.pan)
-            canvas.bind("<ButtonRelease-2>", self.end_pan)
+            canvas.bind("<ButtonPress-2>", self.mouse_start_pan)
+            canvas.bind("<B2-Motion>", self.mouse_pan)
+            canvas.bind("<ButtonRelease-2>", self.mouse_end_pan)
         
         self.root.bind("<c>", lambda event: self.clear_coord_overlay())
         self.root.bind("<d>", lambda event: self.copy_entire_image())
@@ -590,35 +590,35 @@ class BackgroundRemoverGUI:
     
     def pan_left(self, event):
         self.view_x = max(0, self.view_x - self.pan_step)
-        self.update_original_image_preview(Image.NEAREST)
+        self.update_input_image_preview(Image.NEAREST)
         self.schedule_preview_update()
 
     def pan_right(self, event):
         max_view_x = max(0, self.original_image.width - self.canvas_w / self.zoom_factor)
         self.view_x = min(max_view_x, self.view_x + self.pan_step)
-        self.update_original_image_preview(Image.NEAREST)
+        self.update_input_image_preview(Image.NEAREST)
         self.schedule_preview_update()
 
     def pan_up(self, event):
         self.view_y = max(0, self.view_y - self.pan_step)
-        self.update_original_image_preview(Image.NEAREST)
+        self.update_input_image_preview(Image.NEAREST)
         self.schedule_preview_update()
 
     def pan_down(self, event):
         max_view_y = max(0, self.original_image.height - self.canvas_h / self.zoom_factor)
         self.view_y = min(max_view_y, self.view_y + self.pan_step)
-        self.update_original_image_preview(Image.NEAREST)
+        self.update_input_image_preview(Image.NEAREST)
         self.schedule_preview_update()
     
     
     
 
-    def start_pan(self, event):
+    def mouse_start_pan(self, event):
         self.panning = True
         self.pan_start_x = event.x
         self.pan_start_y = event.y
     
-    def pan(self, event):
+    def mouse_pan(self, event):
         
         if self.panning:
             dx = event.x - self.pan_start_x
@@ -639,12 +639,12 @@ class BackgroundRemoverGUI:
             self.clear_coord_overlay()
             self.mask = None
 
-            self.update_original_image_preview(Image.NEAREST)
+            self.update_input_image_preview(Image.NEAREST)
             
     
-    def end_pan(self, event):
+    def mouse_end_pan(self, event):
         self.panning = False    
-        self.update_original_image_preview(Image.BOX)
+        self.update_input_image_preview(Image.BOX)
 
     def zoom(self, event):
         
@@ -671,8 +671,11 @@ class BackgroundRemoverGUI:
         self.view_x = max(0, min(self.view_x, self.original_image.width - self.canvas_w / self.zoom_factor))
         self.view_y = max(0, min(self.view_y, self.original_image.height - self.canvas_h / self.zoom_factor))
         
+        self.zoom_label.config(text=f"Zoom: {int(self.zoom_factor * 100)}%")
+
+
         if self.min_zoom==False: 
-            self.update_original_image_preview(resampling_filter=Image.NEAREST)
+            self.update_input_image_preview(resampling_filter=Image.NEAREST)
             if hasattr(self, "encoder_output"):
                 delattr(self, "encoder_output")
             self.clear_coord_overlay()
@@ -690,68 +693,56 @@ class BackgroundRemoverGUI:
         self.after_id = self.root.after(int(self.zoom_delay * 1000), self.update_preview_delayed)
 
     def update_preview_delayed(self):
-        self.update_original_image_preview(resampling_filter=Image.BOX)
+        self.update_input_image_preview(resampling_filter=Image.BOX)
         self.after_id = None
-        
-    @profile
-    def update_original_image_preview(self, resampling_filter=Image.BOX):
-
-        self.zoom_label.config(text=f"Zoom: {int(self.zoom_factor * 100)}%")
-
+    
+    def _calculate_preview_image(self, image, resampling_filter):
         # Calculate the size of the visible area in the original image coordinates
         view_width = self.canvas_w / self.zoom_factor
         view_height = self.canvas_h / self.zoom_factor
 
         left = int(self.view_x)
         top = int(self.view_y)
-        right = int(self.view_x + min(math.ceil(view_width), self.original_image.width))
-        bottom = int(self.view_y + min(math.ceil(view_height), self.original_image.height))
+        right = int(self.view_x + min(math.ceil(view_width), image.width))
+        bottom = int(self.view_y + min(math.ceil(view_height), image.height))
 
-        self.orig_image_crop = self.original_image.crop((left, top, right, bottom))
+        image_to_display = image.crop((left, top, right, bottom))
 
-        print(f"crop box: {left} {top} {right} {bottom}")
-        print(f"orig size: {self.original_image.size} crop size: {self.orig_image_crop.size} canvas size: {self.canvas_w} {self.canvas_h}")
-        
-        image_preview_w = int(self.orig_image_crop.width * self.zoom_factor)
-        image_preview_h = int(self.orig_image_crop.height * self.zoom_factor)
+        image_preview_w = int(image_to_display.width * self.zoom_factor)
+        image_preview_h = int(image_to_display.height * self.zoom_factor)
 
         self.pad_x = max(0, (self.canvas_w - image_preview_w) // 2)
         self.pad_y = max(0, (self.canvas_h - image_preview_h) // 2)
 
-        displayed_image = self.orig_image_crop.resize((image_preview_w, image_preview_h), resampling_filter)
+        displayed_image = image_to_display.resize((image_preview_w, image_preview_h), resampling_filter)
+        return displayed_image, image_to_display
+
+    @profile
+    def update_input_image_preview(self, resampling_filter=Image.BOX):
+
+        displayed_image, self.orig_image_crop = self._calculate_preview_image(self.original_image, resampling_filter)
         
         self.canvas.delete("all")
         self.tk_image = ImageTk.PhotoImage(displayed_image)
         self.canvas.create_image(self.pad_x, self.pad_y, anchor=tk.NW, image=self.tk_image)
 
-        self.update_output_preview(resampling_filter=resampling_filter)
+        self.update_output_image_preview(resampling_filter=resampling_filter)
         
     @profile
-    def update_output_preview(self, resampling_filter = Image.NEAREST):
+    def update_output_image_preview(self, resampling_filter = Image.BOX):
         
         preview = self.add_drop_shadow()
-
-        # Calculate the size of the visible area in the original image coordinates
-        view_width = self.canvas_w / self.zoom_factor
-        view_height = self.canvas_h / self.zoom_factor
-
-        left = int(self.view_x)
-        top = int(self.view_y)
-        right = int(self.view_x + min(math.ceil(view_width), self.original_image.width))
-        bottom = int(self.view_y + min(math.ceil(view_height), self.original_image.height))
-
-        preview = preview.crop((left, top, right, bottom))        
-
-        image_preview_w = int(self.orig_image_crop.width * self.zoom_factor)
-        image_preview_h = int(self.orig_image_crop.height * self.zoom_factor)
-
-        preview = preview.resize((image_preview_w, image_preview_h), resampling_filter)
-
+        
+        preview, _ = self._calculate_preview_image(preview, resampling_filter)
+        
         if not self.bg_color.get() == "Transparent":
             preview = self.apply_background_color(preview, 
                                                     self.bg_color.get())
         else:
+            image_preview_w, image_preview_h = preview.size
+            
             checkerboard = self.checkerboard.crop((0,0,image_preview_w, image_preview_h))
+            
             preview = Image.alpha_composite(checkerboard, preview)
        
         self.outputpreviewtk = ImageTk.PhotoImage(preview)
@@ -774,7 +765,7 @@ class BackgroundRemoverGUI:
         self.working_image = Image.new(mode="RGBA",size=(self.original_image.width, self.original_image.height)) 
         if hasattr(self, "cached_blurred_shadow"):
             delattr(self,"cached_blurred_shadow")
-        self.update_output_preview()
+        self.update_output_image_preview()
     
     def reset_all(self):
         
@@ -797,7 +788,7 @@ class BackgroundRemoverGUI:
             
         self.canvas2.delete(self.outputpreviewtk)
         self.working_image = Image.new(mode="RGBA",size=(self.original_image.width, self.original_image.height)) 
-        self.update_original_image_preview()
+        self.update_input_image_preview()
         
     def undo(self):
         
@@ -808,7 +799,7 @@ class BackgroundRemoverGUI:
         if hasattr(self, "cached_blurred_shadow"):
             delattr(self,"cached_blurred_shadow")
         
-        self.update_output_preview()
+        self.update_output_image_preview()
     
     def copy_entire_image(self):
         self.add_undo_step()
@@ -816,7 +807,7 @@ class BackgroundRemoverGUI:
         self.working_image=self.original_image.convert(mode="RGBA")
         if hasattr(self, "cached_blurred_shadow"):
             delattr(self,"cached_blurred_shadow")
-        self.update_output_preview()
+        self.update_output_image_preview()
     
  
     def add_to_working_image(self):
@@ -839,7 +830,7 @@ class BackgroundRemoverGUI:
         if hasattr(self, "cached_blurred_shadow"):
             delattr(self,"cached_blurred_shadow")
 
-        self.update_output_preview()    
+        self.update_output_image_preview()    
         
     def remove_from_working_image(self):
         
@@ -859,7 +850,7 @@ class BackgroundRemoverGUI:
         if hasattr(self, "cached_blurred_shadow"):
             delattr(self,"cached_blurred_shadow")
 
-        self.update_output_preview()
+        self.update_output_image_preview()
     
     def clear_visible_area(self):
         mask_old = self.mask.copy()
@@ -1588,7 +1579,7 @@ class BackgroundRemoverGUI:
         else:
             self.bgcolor = None
             
-        self.update_output_preview()
+        self.update_output_image_preview()
 
 
     def apply_background_color(self, img, color):
@@ -1648,6 +1639,8 @@ class BackgroundRemoverGUI:
         
         self.initialise_new_image()
 
+    
+    @profile
     def add_drop_shadow(self):
         
         if not self.enable_shadow_var.get():
@@ -1666,8 +1659,9 @@ class BackgroundRemoverGUI:
                                                 black_image.getchannel("G"),
                                                 black_image.getchannel("B"),
                                                 alpha))
-
-            blurred_shadow = shadow_image.filter(ImageFilter.GaussianBlur(radius=shadow_radius))
+            start=timer()
+            blurred_shadow = shadow_image.filter(ImageFilter.BoxBlur(radius=shadow_radius))
+            print(timer()-start)
             shadow_opacity_alpha = blurred_shadow.split()[3].point(lambda p: int(p * shadow_opacity))
             blurred_shadow.putalpha(shadow_opacity_alpha)
 
@@ -1708,7 +1702,7 @@ class BackgroundRemoverGUI:
             self.shadow_radius_label.pack_forget()
             self.shadow_radius_slider.pack_forget()
             self.shadow_options_frame.pack_forget()
-        self.update_output_preview()
+        self.update_output_image_preview()
         
     def initialise_new_image(self):
         
@@ -1716,7 +1710,7 @@ class BackgroundRemoverGUI:
         self.canvas2.delete("all")
         
         self.setup_image_display()
-        self.update_original_image_preview()
+        self.update_input_image_preview()
         self.clear_coord_overlay()
         self.reset_all()
         
