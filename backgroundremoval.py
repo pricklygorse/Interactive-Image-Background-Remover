@@ -1221,17 +1221,8 @@ class BackgroundRemoverGUI:
      
 
     def _initialise_sam_model(self):
-        if not hasattr(self, "sam_encoder"):
+        if not hasattr(self, "sam_encoder") or self.sam_model != MODEL_ROOT + self.sam_model_choice.get():
             self.status_label.config(text="Loading model", fg=STATUS_PROCESSING)
-            self.status_label.update()
-            canvas_text_id, rect_id = self.canvas_text_overlay(f"Loading {self.sam_model_choice.get()}")
-            self.sam_model = MODEL_ROOT + self.sam_model_choice.get()
-            self.sam_encoder = ort.InferenceSession(self.sam_model + ".encoder.onnx")
-            self.sam_decoder = ort.InferenceSession(self.sam_model + ".decoder.onnx")
-            self.canvas.delete(canvas_text_id)
-            self.canvas.delete(rect_id)
-        elif not self.sam_model == MODEL_ROOT + self.sam_model_choice.get():
-            self.status_label.config(text="Loading model " + self.sam_model_choice.get(), fg=STATUS_PROCESSING)
             self.status_label.update()
             canvas_text_id, rect_id = self.canvas_text_overlay(f"Loading {self.sam_model_choice.get()}")
             self.sam_model = MODEL_ROOT + self.sam_model_choice.get()
