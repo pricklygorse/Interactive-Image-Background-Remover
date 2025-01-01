@@ -129,7 +129,7 @@ class BackgroundRemoverGUI:
         self.update_input_image_preview()
 
 
-        self.mask = Image.new("L", (int(self.orig_image_crop.width), 
+        self.model_output_mask = Image.new("L", (int(self.orig_image_crop.width), 
                                             int(self.orig_image_crop.height)),0)
 
         self.set_keybindings()
@@ -560,9 +560,9 @@ class BackgroundRemoverGUI:
             canvas.bind("<Button-4>", self.zoom)  # Linux scroll up
             canvas.bind("<Button-5>", self.zoom)  # Linux scroll down
             canvas.bind("<MouseWheel>", self.zoom) #windows scroll
-            canvas.bind("<ButtonPress-2>", self.mouse_start_pan)
-            canvas.bind("<B2-Motion>", self.mouse_pan)
-            canvas.bind("<ButtonRelease-2>", self.mouse_end_pan)
+            canvas.bind("<ButtonPress-2>", self.start_pan_mouse)
+            canvas.bind("<B2-Motion>", self.pan_mouse)
+            canvas.bind("<ButtonRelease-2>", self.end_pan_mouse)
         
         self.root.bind("<c>", lambda event: self.clear_coord_overlay())
         self.root.bind("<d>", lambda event: self.copy_entire_image())
@@ -582,29 +582,29 @@ class BackgroundRemoverGUI:
         self.root.bind("<n>", lambda event: self.run_whole_image_model("BiRefNet-DIS-bb_pvt_v2_b0-epoch_590"))
         self.root.bind("<m>", lambda event: self.run_whole_image_model("BiRefNet-general-bb_swin_v1_tiny-epoch_232_FP16"))        
         self.root.bind("<q>", lambda event: self.undo())
-        self.root.bind("<Left>", self.pan_left)
-        self.root.bind("<Right>", self.pan_right)
-        self.root.bind("<Up>", self.pan_up)
-        self.root.bind("<Down>", self.pan_down)
+        self.root.bind("<Left>", self.pan_left_keyboard)
+        self.root.bind("<Right>", self.pan_right_keyboard)
+        self.root.bind("<Up>", self.pan_up_keyboard)
+        self.root.bind("<Down>", self.pan_down_keyboard)
         
     
-    def pan_left(self, event):
+    def pan_left_keyboard(self, event):
         self.view_x = max(0, self.view_x - self.pan_step)
         self.update_input_image_preview(Image.NEAREST)
         self.schedule_preview_update()
 
-    def pan_right(self, event):
+    def pan_right_keyboard(self, event):
         max_view_x = max(0, self.original_image.width - self.canvas_w / self.zoom_factor)
         self.view_x = min(max_view_x, self.view_x + self.pan_step)
         self.update_input_image_preview(Image.NEAREST)
         self.schedule_preview_update()
 
-    def pan_up(self, event):
+    def pan_up_keyboard(self, event):
         self.view_y = max(0, self.view_y - self.pan_step)
         self.update_input_image_preview(Image.NEAREST)
         self.schedule_preview_update()
 
-    def pan_down(self, event):
+    def pan_down_keyboard(self, event):
         max_view_y = max(0, self.original_image.height - self.canvas_h / self.zoom_factor)
         self.view_y = min(max_view_y, self.view_y + self.pan_step)
         self.update_input_image_preview(Image.NEAREST)
@@ -613,12 +613,12 @@ class BackgroundRemoverGUI:
     
     
 
-    def mouse_start_pan(self, event):
+    def start_pan_mouse(self, event):
         self.panning = True
         self.pan_start_x = event.x
         self.pan_start_y = event.y
     
-    def mouse_pan(self, event):
+    def pan_mouse(self, event):
         
         if self.panning:
             dx = event.x - self.pan_start_x
@@ -637,12 +637,12 @@ class BackgroundRemoverGUI:
             if hasattr(self, "encoder_output"):
                 delattr(self, "encoder_output")
             self.clear_coord_overlay()
-            self.mask = None
+            self.model_output_mask = None
 
             self.update_input_image_preview(Image.NEAREST)
             
     
-    def mouse_end_pan(self, event):
+    def end_pan_mouse(self, event):
         self.panning = False    
         self.update_input_image_preview(Image.BOX)
 
@@ -730,9 +730,9 @@ class BackgroundRemoverGUI:
         
     @profile
     def update_output_image_preview(self, resampling_filter = Image.BOX):
-        s = timer()
+
         preview = self.add_drop_shadow()
-        print(f"drop shadow func: {timer()-s}")
+
         preview, _ = self._calculate_preview_image(preview, resampling_filter)
         
         if not self.bg_color.get() == "Transparent":
@@ -818,7 +818,7 @@ class BackgroundRemoverGUI:
             mask = self.generate_paint_mode_mask()
 
         else:
-            mask = self.mask
+            mask = self.model_output_mask
 
         full_mask = self.apply_zoomed_mask_to_full_image(mask)
 
@@ -840,7 +840,7 @@ class BackgroundRemoverGUI:
             mask = self.generate_paint_mode_mask()
             
         else:
-            mask = self.mask
+            mask = self.model_output_mask
 
         full_mask = self.apply_zoomed_mask_to_full_image(mask)
         
@@ -853,10 +853,10 @@ class BackgroundRemoverGUI:
         self.update_output_image_preview()
     
     def clear_visible_area(self):
-        mask_old = self.mask.copy()
-        self.mask = Image.new("L", self.orig_image_crop.size, 255)
+        mask_old = self.model_output_mask.copy()
+        self.model_output_mask = Image.new("L", self.orig_image_crop.size, 255)
         self.remove_from_working_image()
-        self.mask = mask_old
+        self.model_output_mask = mask_old
     
     def apply_zoomed_mask_to_full_image(self, zoomed_mask):
         full_mask = Image.new('L', self.original_image.size, 0)
@@ -898,7 +898,7 @@ class BackgroundRemoverGUI:
         if hasattr(self, 'overlay_item'):
             self.canvas.delete(self.overlay_item)
         
-        self.mask = Image.new("L",self.orig_image_crop.size,0)
+        self.model_output_mask = Image.new("L",self.orig_image_crop.size,0)
         #self.mask=None
 
     def start_box(self, event):
@@ -953,13 +953,34 @@ class BackgroundRemoverGUI:
         self.coordinates = [[scaled_coords[0], scaled_coords[1]], [scaled_coords[2], scaled_coords[3]]]
         self.labels = [2, 3]  # Assuming 2 for top-left and 3 for bottom-right
         
-        self.mask = self.sam_calculate_mask(self.orig_image_crop, self.sam_encoder, self.sam_decoder, self.coordinates, self.labels)
+        self.model_output_mask = self.sam_calculate_mask(self.orig_image_crop, self.sam_encoder, self.sam_decoder, self.coordinates, self.labels)
         
         self.generate_coloured_overlay()
 
         self.coordinates = []
         self.labels =[]
     
+    def canvas_text_overlay(self, overlay_text):
+        rect_id = self.canvas.create_rectangle(
+            0,
+            self.canvas_h // 2 - 30,
+            self.canvas_w,
+            self.canvas_h // 2 + 30,
+            fill="#000000",  # Black
+            outline="",
+            stipple="gray50" # Add transparency
+        )
+        canvas_text_id = self.canvas.create_text(
+                self.canvas_w // 2,
+                self.canvas_h // 2,
+                text=overlay_text,
+                fill="white",
+                font=("Arial", 18, "bold"),
+                anchor="center"
+            )
+        self.canvas.update()
+        return canvas_text_id, rect_id
+
     def load_whole_image_model(self, model_name):
         if not hasattr(self, f"{model_name}_session"):
             self.status_label.config(text=f"Loading {model_name}", fg=STATUS_PROCESSING)
@@ -968,10 +989,16 @@ class BackgroundRemoverGUI:
             self.whole_image_button.configure(text=f"Loading {model_name}"[0:30]+"...", style="Processing.TButton")
             self.whole_image_button.update()
 
+            canvas_text_id, rect_id = self.canvas_text_overlay(f"Loading {model_name}")
+
+
             setattr(self, f"{model_name}_session", ort.InferenceSession(f'{MODEL_ROOT}{model_name}.onnx'))
 
             self.whole_image_button.configure(style="TButton")
             self.whole_image_button.update()
+
+            self.canvas.delete(canvas_text_id)
+            self.canvas.delete(rect_id)
 
         return getattr(self, f"{model_name}_session")
     
@@ -994,14 +1021,19 @@ class BackgroundRemoverGUI:
         self.status_label.config(text=f"Processing {model_name}", fg=STATUS_PROCESSING)
         self.status_label.update()
 
+        canvas_text_id, rect_id = self.canvas_text_overlay(f"Processing {model_name}")
+
         # Trim the text to 30 characters to fit the text box
         self.whole_image_button.configure(text=f"Processing {model_name}"[0:30]+"...", style="Processing.TButton")
         self.whole_image_button.update()
 
-        self.mask = self.generate_whole_image_model_mask(self.orig_image_crop, session, target_size)
+        self.model_output_mask = self.generate_whole_image_model_mask(self.orig_image_crop, session, target_size)
 
         self.whole_image_button.configure(text=f"Run whole-image model", style="TButton")
         self.whole_image_button.update()
+
+        self.canvas.delete(rect_id)
+        self.canvas.delete(canvas_text_id)
 
         self.generate_coloured_overlay()
      
@@ -1096,7 +1128,7 @@ class BackgroundRemoverGUI:
     def generate_coloured_overlay(self):
             
         self.overlay = ImageOps.colorize(self.orig_image_crop.convert("L"), black="blue", white="white") 
-        self.overlay.putalpha(self.mask) 
+        self.overlay.putalpha(self.model_output_mask) 
     
         image_preview_w = int(self.orig_image_crop.width * self.zoom_factor)
         image_preview_h = int(self.orig_image_crop.height * self.zoom_factor)
@@ -1192,18 +1224,24 @@ class BackgroundRemoverGUI:
         if not hasattr(self, "sam_encoder"):
             self.status_label.config(text="Loading model", fg=STATUS_PROCESSING)
             self.status_label.update()
+            canvas_text_id, rect_id = self.canvas_text_overlay(f"Loading {self.sam_model_choice.get()}")
             self.sam_model = MODEL_ROOT + self.sam_model_choice.get()
             self.sam_encoder = ort.InferenceSession(self.sam_model + ".encoder.onnx")
             self.sam_decoder = ort.InferenceSession(self.sam_model + ".decoder.onnx")
+            self.canvas.delete(canvas_text_id)
+            self.canvas.delete(rect_id)
         elif not self.sam_model == MODEL_ROOT + self.sam_model_choice.get():
             self.status_label.config(text="Loading model " + self.sam_model_choice.get(), fg=STATUS_PROCESSING)
             self.status_label.update()
+            canvas_text_id, rect_id = self.canvas_text_overlay(f"Loading {self.sam_model_choice.get()}")
             self.sam_model = MODEL_ROOT + self.sam_model_choice.get()
             self.sam_encoder = ort.InferenceSession(self.sam_model + ".encoder.onnx")
             self.sam_decoder = ort.InferenceSession(self.sam_model + ".decoder.onnx")
+            self.canvas.delete(canvas_text_id)
+            self.canvas.delete(rect_id)
             self.clear_coord_overlay()
             if hasattr(self, "encoder_output"): delattr(self, "encoder_output")
-
+        
 
     def generate_sam_overlay(self, event):
 
@@ -1219,7 +1257,7 @@ class BackgroundRemoverGUI:
         self.draw_dot(event.x, event.y, event.num)
         self.canvas.update()
         
-        self.mask = self.sam_calculate_mask(self.orig_image_crop, 
+        self.model_output_mask = self.sam_calculate_mask(self.orig_image_crop, 
                                             self.sam_encoder, self.sam_decoder, self.coordinates, self.labels)
         self.generate_coloured_overlay()
         
@@ -1280,6 +1318,8 @@ class BackgroundRemoverGUI:
             
             
             self.status_label.config(text="Calculating Image Embedding. May take a while", fg=STATUS_PROCESSING)
+            canvas_text_id, rect_id = self.canvas_text_overlay(f"Calculating Image Embedding")
+
             self.root.update()
             
             start = timer()
@@ -1288,6 +1328,8 @@ class BackgroundRemoverGUI:
             status = f"{round(timer()-start,2)} seconds to calculate embedding | "
 
             self.status_label.config(text=status, fg=STATUS_NORMAL)
+            self.canvas.delete(canvas_text_id)
+            self.canvas.delete(rect_id)
             
         self.root.update()
         
