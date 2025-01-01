@@ -3,7 +3,7 @@ import tkinter as tk
 import tkinter.ttk as ttk
 from tkinter import Canvas, Frame, Button, messagebox
 from tkinter.filedialog import askopenfilename, asksaveasfilename
-from PIL import Image, ImageTk, ImageOps, ImageDraw, ImageEnhance, ImageGrab, ImageFilter
+from PIL import Image, ImageTk, ImageOps, ImageDraw, ImageEnhance, ImageGrab, ImageFilter, ImageChops
 from scipy.special import expit
 import os
 import math
@@ -24,12 +24,14 @@ STATUS_PROCESSING = "#f00"
 STATUS_NORMAL = "#000000"
 PAINT_BRUSH_DIAMETER = 18
 UNDO_STEPS=20
+SOFTEN_RADIUS=1
+
 pillow_formats = [
-            ("All Image Files", "*.bmp *.gif *.jpg *.jpeg *.png *.tif *.tiff *.webp"),
+            ("All Image Files", "*.bmp *.gif *.jpg *.jpeg *.JPG *.JPEG *.png *.PNG *.tif *.tiff *.webp"),
             ("BMP", "*.bmp"),
             ("GIF", "*.gif"),
-            ("JPEG", "*.jpg *.jpeg"),
-            ("PNG", "*.png"),
+            ("JPEG", "*.jpg *.jpeg *.JPG *.JPEG"),
+            ("PNG", "*.png *.PNG"),
             ("TIFF", "*.tif *.tiff"),
             ("WEBP", "*.webp"),
             ("All Files", "*.*")
@@ -178,9 +180,10 @@ class BackgroundRemoverGUI:
         self.lowest_zoom_factor = min(self.canvas_w / self.original_image.width, self.canvas_h / self.original_image.height)
   
         self.working_image = Image.new("RGBA", self.original_image.size, (0, 0, 0, 0))
+        self.working_mask = Image.new("L", self.original_image.size, 0)
         
-        self.working_image_history = []
-        self.working_image_history.append(self.working_image.copy())
+        self.undo_history_mask = []
+        self.undo_history_mask.append(self.working_mask.copy())
 
         self.zoom_factor = self.lowest_zoom_factor
         self.view_x = 0
@@ -391,12 +394,13 @@ class BackgroundRemoverGUI:
         self.ManPaint.pack(fill="x", side="left")
         self.ManPaint.configure(command=self.paint_mode_toggle)
         
-        self.soften_brush = tk.Checkbutton(self.paint_ppm_frame, name="soften_brush")
-        self.soften_var = tk.BooleanVar()
-        self.soften_brush.configure(
-            text='Soften Paintbrush',
-            variable=self.soften_var)
-        self.soften_brush.pack(fill="x", side="left")
+        self.show_mask_checkbox = tk.Checkbutton(self.paint_ppm_frame, name="show_mask_checkbox")
+        self.show_mask_var = tk.BooleanVar()
+        self.show_mask_checkbox.configure(
+            text='Show Full Mask',
+            variable=self.show_mask_var,
+            command=self.update_output_image_preview)
+        self.show_mask_checkbox.pack(fill="x", side="left")
 
         
         self.paint_ppm_frame.pack(side="top")
@@ -406,19 +410,19 @@ class BackgroundRemoverGUI:
         self.PostMask = tk.Checkbutton(self.Options, name="postmask")
         self.ppm_var = tk.BooleanVar()
         self.PostMask.configure(
-            text='Post Process Whole-Image Mask',
+            text='Post Process Model Mask',
             variable=self.ppm_var)
         self.PostMask.pack()
 
-        self.soften_sam = tk.Checkbutton(self.Options, name="soften_sam")
-        self.soften_sam_var = tk.BooleanVar()
-        self.soften_sam.configure(
-            text='Soften Segment Anything Mask',
-            variable=self.soften_sam_var)
-        self.soften_sam.pack()
+        self.soften_mask_checkbox = tk.Checkbutton(self.Options, name="soften_mask_checkbox")
+        self.soften_mask_var = tk.BooleanVar()
+        self.soften_mask_checkbox.configure(
+            text='Soften Model Mask/Paintbrush',
+            variable=self.soften_mask_var)
+        self.soften_mask_checkbox.pack()
 
         self.enable_shadow_var = tk.BooleanVar()
-        self.EnableShadow = tk.Checkbutton(self.Options, text="Enable Drop Shadow", variable=self.enable_shadow_var)
+        self.EnableShadow = tk.Checkbutton(self.Options, text="Enable Drop Shadow (Slow)", variable=self.enable_shadow_var)
         self.EnableShadow.pack(fill="x", side="top", pady=5)
         self.EnableShadow.configure(command=self.toggle_shadow_options)
 
@@ -429,7 +433,8 @@ class BackgroundRemoverGUI:
         self.shadow_opacity_label = tk.Label(self.shadow_options_frame, text="Opacity:")
         self.shadow_opacity_slider = ttk.Scale(self.shadow_options_frame, from_=0, to=1, orient="horizontal")
         self.shadow_opacity_slider.set(0.5)
-        self.shadow_opacity_slider.configure(command=lambda event: self.update_output_image_preview())
+        #self.shadow_opacity_slider.configure(command=lambda event: self.update_output_image_preview())
+        self.shadow_opacity_slider.configure(command=lambda event: self.add_drop_shadow())
 
         self.shadow_x_label = tk.Label(self.shadow_options_frame, text="X Offset:")
         self.shadow_x_slider = ttk.Scale(
@@ -438,8 +443,8 @@ class BackgroundRemoverGUI:
             to=200, 
             orient="horizontal",
         )
-        self.shadow_x_slider.set(30)
-        self.shadow_x_slider.configure(command=lambda event: self.update_output_image_preview())
+        self.shadow_x_slider.set(50)
+        self.shadow_x_slider.configure(command=lambda event: self.add_drop_shadow())
 
         self.shadow_y_label = tk.Label(self.shadow_options_frame, text="Y Offset:")
         self.shadow_y_slider = ttk.Scale(
@@ -448,8 +453,8 @@ class BackgroundRemoverGUI:
             to=200, 
             orient="horizontal",
         )
-        self.shadow_y_slider.set(30)
-        self.shadow_y_slider.configure(command=lambda event: self.update_output_image_preview())
+        self.shadow_y_slider.set(50)
+        self.shadow_y_slider.configure(command=lambda event: self.add_drop_shadow())
 
         self.shadow_radius_label = tk.Label(self.shadow_options_frame, text="Blur Radius:")
         self.shadow_radius_slider = ttk.Scale(
@@ -459,13 +464,10 @@ class BackgroundRemoverGUI:
                     orient="horizontal",
                 )
         self.shadow_radius_slider.set(10)
-        self.shadow_radius_slider.configure(command=lambda event: self.update_output_image_preview())
+        self.shadow_radius_slider.configure(command=lambda event: self.add_drop_shadow())
 
         # Initially hide the shadow options
         #self.toggle_shadow_options()
-
-
-
 
         self.Options.pack(fill="x", padx=2, pady=3, side="top")
         self.save_png = ttk.Button(self.Controls, name="save_png")
@@ -556,7 +558,7 @@ class BackgroundRemoverGUI:
             canvas.bind("<B1-Motion>", self.draw_box)
             canvas.bind("<ButtonRelease-1>", self.end_box)
             
-            canvas.bind("<Button-3>", self.generate_sam_overlay) # Negative point
+            canvas.bind("<Button-3>", self.generate_sam_mask) # Negative point
             canvas.bind("<Button-4>", self.zoom)  # Linux scroll up
             canvas.bind("<Button-5>", self.zoom)  # Linux scroll down
             canvas.bind("<MouseWheel>", self.zoom) #windows scroll
@@ -722,30 +724,41 @@ class BackgroundRemoverGUI:
 
         displayed_image, self.orig_image_crop = self._calculate_preview_image(self.original_image, resampling_filter)
         
-        self.canvas.delete("all")
-        self.tk_image = ImageTk.PhotoImage(displayed_image)
-        self.canvas.create_image(self.pad_x, self.pad_y, anchor=tk.NW, image=self.tk_image)
+        if displayed_image.mode == "RGBA":
+            image_preview_w, image_preview_h = displayed_image.size
+            
+            checkerboard = self.checkerboard.crop((0,0,image_preview_w, image_preview_h))
+            
+            displayed_image = Image.alpha_composite(checkerboard, displayed_image)
 
+        self.tk_image = ImageTk.PhotoImage(displayed_image)
+        
+        self.canvas.delete("all")
+        
+        self.canvas.create_image(self.pad_x, self.pad_y, anchor=tk.NW, image=self.tk_image)
         self.update_output_image_preview(resampling_filter=resampling_filter)
         
     @profile
     def update_output_image_preview(self, resampling_filter = Image.BOX):
 
-        preview = self.add_drop_shadow()
+        if self.show_mask_var.get()==False:
+            displayed_image = self.working_image
+        else:
+            displayed_image = self.working_mask.convert("RGBA")
 
-        preview, _ = self._calculate_preview_image(preview, resampling_filter)
+        displayed_image, _ = self._calculate_preview_image(displayed_image, resampling_filter)
         
         if not self.bg_color.get() == "Transparent":
-            preview = self.apply_background_color(preview, 
+            displayed_image = self.apply_background_color(displayed_image, 
                                                     self.bg_color.get())
         else:
-            image_preview_w, image_preview_h = preview.size
+            image_preview_w, image_preview_h = displayed_image.size
             
             checkerboard = self.checkerboard.crop((0,0,image_preview_w, image_preview_h))
             
-            preview = Image.alpha_composite(checkerboard, preview)
+            displayed_image = Image.alpha_composite(checkerboard, displayed_image)
        
-        self.outputpreviewtk = ImageTk.PhotoImage(preview)
+        self.outputpreviewtk = ImageTk.PhotoImage(displayed_image)
         self.canvas2.delete("all")
         self.canvas2.create_image(self.pad_x, self.pad_y, anchor=tk.NW, image=self.outputpreviewtk)
         
@@ -753,18 +766,18 @@ class BackgroundRemoverGUI:
         self.root.update_idletasks()
 
     def add_undo_step(self):
-        self.working_image_history.append(self.working_image.copy())
-        if len(self.working_image_history) > UNDO_STEPS:
-            self.working_image_history.pop(0)  # Keep only the last n states
+        self.undo_history_mask.append(self.working_mask.copy())
+        if len(self.undo_history_mask) > UNDO_STEPS:
+            self.undo_history_mask.pop(0)  # Keep only the last n states
     
     def clear_working_image(self):
 
         self.add_undo_step()
 
         self.canvas2.delete(self.outputpreviewtk)
-        self.working_image = Image.new(mode="RGBA",size=(self.original_image.width, self.original_image.height)) 
-        if hasattr(self, "cached_blurred_shadow"):
-            delattr(self,"cached_blurred_shadow")
+        self.working_image = Image.new(mode="RGBA",size=self.original_image.size) 
+        self.working_mask = Image.new(mode="L",size=self.original_image.size,color=0) 
+        if hasattr(self, "cached_blurred_shadow"): delattr(self,"cached_blurred_shadow")
         self.update_output_image_preview()
     
     def reset_all(self):
@@ -787,29 +800,33 @@ class BackgroundRemoverGUI:
             delattr(self, "encoder_output")
             
         self.canvas2.delete(self.outputpreviewtk)
-        self.working_image = Image.new(mode="RGBA",size=(self.original_image.width, self.original_image.height)) 
+        self.working_image = Image.new(mode="RGBA",size=self.original_image.size) 
+        self.working_mask = Image.new(mode="L",size=self.original_image.size,color=0) 
+
         self.update_input_image_preview()
         
     def undo(self):
         
-        if len(self.working_image_history) > 1:
-            self.working_image_history.pop()  # Remove the current state
-            self.working_image = self.working_image_history[-1].copy()  # Restore to the previous state
+        if len(self.undo_history_mask) > 1:
+            self.undo_history_mask.pop()  # Remove the current state
+            self.working_mask = self.undo_history_mask[-1].copy()  # Restore to the previous state
         
-        if hasattr(self, "cached_blurred_shadow"):
-            delattr(self,"cached_blurred_shadow")
-        
-        self.update_output_image_preview()
+        # this also calls cutout_working_image and update_output_preview
+        self.add_drop_shadow()
     
     def copy_entire_image(self):
         self.add_undo_step()
 
-        self.working_image=self.original_image.convert(mode="RGBA")
-        if hasattr(self, "cached_blurred_shadow"):
-            delattr(self,"cached_blurred_shadow")
-        self.update_output_image_preview()
+        self.working_mask = Image.new(mode="L",size=self.original_image.size, color=255) 
+        
+        # this also calls cutout_working_image and update_output_preview
+        self.add_drop_shadow()
     
- 
+    def cutout_working_image(self):
+        empty = Image.new("RGBA", self.original_image.size, 0)
+        self.working_image = Image.composite(self.original_image, empty, self.working_mask)
+
+    @profile
     def add_to_working_image(self):
 
         self.add_undo_step()
@@ -820,17 +837,42 @@ class BackgroundRemoverGUI:
         else:
             mask = self.model_output_mask
 
-        full_mask = self.apply_zoomed_mask_to_full_image(mask)
+        if mask == None: return
 
-        full_output = self.original_image.convert("RGBA")
-        full_output.putalpha(full_mask)
+        if self.ppm_var.get():
+            #Apply morphological operations to smooth edges
+            mask = mask.point(lambda p: p > 128 and 255)  # Binarize the mask
+            mask_array = np.array(mask)
+            #morphological opening. removes isolated noise and smoothes the boundaries
+            mask_array = binary_dilation(mask_array, iterations=1)
+            mask_array = binary_erosion(mask_array, iterations=1)
+            mask = Image.fromarray(mask_array.astype(np.uint8) * 255)
+            
         
-        self.working_image = Image.alpha_composite(self.working_image, full_output)
+        if self.soften_mask_var.get():
+            mask = mask.filter(ImageFilter.GaussianBlur(radius=SOFTEN_RADIUS))
 
-        if hasattr(self, "cached_blurred_shadow"):
-            delattr(self,"cached_blurred_shadow")
+        paste_box = (
+            int(self.view_x),
+            int(self.view_y),
+            int(self.view_x + self.orig_image_crop.width),
+            int(self.view_y + self.orig_image_crop.height)
+        )
 
-        self.update_output_image_preview()    
+        # Create a temporary mask that's the same size as working_mask
+        temp_fullsize_mask = Image.new("L", self.working_mask.size, 0)
+        temp_fullsize_mask.paste(mask, paste_box)
+
+        self.working_mask = ImageChops.add(self.working_mask, temp_fullsize_mask)
+
+        
+        # this function also cuts out the new working image and updates preview
+        # even if no shadow is being added
+        self.add_drop_shadow()
+
+            
+
+          
         
     def remove_from_working_image(self):
         
@@ -838,38 +880,51 @@ class BackgroundRemoverGUI:
         
         if self.paint_mode.get():
             mask = self.generate_paint_mode_mask()
-            
+
         else:
             mask = self.model_output_mask
 
-        full_mask = self.apply_zoomed_mask_to_full_image(mask)
+        if mask == None: return
+
+        if self.ppm_var.get():
+            #Apply morphological operations to smooth edges
+            mask = mask.point(lambda p: p > 128 and 255)  # Binarize the mask
+            mask_array = np.array(mask)
+            #morphological opening. removes isolated noise and smoothes the boundaries
+            mask_array = binary_dilation(mask_array, iterations=1)
+            mask_array = binary_erosion(mask_array, iterations=1)
+            mask = Image.fromarray(mask_array.astype(np.uint8) * 255)
+            
         
-        empty = Image.new("RGBA", self.original_image.size, 0)
-        self.working_image = Image.composite(self.working_image, empty, ImageOps.invert(full_mask))
+        if self.soften_mask_var.get():
+            mask = mask.filter(ImageFilter.GaussianBlur(radius=SOFTEN_RADIUS))
 
-        if hasattr(self, "cached_blurred_shadow"):
-            delattr(self,"cached_blurred_shadow")
-
-        self.update_output_image_preview()
-    
-    def clear_visible_area(self):
-        mask_old = self.model_output_mask.copy()
-        self.model_output_mask = Image.new("L", self.orig_image_crop.size, 255)
-        self.remove_from_working_image()
-        self.model_output_mask = mask_old
-    
-    def apply_zoomed_mask_to_full_image(self, zoomed_mask):
-        full_mask = Image.new('L', self.original_image.size, 0)
         paste_box = (
             int(self.view_x),
             int(self.view_y),
             int(self.view_x + self.orig_image_crop.width),
             int(self.view_y + self.orig_image_crop.height)
         )
-        
-        full_mask.paste(zoomed_mask, paste_box)
-        return full_mask
 
+        # Create a temporary mask that's the same size as working_mask
+        temp_fullsize_mask = Image.new("L", self.working_mask.size, 0)
+        temp_fullsize_mask.paste(mask, paste_box)
+
+        self.working_mask = ImageChops.subtract(self.working_mask, temp_fullsize_mask)
+
+        
+        # this function also cuts out the new working image and updates preview
+        # even if no shadow is being added
+        self.add_drop_shadow()
+    
+    def clear_visible_area(self):
+        self.add_undo_step()
+
+        mask_old = self.model_output_mask.copy()
+        self.model_output_mask = Image.new("L", self.orig_image_crop.size, 255)
+        self.remove_from_working_image()
+        self.model_output_mask = mask_old
+    
     def draw_dot(self, x, y,col):
 
         fill = "red" if col == 1 else "blue"
@@ -943,7 +998,7 @@ class BackgroundRemoverGUI:
             
             self.box_event(scaled_coords)
         else:
-            self.generate_sam_overlay(event)
+            self.generate_sam_mask(event)
     
     def box_event(self, scaled_coords):
         self._initialise_sam_model()
@@ -1054,7 +1109,7 @@ class BackgroundRemoverGUI:
         # input_image = np.expand_dims(input_image, axis=0)  # Add batch dimension
         
 
-        #taken from REMBG. seems to make a slightly less transparent mask
+        #taken from REMBG.
         input_image = image.convert("RGB").resize((target_size,target_size), Image.BICUBIC)
         
         mean = (0.485, 0.456, 0.406)
@@ -1103,28 +1158,11 @@ class BackgroundRemoverGUI:
             mask = mask.squeeze()  # Remove batch dimension
             mask = Image.fromarray((mask * 255).astype(np.uint8)).resize(image.size, Image.BICUBIC)
         
-
-        if self.ppm_var.get():
-            #Apply morphological operations to smooth edges
-            mask = mask.point(lambda p: p > 128 and 255)  # Binarize the mask
-            mask_array = np.array(mask)
-            #morphological opening. removes isolated noise and smoothes the boundaries
-            mask_array = binary_dilation(mask_array, iterations=1)
-            mask_array = binary_erosion(mask_array, iterations=1)
-            mask = Image.fromarray(mask_array.astype(np.uint8) * 255)
-        
-            # Apply Gaussian blur to further smooth the edges
-            #mask = mask.filter(ImageFilter.GaussianBlur(3))
-
-        
         mask = mask.convert("L")
         
         return mask
 
 
-    
-
-      
     def generate_coloured_overlay(self):
             
         self.overlay = ImageOps.colorize(self.orig_image_crop.convert("L"), black="blue", white="white") 
@@ -1154,8 +1192,6 @@ class BackgroundRemoverGUI:
             draw.line((x1, y1, x2, y2), fill='white', width=line_width)
             draw.ellipse((x1-ellipse_radius, y1-ellipse_radius, x1+ellipse_radius, y1+ellipse_radius), fill='white')
             draw.ellipse((x2-ellipse_radius, y2-ellipse_radius, x2+ellipse_radius, y2+ellipse_radius), fill='white')
-        if self.soften_var.get():
-            img = img.filter(ImageFilter.GaussianBlur(radius=1))
         
         return img
     
@@ -1165,26 +1201,20 @@ class BackgroundRemoverGUI:
             self.ManPaint.toggle()
         
         self.root.update()
-        
-        
+#        
         if self.paint_mode.get():
-
             self.clear_coord_overlay()
             
             for canvas in [self.canvas, self.canvas2]:
-                
                 canvas.config(cursor="circle")
 
                 canvas.bind("<ButtonPress-1>", self.paint_draw_point)
                 canvas.bind("<B1-Motion>", self.paint_draw_line)
                 canvas.bind("<ButtonRelease-1>", self.paint_reset_coords)
-            
         else:    
-#      
             self.clear_coord_overlay()
 
             for canvas in [self.canvas, self.canvas2]:
-                
                 canvas.config(cursor="")
                 
             self.set_keybindings()
@@ -1234,7 +1264,7 @@ class BackgroundRemoverGUI:
             if hasattr(self, "encoder_output"): delattr(self, "encoder_output")
         
 
-    def generate_sam_overlay(self, event):
+    def generate_sam_mask(self, event):
 
         self._initialise_sam_model()
     
@@ -1255,25 +1285,11 @@ class BackgroundRemoverGUI:
         # Repeated to ensure the dot stays on top
         self.draw_dot(event.x, event.y, event.num)
 
-    def sam_calculate_mask(self,
-        img,
-        sam_encoder,
-        sam_decoder,
-        coordinates,
-        labels,
-        ):
-        """
-        Predict masks for an input image.
-
-        Returns:
-            List[PILImage]: A list of masks generated by the decoder.
-        """
-       
+    def sam_calculate_mask(self, img, sam_encoder, sam_decoder, coordinates, labels,):
 
         target_size = 1024
         input_size = (684, 1024)
         encoder_input_name = sam_encoder.get_inputs()[0].name
-        
      
         img = img.convert("RGB")
         cv_image = np.array(img)
@@ -1299,15 +1315,13 @@ class BackgroundRemoverGUI:
         )
 
         ## encoder
-
         status=""
 
         if not hasattr(self, "encoder_output"):
             encoder_inputs = {
                 encoder_input_name: cv_image.astype(np.float32),
             }
-            
-            
+                     
             self.status_label.config(text="Calculating Image Embedding. May take a while", fg=STATUS_PROCESSING)
             canvas_text_id, rect_id = self.canvas_text_overlay(f"Calculating Image Embedding")
 
@@ -1363,14 +1377,11 @@ class BackgroundRemoverGUI:
         start=timer()
         masks, a, b = sam_decoder.run(None, decoder_inputs)
         
-        
-        
         status += f"{round(timer()-start,2)} seconds inference | "
         status += f"{round(float(a[0][0]),2)} confidence score"
 
         self.status_label.config(text=status)
 
-        
         inv_transform_matrix = np.linalg.inv(transform_matrix)
         masks = self.transform_masks(masks, original_size, inv_transform_matrix)
 
@@ -1379,17 +1390,6 @@ class BackgroundRemoverGUI:
             mask[m > 0.0] = [255, 255, 255]
 
         mask = Image.fromarray(mask).convert("L")
-
-        if self.soften_sam_var.get():
-            
-
-            mask_array = np.array(mask)
-            #morphological opening. removes isolated noise and smoothes the boundaries
-            mask_array = binary_dilation(mask_array, iterations=1)
-            mask_array = binary_erosion(mask_array, iterations=1)
-            mask = Image.fromarray(mask_array.astype(np.uint8) * 255)
-
-            mask = mask.filter(ImageFilter.GaussianBlur(radius=1))
 
         return mask
     
@@ -1421,8 +1421,6 @@ class BackgroundRemoverGUI:
 
         return coords
 
-
-
     def transform_masks(self, masks, original_size, transform_matrix):
         output_masks = []
 
@@ -1440,11 +1438,7 @@ class BackgroundRemoverGUI:
             output_masks.append(batch_masks)
 
         return np.array(output_masks)
-
-    
-    
-    
-    
+   
       
     def quick_save_jpeg(self):
 
@@ -1468,7 +1462,8 @@ class BackgroundRemoverGUI:
         
         print(user_filename)
 
-        workimg = self.add_drop_shadow()
+        self.add_drop_shadow()
+        workimg = self.working_image
         workimg = self.apply_background_color(workimg, "White")
         workimg = workimg.convert("RGB")
         if self.image_exif:
@@ -1567,10 +1562,15 @@ class BackgroundRemoverGUI:
         if not user_filename:
             return
 
+        canvas_text_id, rect_id = self.canvas_text_overlay("Saving Image")
+
         if not user_filename.lower().endswith(ext):
             user_filename += ext
         
-        workimg = self.add_drop_shadow()
+        # this also calls cutout_working_image and update_output_preview
+        self.add_drop_shadow()
+        workimg = self.working_image
+
         if not self.bg_color.get() == "Transparent":
             workimg = self.apply_background_color(workimg, self.bg_color.get())
 
@@ -1600,6 +1600,8 @@ class BackgroundRemoverGUI:
         except Exception as e:
             messagebox.showerror("Error", f"Failed to save image: {str(e)}")
 
+        self.canvas.delete(canvas_text_id)
+        self.canvas.delete(rect_id)
         self.canvas.update()
 
     
@@ -1620,7 +1622,6 @@ class BackgroundRemoverGUI:
         colored_image = Image.new("RGBA", img.size, color)
         
         colored_image = Image.alpha_composite(colored_image, img)
-        #colored_image.paste(img, mask=img)
 
         return colored_image
     
@@ -1641,18 +1642,14 @@ class BackgroundRemoverGUI:
     def load_clipboard(self):
         
         img = ImageGrab.grabclipboard()
-        
-        
+
         if "PIL." in str(type(img)):
             self.original_image = img
-            
             
             self.initialise_new_image()
             self.save_file = "clipboard_nobg.png"
             self.save_file_jpg = "clipboard_nobg.jpg"
             self.status_label.config(text=f"File will be saved to {self.save_file}")
-            
-            
         else:
             messagebox.showerror("Error", f"No image found on clipboard.\nClipboard contains {type(img)}")
         
@@ -1672,52 +1669,45 @@ class BackgroundRemoverGUI:
         
         self.initialise_new_image()
 
-    
-    @profile
     def add_drop_shadow(self):
         
         if not self.enable_shadow_var.get():
-            return self.working_image
+            self.cutout_working_image()
+            self.update_output_image_preview()  
+            return False
 
-        # Cache the shadow as it is quite computationally heavy
-        if not hasattr(self, "cached_blurred_shadow") or \
-                self.cached_shadow_params != (self.shadow_opacity_slider.get(),
-                                            int(self.shadow_radius_slider.get()),
-                                            int(self.shadow_x_slider.get()),
-                                            int(self.shadow_y_slider.get())):
-            shadow_opacity = self.shadow_opacity_slider.get()
-            shadow_radius = int(self.shadow_radius_slider.get())
-            shadow_x = int(self.shadow_x_slider.get())
-            shadow_y = int(self.shadow_y_slider.get())
+        shadow_opacity = self.shadow_opacity_slider.get()
+        shadow_radius = int(self.shadow_radius_slider.get())
+        shadow_x = int(self.shadow_x_slider.get())
+        shadow_y = int(self.shadow_y_slider.get())
 
-            alpha = self.working_image.getchannel('A')
+        alpha = self.working_mask
 
-            # Downsample for performance
-            original_size = alpha.size
-            downsample_factor = 0.5  
-            new_size = (int(original_size[0] * downsample_factor), int(original_size[1] * downsample_factor))
-            alpha_resized = alpha.resize(new_size, Image.NEAREST)
+        # Downsample for performance
+        original_size = alpha.size
+        downsample_factor = 0.5  
+        new_size = (int(original_size[0] * downsample_factor), int(original_size[1] * downsample_factor))
+        alpha_resized = alpha.resize(new_size, Image.NEAREST)
 
-            blurred_alpha_resized = alpha_resized.filter(ImageFilter.BoxBlur(radius=shadow_radius * downsample_factor))
+        blurred_alpha_resized = alpha_resized.filter(ImageFilter.BoxBlur(radius=shadow_radius * downsample_factor))
 
-            blurred_alpha = blurred_alpha_resized.resize(original_size, Image.NEAREST)
+        blurred_alpha = blurred_alpha_resized.resize(original_size, Image.NEAREST)
 
-            shadow_opacity_alpha = blurred_alpha.point(lambda p: int(p * shadow_opacity))
+        shadow_opacity_alpha = blurred_alpha.point(lambda p: int(p * shadow_opacity))
 
-            shadow_image = Image.new("RGBA", self.working_image.size, (0, 0, 0, 0))
-            shadow_image.putalpha(shadow_opacity_alpha)
+        shadow_image = Image.new("RGBA", self.working_image.size, (0, 0, 0, 0))
+        shadow_image.putalpha(shadow_opacity_alpha)
 
-            shadow_with_offset = Image.new("RGBA", self.working_image.size, (0, 0, 0, 0))
-            shadow_with_offset.paste(shadow_image, (shadow_x, shadow_y), shadow_image)
+        shadow_with_offset = Image.new("RGBA", self.working_image.size, (0, 0, 0, 0))
+        shadow_with_offset.paste(shadow_image, (shadow_x, shadow_y), shadow_image)
 
-            self.cached_blurred_shadow = shadow_with_offset
-            self.cached_shadow_params = (shadow_opacity, shadow_radius, shadow_x, shadow_y)
+        self.cutout_working_image()
 
-        composite = Image.alpha_composite(self.cached_blurred_shadow, self.working_image)
+        self.working_image = Image.alpha_composite(shadow_with_offset, self.working_image)
 
-        return composite
+        self.update_output_image_preview()
 
-
+        return True
 
     def toggle_shadow_options(self):
         if self.enable_shadow_var.get():
@@ -1741,11 +1731,10 @@ class BackgroundRemoverGUI:
             self.shadow_radius_label.pack_forget()
             self.shadow_radius_slider.pack_forget()
             self.shadow_options_frame.pack_forget()
-        self.update_output_image_preview()
+        self.add_drop_shadow()
         
     def initialise_new_image(self):
         
-
         self.canvas2.delete("all")
         
         self.setup_image_display()
