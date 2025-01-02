@@ -379,7 +379,7 @@ class BackgroundRemoverGUI:
         self.bg_color = ttk.Combobox(self.BgSel, name="bg_color")
         self.bg_color.configure(
             state="readonly",
-            values='Transparent White Black Red Blue Orange Yellow Green Grey Brown',
+            values='Transparent White Black Red Blue Orange Yellow Green Grey Brown Blurred_(Slow)',
             width=16)
         self.bg_color.pack(expand=False, side="right")
         self.BgSel.pack(fill="x", padx=2, pady=2, side="top")
@@ -497,8 +497,8 @@ class BackgroundRemoverGUI:
         self.main_frame.pack(expand=True, fill="both", side="top")
 
 
-        self.bg_color.bind("<<ComboboxSelected>>", lambda event: self.update_output_image_preview())
         self.bg_color.current(0)
+        self.bg_color.bind("<<ComboboxSelected>>", self.bg_color_select)
         self.sam_combo.current(0)
         self.whole_image_combo.current(0)
         self.whole_image_button.configure(command = lambda: self.run_whole_image_model(None))
@@ -550,8 +550,53 @@ class BackgroundRemoverGUI:
         print("Whole image models found: ", models)
         self.whole_image_combo.configure(values=models)
 
+    def bg_color_select(self, event=None):
+        if self.bg_color.get() == "Blurred_(Slow)":
+            self.show_blur_options()
+        else:
+            self.update_output_image_preview()
 
-        
+    def show_blur_options(self):
+        option_window = tk.Toplevel(self.root)
+        option_window.title("Blur Options")
+        option_window.geometry("300x100")
+        option_window.resizable(False, False)
+              
+        option_window.transient(self.root)
+
+        blur_radius = tk.IntVar(value=30)  # Default blur radius
+
+        tk.Label(option_window, text="Blur Radius:").pack(anchor="w", padx=10, pady=(10, 0))
+
+        blur_frame = ttk.Frame(option_window)
+        blur_frame.pack(fill="x", padx=10)
+
+        blur_slider = ttk.Scale(
+            blur_frame,
+            from_=1,
+            to=100,
+            orient=tk.HORIZONTAL,
+            variable=blur_radius,
+        )
+        blur_slider.pack(side="left", fill="x", expand=True)
+
+        blur_value_label = ttk.Label(blur_frame, text=str(blur_radius.get()), width=3)
+        blur_value_label.pack(side="left", padx=(5, 0))
+
+        def update_blur_value(event=None):
+            blur_value_label.config(text=str(blur_radius.get()))
+
+        blur_slider.configure(command=update_blur_value)
+
+        def on_ok():
+            self.blur_radius = blur_radius.get()
+            option_window.destroy()
+            self.update_output_image_preview()  # Update preview with new blur
+
+        tk.Button(option_window, text="OK", command=on_ok).pack(pady=10)
+        option_window.bind("<Return>", lambda event: on_ok())
+        option_window.wait_window()
+
     def set_keybindings(self):
 
         for canvas in [self.canvas, self.canvas2]:
@@ -747,18 +792,26 @@ class BackgroundRemoverGUI:
         else:
             displayed_image = self.working_mask.convert("RGBA")
 
-        displayed_image, _ = self._calculate_preview_image(displayed_image, resampling_filter)
-        
+        # apply background color to full sized image because of the blur background option.
+        # otherwise it would be more performant to generate the preview first then apply a solid backgorund colour
         if not self.bg_color.get() == "Transparent":
             displayed_image = self.apply_background_color(displayed_image, 
                                                     self.bg_color.get())
+            displayed_image, _ = self._calculate_preview_image(displayed_image, resampling_filter)
+
         else:
+            # calculate the smaller preview first before adding the checkerboard
+            displayed_image, _ = self._calculate_preview_image(displayed_image, resampling_filter)
+
+            
             image_preview_w, image_preview_h = displayed_image.size
             
             checkerboard = self.checkerboard.crop((0,0,image_preview_w, image_preview_h))
             
             displayed_image = Image.alpha_composite(checkerboard, displayed_image)
        
+
+
         self.outputpreviewtk = ImageTk.PhotoImage(displayed_image)
         self.canvas2.delete("all")
         self.canvas2.create_image(self.pad_x, self.pad_y, anchor=tk.NW, image=self.outputpreviewtk)
@@ -1617,12 +1670,38 @@ class BackgroundRemoverGUI:
             
         self.update_output_image_preview()
 
-
+    @profile
     def apply_background_color(self, img, color):
 
-        colored_image = Image.new("RGBA", img.size, color)
-        
-        colored_image = Image.alpha_composite(colored_image, img)
+        if color == "Blurred_(Slow)":
+            s=timer()
+            
+            cv_original = np.array(self.original_image)
+            cv_mask = np.array(self.working_mask)
+
+            # bg remover masks tend to be slightly smaller than object
+            # so we need to expand the mask first to catch the pixels outside of
+            # the cutout object, then inpaint using background pixels
+            kernel = np.ones((5,5), np.uint8)  
+            expanded_mask = cv2.dilate(cv_mask, kernel, iterations=1)  
+
+            # (3,3) kernel with 3 iterations: expands 3 pixels out, but more gradually
+            # (7,7) kernel with 1 iteration: expands 3 pixels out all at once, might be more blocky
+            # Both reach 3 pixels out, but the first approach gives smoother edges
+
+            filled_background = cv2.inpaint(cv_original, expanded_mask, 3, cv2.INPAINT_TELEA)
+
+            blur_radius = int(self.blur_radius)
+            if blur_radius % 2 == 0:
+                blur_radius += 1
+            blurred_background = cv2.blur(filled_background, (blur_radius, blur_radius))
+            
+            colored_image = Image.fromarray(blurred_background)
+            colored_image.paste(self.working_image, mask=self.working_mask)
+            print(f"{timer()-s} to calculate blurred background")
+        else:
+            colored_image = Image.new("RGBA", img.size, color)
+            colored_image = Image.alpha_composite(colored_image, img)
 
         return colored_image
     
