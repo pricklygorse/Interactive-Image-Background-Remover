@@ -67,7 +67,7 @@ class BackgroundRemoverGUI:
         self.lines_id = []
         self.lines_id2 = []
 
-        self.image_exif = None # set now so exists when loading clipboard images
+        
         
         if image_path:
             self.save_file = image_path[0:-4]+"_nobg.png"
@@ -84,6 +84,7 @@ class BackgroundRemoverGUI:
             self.original_image = Image.new("RGBA",(500,500),0)
             self.save_file = "image_nobg.png"
             self.save_file_jpg = "image_nobg.jpg"
+            self.image_exif = None # set now so exists when loading clipboard images
         
         self.save_file_type = "png"
         self.save_file_quality = 90
@@ -1658,6 +1659,8 @@ class BackgroundRemoverGUI:
             title="Select an Image",
             filetypes=pillow_formats
         )
+        if not image_path:
+            return
         self.original_image = Image.open(image_path)
         self.original_image = ImageOps.exif_transpose(self.original_image)
         try:
