@@ -14,7 +14,7 @@ jobs:
 
     strategy:
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest] # Define the operating systems
+        os: [ubuntu-latest] # [ubuntu-latest, windows-latest, macos-latest]
 
     steps:
       - name: Checkout code
@@ -23,7 +23,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
-          python-version: '3.9'  # Choose your desired Python version
+          python-version: '3.12.3'  # Choose your desired Python version
 
       - name: Install dependencies
         run: |
