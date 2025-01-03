@@ -1,0 +1,6 @@
+Pillow
+scipy
+numpy
+onnxruntime
+opencv-python
+screeninfo
