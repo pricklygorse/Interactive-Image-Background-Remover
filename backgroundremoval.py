@@ -61,14 +61,10 @@ class BackgroundRemoverGUI:
         self.last_x, self.last_y = 0, 0
         self.pan_step = 30
         
-
-        
         self.lines = []
         self.lines_id = []
         self.lines_id2 = []
 
-        
-        
         if image_path:
             self.save_file = image_path[0:-4]+"_nobg.png"
             self.save_file_jpg = image_path[0:-4]+"_nobg.jpg"
@@ -98,38 +94,36 @@ class BackgroundRemoverGUI:
         self.style = ttk.Style()
         self.style.configure("Processing.TButton", foreground="red")
 
+        # previously used monitor size to calculate canvas size
+        # but think i've fixed resizing now, so use dummy values
 
-
-        m = [m for m in get_monitors() if m.is_primary][0]
-        
-        self.canvas_w = (m.width -300) //2
-        self.canvas_h = m.height-100 
+        #m = [m for m in get_monitors() if m.is_primary][0]
+        self.canvas_w = 200 # (m.width -300) //2
+        self.canvas_h = 200 # m.height-100 
 
         # This is the default tkinter initalisation size
         # If the script notices these dimensions have changed, widgets have been added to the canvas
 
         self.init_width = 200
         self.init_height = 200
-
         
         self.setup_image_display()
-        
-        
+
         # Maximising the window doesn't work until after __init__ has run
         # (although full screen would work)
         # so use the resize event to maximise the interface, and allow user resizing the window
-        self.root.bind("<Configure>", self.on_resize)
 
         if platform.system() == "Windows":
             self.root.state('zoomed')
         elif platform.system() == "Darwin":
-            self.root.state('zoomed') #unsure if works
+            self.root.state('zoomed') # untested on mac
         else:
             self.root.attributes('-zoomed', True)
 
-        self.root.update_idletasks()
+        # self.root.update_idletasks()
         self.build_gui()
         self.update_input_image_preview()
+        self.root.bind("<Configure>", self.on_resize)
 
 
         self.model_output_mask = Image.new("L", (int(self.orig_image_crop.width), 
@@ -137,41 +131,46 @@ class BackgroundRemoverGUI:
 
         self.set_keybindings()
 
-
         self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
-        
+
 
     def on_resize(self, event):
-        # Check if window has changed dimensions as this function can get called
-        # multiple times for some reason, even just when clicking the canvas
+       
+        if event.widget==self.root:
+            if not self.root.winfo_height() == self.init_height or not self.root.winfo_width() == self.init_width:
+                # The currently displayed preview that is being used will change, so 
+                # a new encoding has to be calculated
+                if hasattr(self, "encoder_output"):
+                    delattr(self, "encoder_output")
+                self.init_width = self.root.winfo_width()
+                self.init_height = self.root.winfo_height()
+                print(f"Window dimensions {self.root.winfo_height()} {self.root.winfo_width()}")
 
-        #self.root.update_idletasks()
-        if not self.root.winfo_height() == self.init_height or not self.root.winfo_width() == self.init_width:
-            
-            # The currently displayed preview that is being used will change, so 
-            # a new encoding has to be calculated
-            if hasattr(self, "encoder_output"):
-                delattr(self, "encoder_output")
-            self.init_width = self.root.winfo_width()
-            self.init_height = self.root.winfo_height()
-            print("window resized")
+                # previously I was setting the canvas size based on window dimensions
+                # and i think this was causing a loop
+                # I think fixed it now, and can use the actual canvas dimensions that are set to auto expand
 
-            self.canvas_w = (self.init_width -300) //2
-            self.canvas_h = self.init_height - 40
-            self.canvas.config(width=self.canvas_w, height=self.canvas_h)
-            self.canvas2.config(width=self.canvas_w, height=self.canvas_h)
-            
-            # this is from setup_image_display but without clearing the working image
-            self.lowest_zoom_factor = min(self.canvas_w / self.original_image.width, self.canvas_h / self.original_image.height)
-            self.zoom_factor = self.lowest_zoom_factor
-            self.view_x = 0
-            self.view_y = 0
-            self.min_zoom=True
-            # make a checkerboard that is always larger than preview window
-            # because of rounding error
-            self.checkerboard = self.create_checkerboard(self.canvas_w * 2, self.canvas_h * 2, square_size = 10)
+                # self.canvas_w = (self.init_width -300) //2
+                # self.canvas_h = self.init_height - 40
+                # self.canvas.config(width=self.canvas_w, height=self.canvas_h)
+                # self.canvas2.config(width=self.canvas_w, height=self.canvas_h)
+                self.root.update()
+                self.canvas_w = self.canvas.winfo_width()
+                self.canvas_h = self.canvas.winfo_height()
 
-            self.update_input_image_preview(Image.BOX)
+                print(f"Input canvas size {self.canvas_w} x {self.canvas_h}")
+                print(f"Output canvas size {self.canvas2.winfo_width()} x {self.canvas2.winfo_height()}")
+                # this is from setup_image_display but without clearing the working image
+                self.lowest_zoom_factor = min(self.canvas_w / self.original_image.width, self.canvas_h / self.original_image.height)
+                self.zoom_factor = self.lowest_zoom_factor
+                self.view_x = 0
+                self.view_y = 0
+                self.min_zoom=True
+                # make a checkerboard that is always larger than preview window
+                # because both canvas might not be same size if the frame for both canvases doesnt divide by 2
+                self.checkerboard = self.create_checkerboard(self.canvas_w * 2, self.canvas_h * 2, square_size = 10)
+
+                self.update_input_image_preview(Image.BOX)
 
       
 
@@ -190,9 +189,9 @@ class BackgroundRemoverGUI:
         self.view_x = 0
         self.view_y = 0
         self.min_zoom=True
-      
+        
         # make a checkerboard that is always larger than preview window
-        # because of rounding error
+        # because both canvas might not be same size if the frame for both canvases doesnt divide by 2
         self.checkerboard = self.create_checkerboard(self.canvas_w * 2, self.canvas_h * 2, square_size = 10)
         
         
@@ -219,16 +218,16 @@ class BackgroundRemoverGUI:
 
     def build_gui(self):
         
-        self.root.minsize(width=800, height=600)  
+        self.root.minsize(width=1024, height=700)  
 
         # Generated by pybubu designer. 
         self.main_frame = tk.Frame(self.root, container=False, name="main_frame")
-        self.main_frame.configure(height=200, width=200)
+        #self.main_frame.configure(height=200, width=200)
 
         self.editor_frame = ttk.Frame(self.main_frame, name="editor_frame")
-        self.editor_frame.configure(height=200, width=200)
+        #self.editor_frame.configure(height=200, width=200)
         self.input_frame = tk.Frame(self.editor_frame, name="input_frame")
-        self.input_frame.configure(height=10, width=10)
+        #self.input_frame.configure(height=10, width=10)
         self.canvas_input_label = ttk.Label(
             self.input_frame, name="canvas_input_label")
         self.canvas_input_label.configure(text='Input')
@@ -240,7 +239,7 @@ class BackgroundRemoverGUI:
         separator_1.configure(orient="vertical")
         separator_1.pack(expand=False, fill="y", side="left")
         self.output_frame = tk.Frame(self.editor_frame, name="output_frame")
-        self.output_frame.configure(height=10, width=10)
+        #self.output_frame.configure(height=10, width=10)
         self.output = ttk.Label(self.output_frame, name="output")
         self.output.configure(text='Output')
         self.output.pack(padx=10, side="top")
@@ -483,7 +482,7 @@ class BackgroundRemoverGUI:
         self.HelpAbout.configure(text='Help / About')
         self.HelpAbout.pack(fill="x", padx=2, pady=3, side="bottom")
         self.HelpAbout.configure(command=self.show_help)
-        self.Controls.pack(expand=True, fill="both", side="right")
+        self.Controls.pack(fill="y", side="right")
         self.editor_frame.pack(expand=True, fill="both", side="top")
         self.messagerow = tk.Frame(self.main_frame, name="messagerow")
         self.messagerow.configure(background="#ffffff", height=30)
