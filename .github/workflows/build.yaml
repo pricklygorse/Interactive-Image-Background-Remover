@@ -43,6 +43,7 @@ jobs:
           pip install -r requirements.txt
 
       - name: Build executable
+        shell: bash
         run: |
           if [[ "$RUNNER_OS" == "Linux" ]]; then
             echo "Adding Tcl/Tk to LD_LIBRARY_PATH"
