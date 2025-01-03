@@ -112,6 +112,7 @@ class BackgroundRemoverGUI:
         # Maximising the window doesn't work until after __init__ has run
         # (although full screen would work)
         # so use the resize event to maximise the interface, and allow user resizing the window
+        self.root.bind("<Configure>", self.on_resize)
 
         if platform.system() == "Windows":
             self.root.state('zoomed')
@@ -121,15 +122,16 @@ class BackgroundRemoverGUI:
             self.root.attributes('-zoomed', True)
 
         # self.root.update_idletasks()
+        self.root.update_idletasks()
         self.build_gui()
         self.update_input_image_preview()
-        self.root.bind("<Configure>", self.on_resize)
 
 
         self.model_output_mask = Image.new("L", (int(self.orig_image_crop.width), 
                                             int(self.orig_image_crop.height)),0)
 
         self.set_keybindings()
+
 
         self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
 
@@ -189,7 +191,7 @@ class BackgroundRemoverGUI:
         self.view_x = 0
         self.view_y = 0
         self.min_zoom=True
-        
+
         # make a checkerboard that is always larger than preview window
         # because both canvas might not be same size if the frame for both canvases doesnt divide by 2
         self.checkerboard = self.create_checkerboard(self.canvas_w * 2, self.canvas_h * 2, square_size = 10)
