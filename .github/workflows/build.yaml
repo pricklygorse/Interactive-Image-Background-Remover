@@ -40,11 +40,11 @@ jobs:
         shell: bash
         run: |
           if [[ "$RUNNER_OS" == "Linux" ]]; then
-            mv dist/your_script dist/backgroundremoval
+            mv dist/backgroundremoval dist/backgroundremoval
           elif [[ "$RUNNER_OS" == "Windows" ]]; then
-            mv dist/your_script.exe dist/backgroundremoval-windows.exe
+            mv dist/backgroundremoval.exe dist/backgroundremoval-windows.exe
           elif [[ "$RUNNER_OS" == "macOS" ]]; then
-            mv dist/your_script dist/backgroundremoval-macos
+            mv dist/backgroundremoval dist/backgroundremoval-macos
           fi
 
       - name: Upload artifacts
