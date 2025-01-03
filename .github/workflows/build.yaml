@@ -2,19 +2,19 @@ name: Build Executables
 
 on:
   push:
-    branches:
-      - main  # Trigger the workflow on pushes to the main branch
-  pull_request:
-    branches:
-      - main  # Also trigger on pull requests to the main branch
+    tags:
+      - 'v*'
+permissions:
+  contents: write
 
 jobs:
   build:
     runs-on: ${{ matrix.os }} 
+    continue-on-error: true
 
     strategy:
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest] 
+        os: [ubuntu-latest, macos-latest, windows-latest] 
 
     steps:
       - name: Checkout code
@@ -23,7 +23,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
-          python-version: '3.12.3'  # Choose your desired Python version
+          python-version: '3.12.3'  
 
       - name: Install dependencies
         shell: bash
@@ -66,4 +66,68 @@ jobs:
         uses: actions/upload-artifact@v3
         with:
           name: ${{ matrix.os }}-executable
-          path: dist/*  # Upload the generated executable from the 'dist' folder
+          path: dist/*  
+
+  create-release:
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Download all workflow run artifacts
+        uses: actions/download-artifact@v3
+
+      - name: Create Release
+        id: create_release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ github.ref }}
+          release_name: Release ${{ github.ref }}
+          draft: false
+          prerelease: false
+
+      - name: Zip Ubuntu artifact
+        run: |
+          zip -r ubuntu-latest-executable.zip ./ubuntu-latest-executable*
+      - name: Upload Ubuntu zip to release
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: ./ubuntu-latest-executable.zip
+          asset_name: ubuntu-latest-executable.zip
+          asset_content_type: application/zip
+
+      - name: Zip Mac artifact
+        run: |
+          zip -r macos-latest-executable.zip ./macos-latest-executable*
+      - name: Upload Mac zip to release
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: ./macos-latest-executable.zip
+          asset_name: macos-latest-executable.zip
+          asset_content_type: application/zip
+
+      - name: Zip Windows artifact
+        run: |
+          zip -r windows-latest-executable.zip ./windows-latest-executable*
+      - name: Upload windows zip to release
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: ./windows-latest-executable.zip
+          asset_name: windows-latest-executable.zip
+          asset_content_type: application/zip
+
+      - name: List files # Debug step to see what was downloaded
+        run: find .
