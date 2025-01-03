@@ -4,7 +4,7 @@ A (work in progress) user interface for several background remover models, curre
 
 Tested on Linux and Windows, but not Mac
 
-You can use the python script or download executables from [https://github.com/pricklygorse/interactive-image-background-remover/actions?query=is%3Asuccess](https://github.com/pricklygorse/interactive-image-background-remover/actions?query=is%3Asuccess). Choose the most recent build, and scroll down to Artefacts
+You can use the python script or download binaries from the releases section. Linux and Windows builds have been tested, Mac has not.
 
 ![Screenshot of main window](Images/main_image.jpg)
 
