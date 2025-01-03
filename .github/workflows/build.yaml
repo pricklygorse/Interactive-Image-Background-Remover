@@ -10,11 +10,11 @@ on:
 
 jobs:
   build:
-    runs-on: ${{ matrix.os }} # This will run on each OS defined in the matrix
+    runs-on: ${{ matrix.os }} 
 
     strategy:
       matrix:
-        os: [ubuntu-latest] # [ubuntu-latest, windows-latest, macos-latest]
+        os: [ubuntu-latest, windows-latest, macos-latest] 
 
     steps:
       - name: Checkout code
@@ -27,8 +27,16 @@ jobs:
 
       - name: Install dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install -y tk-dev
+          if [[ "$RUNNER_OS" == "Linux" ]]; then
+            sudo apt-get update
+            sudo apt-get install -y tk-dev
+          elif [[ "$RUNNER_OS" == "macOS" ]]; then
+            brew update
+            brew install tcl-tk
+          elif [[ "$RUNNER_OS" == "Windows" ]]; then
+            # No need to install tcl-tk for windows in this case
+            echo "Skipping tcl-tk install on Windows"
+          fi
           python -m pip install --upgrade pip
           pip install pyinstaller
           pip install -r requirements.txt
@@ -39,7 +47,7 @@ jobs:
             echo "Adding Tcl/Tk to LD_LIBRARY_PATH"
             echo "LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu:$LD_LIBRARY_PATH" >> $GITHUB_ENV
           fi
-          pyinstaller --onefile --debug=all --collect-all PIL backgroundremoval.py  
+          pyinstaller --onefile --collect-all PIL backgroundremoval.py  
           
       - name: Rename executables 
         shell: bash
@@ -49,7 +57,7 @@ jobs:
           elif [[ "$RUNNER_OS" == "Windows" ]]; then
             mv dist/backgroundremoval.exe dist/backgroundremoval-windows.exe
           elif [[ "$RUNNER_OS" == "macOS" ]]; then
-            mv dist/backgroundremoval dist/backgroundremoval-macos
+            mv dist/backgroundremoval dist/backgroundremoval-UNTESTED-macos
           fi
 
       - name: Upload artifacts
