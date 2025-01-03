@@ -27,13 +27,19 @@ jobs:
 
       - name: Install dependencies
         run: |
+          sudo apt-get update
+          sudo apt-get install -y tk-dev
           python -m pip install --upgrade pip
           pip install pyinstaller
           pip install -r requirements.txt
 
       - name: Build executable
         run: |
-          pyinstaller --onefile backgroundremoval.py  
+          if [[ "$RUNNER_OS" == "Linux" ]]; then
+            echo "Adding Tcl/Tk to LD_LIBRARY_PATH"
+            echo "LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu:$LD_LIBRARY_PATH" >> $GITHUB_ENV
+          fi
+          pyinstaller --onefile --debug=all --collect-all backgroundremoval.py  
           
       - name: Rename executables 
         shell: bash

@@ -1,6 +1,6 @@
-Pillow
-scipy
-numpy
-onnxruntime
-opencv-python
-screeninfo
+Pillow==10.4.0
+scipy==1.11.3
+numpy==1.26.4
+onnxruntime==1.18.1
+opencv-python==4.10.0.84
+screeninfo==0.8.1
