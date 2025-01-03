@@ -121,17 +121,14 @@ class BackgroundRemoverGUI:
         else:
             self.root.attributes('-zoomed', True)
 
-        # self.root.update_idletasks()
         self.root.update_idletasks()
         self.build_gui()
         self.update_input_image_preview()
-
 
         self.model_output_mask = Image.new("L", (int(self.orig_image_crop.width), 
                                             int(self.orig_image_crop.height)),0)
 
         self.set_keybindings()
-
 
         self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
 

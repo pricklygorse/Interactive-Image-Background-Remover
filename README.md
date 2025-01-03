@@ -2,7 +2,9 @@
 
 A (work in progress) user interface for several background remover models, currently supporting onnx versions of u2net, disnet, rmbg, BiRefNet and interactive editing using Segment Anything (not V2 yet). Similar idea to Photoroom where you can just run the background remover model, or adjust the finer details by adding/removing points/areas/manual paintbrush.
 
-Only tested on Linux (Fedora) currently.
+Tested on Linux and Windows, but not Mac
+
+You can use the python script or download executables from [https://github.com/pricklygorse/interactive-image-background-remover/actions?query=is%3Asuccess](https://github.com/pricklygorse/interactive-image-background-remover/actions?query=is%3Asuccess). Choose the most recent build, and scroll down to Artefacts
 
 ![Screenshot of main window](Images/main_image.jpg)
 
