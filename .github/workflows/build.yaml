@@ -40,7 +40,7 @@ jobs:
         shell: bash
         run: |
           if [[ "$RUNNER_OS" == "Linux" ]]; then
-            mv dist/backgroundremoval dist/backgroundremoval
+            mv dist/backgroundremoval dist/backgroundremoval-linux
           elif [[ "$RUNNER_OS" == "Windows" ]]; then
             mv dist/backgroundremoval.exe dist/backgroundremoval-windows.exe
           elif [[ "$RUNNER_OS" == "macOS" ]]; then
