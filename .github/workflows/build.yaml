@@ -34,7 +34,7 @@ jobs:
         run: |
           pyinstaller --onefile backgroundremoval.py  
           ls -la  
-    	    ls -la dist
+          ls -la dist
           
       - name: Rename executables 
         shell: bash
