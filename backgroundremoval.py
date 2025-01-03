@@ -16,7 +16,7 @@ import cv2
 from copy import deepcopy
 import platform
 from screeninfo import get_monitors
-from line_profiler import profile
+#from line_profiler import profile
 
 DEFAULT_ZOOM_FACTOR = 1.2
 MODEL_ROOT = "./Models/"
@@ -765,7 +765,7 @@ class BackgroundRemoverGUI:
         displayed_image = image_to_display.resize((image_preview_w, image_preview_h), resampling_filter)
         return displayed_image, image_to_display
 
-    @profile
+    #@profile
     def update_input_image_preview(self, resampling_filter=Image.BOX):
 
         displayed_image, self.orig_image_crop = self._calculate_preview_image(self.original_image, resampling_filter)
@@ -784,7 +784,7 @@ class BackgroundRemoverGUI:
         self.canvas.create_image(self.pad_x, self.pad_y, anchor=tk.NW, image=self.tk_image)
         self.update_output_image_preview(resampling_filter=resampling_filter)
         
-    @profile
+    #@profile
     def update_output_image_preview(self, resampling_filter = Image.BOX):
 
         if self.show_mask_var.get()==False:
@@ -880,7 +880,7 @@ class BackgroundRemoverGUI:
         empty = Image.new("RGBA", self.original_image.size, 0)
         self.working_image = Image.composite(self.original_image, empty, self.working_mask)
 
-    @profile
+    #@profile
     def add_to_working_image(self):
 
         self.add_undo_step()
@@ -1670,7 +1670,7 @@ class BackgroundRemoverGUI:
             
         self.update_output_image_preview()
 
-    @profile
+    #@profile
     def apply_background_color(self, img, color):
 
         if color == "Blurred_(Slow)":
