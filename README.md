@@ -78,7 +78,12 @@ b : BiRefNet-general-bb_swin_v1_tiny-epoch_232
 
 Background removal models in onnx format can be downloaded from these locations:
 
+**Interactive Models**
 - Segment Anything + mobile-sam: [https://huggingface.co/vietanhdev/segment-anything-onnx-models/tree/main](https://huggingface.co/vietanhdev/segment-anything-onnx-models/tree/main)
+
+I recommend using mobile-sam as it has near instant inference results, and you can zoom into the image for higher resolution masks.
+
+**Whole Image Models**
 - rembg: [https://huggingface.co/briaai/RMBG-1.4/tree/main/onnx](https://huggingface.co/briaai/RMBG-1.4/tree/main/onnx)
 - u2net, disnet, BiRefNet, Segment Anything, and more: [https://github.com/danielgatis/rembg/releases/tag/v0.0.0](https://github.com/danielgatis/rembg/releases/tag/v0.0.0)
 
@@ -86,9 +91,7 @@ Place the models (or symlinks if located elsewhere) in the Models folder. The sc
 
 If using quantised Segment Anything models, these require the .quant suffix before .encoder in the filename, which is the opposite of how they are downloaded from the links above.
 
-I highly recommend starting with mobile-sam as it has almost instantaneous mask generation even on older cpu-only computers, then trying the larger segment anything models if you need a higher quality mask. Only using mobile-sam and just zooming in when I need more detail however has been very effective for me.
-
-The following models are hardcoded, simply add to this section if you want to include a different model.
+The following models are hardcoded, simply add to this section in the python script if you want to include a different model.
 
 ``` python
 # will also match quantised versions .quant

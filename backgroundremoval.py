@@ -516,6 +516,7 @@ class BackgroundRemoverGUI:
                 "isnet-general-use",
                 "isnet-anime",
                 "u2net",
+                "u2net_human_seg",
                 "BiRefNet", # all birefnet variations
         ]
 
