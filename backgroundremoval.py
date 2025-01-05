@@ -250,8 +250,10 @@ class BackgroundRemoverGUI:
         separator_3.pack(expand=False, fill="y", side="left")
         self.Controls = tk.Frame(self.editor_frame, name="controls")
         self.Controls.configure(height=500, width=300)
+        
         self.OpenImage = tk.Frame(self.Controls, name="openimage")
         self.OpenImage.configure(borderwidth=1, relief="groove")
+        
         self.openimageclipboard = ttk.Frame(
             self.OpenImage, name="openimageclipboard")
         self.openimageclipboard.configure(width=200)
@@ -259,15 +261,30 @@ class BackgroundRemoverGUI:
         self.OpnImg.configure(text='Open Image')
         self.OpnImg.pack(side="left")
         self.OpnImg.configure(command=self.load_image)
+        
         self.OpnClp = ttk.Button(self.openimageclipboard, name="opnclp")
         self.OpnClp.configure(text='Open Clipboard')
         self.OpnClp.pack(side="left")
         self.OpnClp.configure(command=self.load_clipboard)
         self.openimageclipboard.pack(side="top")
-        self.EditImage = ttk.Button(self.OpenImage, name="editimage")
+        
+        self.editimageloadmask = ttk.Frame(
+            self.OpenImage, name="editimageloadmask")
+        self.editimageloadmask.configure(width=200)
+        
+
+        self.EditImage = ttk.Button(self.editimageloadmask, name="editimage")
         self.EditImage.configure(text='Edit Image')
-        self.EditImage.pack(side="top")
+        self.EditImage.pack(side="left")
         self.EditImage.configure(command=self.edit_image)
+
+        self.LoadMask = ttk.Button(self.editimageloadmask, name="loadmask")
+        self.LoadMask.configure(text='Load Mask')
+        self.LoadMask.pack(expand=True, side="left")
+        self.LoadMask.configure(command=self.load_mask)
+
+        self.editimageloadmask.pack(side="top")
+
         self.OpenImage.pack(fill="x", padx=2, pady=3, side="top")
         self.ModelSelection = tk.Frame(self.Controls, name="modelselection")
         self.ModelSelection.configure(
@@ -1147,26 +1164,19 @@ class BackgroundRemoverGUI:
      
         
     def generate_whole_image_model_mask(self, image,  session, target_size=1024):
-        
-        def sigmoid(mat):
-            # For BiRefNet
-            return 1/(1+np.exp(-mat))   
-        # Preprocess
-        
-        # Resize and normalise the image
-        # Can't remember where I found this...
-        # input_image = image.resize((target_size, target_size), Image.BICUBIC)
-        # input_image = np.array(input_image).astype(np.float32)
-        # input_image = input_image / 255.0
-        # input_image = np.transpose(input_image, (2, 0, 1))  # Change data layout from HWC to CHW
-        # input_image = np.expand_dims(input_image, axis=0)  # Add batch dimension
-        
-
-        #taken from REMBG.
+        # adjusted from REMBG.
         input_image = image.convert("RGB").resize((target_size,target_size), Image.BICUBIC)
         
+
+        for i in ["isnet", "rmbg1_4"]:
+            if i in os.path.basename(session._model_path):
+                std = (1.0, 1.0, 1.0)
+                break
+            else:
+                # u2net, birefnet, rembg2
+                std = (0.229, 0.224, 0.225)
+
         mean = (0.485, 0.456, 0.406)
-        std = (1.0, 1.0, 1.0)
 
         im_ary = np.array(input_image)
         im_ary = im_ary / np.max(im_ary)
@@ -1191,7 +1201,10 @@ class BackgroundRemoverGUI:
         
         self.status_label.config(text=f"{round(timer()-start,2)} seconds inference", fg=STATUS_NORMAL)
         
-        if "BiRefNet" in session._model_path:
+        if "BiRefNet" in os.path.basename(session._model_path):
+            def sigmoid(mat):
+                # For BiRefNet
+                return 1/(1+np.exp(-mat))   
         
             pred = sigmoid(result[0][:, 0, :, :])
     
@@ -1533,6 +1546,7 @@ class BackgroundRemoverGUI:
         option_window.title("Save Options")
         option_window.geometry("300x280")  
         option_window.resizable(False, False)
+        option_window.transient(self.root)
         
         file_type = tk.StringVar(value=self.save_file_type)
         quality = tk.IntVar(value=self.save_file_quality)
@@ -1571,6 +1585,14 @@ class BackgroundRemoverGUI:
         
         quality_value_label = ttk.Label(quality_frame, text=str(quality.get()), width=3)
         quality_value_label.pack(side="left", padx=(5, 0))
+
+        save_mask_var = tk.BooleanVar(value=False)
+        save_mask_checkbox = tk.Checkbutton(option_window, text="Save Mask", variable=save_mask_var)
+        save_mask_checkbox.pack(anchor="w", padx=10, pady=(10, 0))
+
+         # Checkbox explanation label
+        mask_explanation_label = tk.Label(option_window, text="(appends _mask.png to filename)", font=("TkDefaultFont", 8))
+        mask_explanation_label.pack(anchor="w", padx=10)
         
         update_quality_state() 
         
@@ -1581,6 +1603,7 @@ class BackgroundRemoverGUI:
             result["quality"] = quality.get()
             self.save_file_type = file_type.get()
             self.save_file_quality = quality.get()
+            self.save_mask = save_mask_var.get()
             option_window.destroy()
         
         tk.Button(option_window, text="OK", command=on_ok).pack(pady=10)
@@ -1652,7 +1675,10 @@ class BackgroundRemoverGUI:
             self.status_label.config(text=f"Saved to {user_filename}", fg=STATUS_NORMAL)
         except Exception as e:
             messagebox.showerror("Error", f"Failed to save image: {str(e)}")
-
+        if self.save_mask:
+            mask_filename = user_filename.replace(ext, "_mask.png")
+            self.working_mask.save(mask_filename, "PNG")
+            print(f"Mask saved to {mask_filename}")
         self.canvas.delete(canvas_text_id)
         self.canvas.delete(rect_id)
         self.canvas.update()
@@ -1747,7 +1773,8 @@ class BackgroundRemoverGUI:
         except KeyError:
             self.image_exif = None
             print("No EXIF data found.")
-        
+        self.save_file = image_path[0:-4]+"_nobg.png"
+       
         self.initialise_new_image()
 
     def add_drop_shadow(self):
@@ -1822,6 +1849,39 @@ class BackgroundRemoverGUI:
         self.update_input_image_preview()
         self.clear_coord_overlay()
         self.reset_all()
+
+    def load_mask(self):
+        initial_file = os.path.splitext(os.path.basename(self.save_file))[0] + "_mask.png"
+        mask_path = askopenfilename(
+            title="Select a Mask",
+            filetypes=[("PNG files", "*.png")],
+            initialdir=os.path.dirname(self.save_file),
+            initialfile=initial_file
+        )
+        if not mask_path:
+            return
+
+        try:
+            mask_image = Image.open(mask_path)
+            if mask_image.mode != "L":
+                messagebox.showerror("Error", "The selected file is not a grayscale image.")
+                return
+
+            if mask_image.size != self.original_image.size:
+                messagebox.showerror("Error", "The mask dimensions do not match the original image dimensions.")
+                return
+
+            self.add_undo_step()
+            self.working_mask = mask_image
+            self.add_drop_shadow()
+
+            print(f"Mask loaded from {mask_path}")
+            self.status_label.config(text=f"Mask loaded from {mask_path}", fg=STATUS_NORMAL)
+
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to load mask: {str(e)}")
+
+        self.canvas.update()
         
     def show_help(self):
         message = """
