@@ -394,7 +394,7 @@ class BackgroundRemoverGUI:
         self.bg_color = ttk.Combobox(self.BgSel, name="bg_color")
         self.bg_color.configure(
             state="readonly",
-            values='Transparent White Black Red Blue Orange Yellow Green Grey Brown Blurred_(Slow)',
+            values='Transparent White Black Red Blue Orange Yellow Green Grey Lightgrey Brown Blurred_(Slow)',
             width=16)
         self.bg_color.pack(expand=False, side="right")
         self.BgSel.pack(fill="x", padx=2, pady=2, side="top")
