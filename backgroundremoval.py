@@ -842,17 +842,16 @@ class BackgroundRemoverGUI:
     
     def clear_working_image(self):
 
-        self.add_undo_step()
 
         self.canvas2.delete(self.outputpreviewtk)
         self.working_image = Image.new(mode="RGBA",size=self.original_image.size) 
         self.working_mask = Image.new(mode="L",size=self.original_image.size,color=0) 
+        self.add_undo_step()
         if hasattr(self, "cached_blurred_shadow"): delattr(self,"cached_blurred_shadow")
         self.update_output_image_preview()
     
     def reset_all(self):
         
-        self.add_undo_step()
         
         self.coordinates=[]
         self.labels=[]
@@ -872,6 +871,7 @@ class BackgroundRemoverGUI:
         self.canvas2.delete(self.outputpreviewtk)
         self.working_image = Image.new(mode="RGBA",size=self.original_image.size) 
         self.working_mask = Image.new(mode="L",size=self.original_image.size,color=0) 
+        self.add_undo_step()
 
         self.update_input_image_preview()
         
@@ -885,10 +885,10 @@ class BackgroundRemoverGUI:
         self.add_drop_shadow()
     
     def copy_entire_image(self):
-        self.add_undo_step()
 
         self.working_mask = Image.new(mode="L",size=self.original_image.size, color=255) 
         
+        self.add_undo_step()
         # this also calls cutout_working_image and update_output_preview
         self.add_drop_shadow()
     
@@ -899,7 +899,6 @@ class BackgroundRemoverGUI:
     #@profile
     def add_to_working_image(self):
 
-        self.add_undo_step()
         
         if self.paint_mode.get():
             mask = self.generate_paint_mode_mask()
@@ -935,6 +934,7 @@ class BackgroundRemoverGUI:
 
         self.working_mask = ImageChops.add(self.working_mask, temp_fullsize_mask)
 
+        self.add_undo_step()
         
         # this function also cuts out the new working image and updates preview
         # even if no shadow is being added
@@ -946,7 +946,6 @@ class BackgroundRemoverGUI:
         
     def remove_from_working_image(self):
         
-        self.add_undo_step()
         
         if self.paint_mode.get():
             mask = self.generate_paint_mode_mask()
@@ -982,13 +981,13 @@ class BackgroundRemoverGUI:
 
         self.working_mask = ImageChops.subtract(self.working_mask, temp_fullsize_mask)
 
+        self.add_undo_step()
         
         # this function also cuts out the new working image and updates preview
         # even if no shadow is being added
         self.add_drop_shadow()
     
     def clear_visible_area(self):
-        self.add_undo_step()
 
         mask_old = self.model_output_mask.copy()
         self.model_output_mask = Image.new("L", self.orig_image_crop.size, 255)
@@ -1871,8 +1870,8 @@ class BackgroundRemoverGUI:
                 messagebox.showerror("Error", "The mask dimensions do not match the original image dimensions.")
                 return
 
-            self.add_undo_step()
             self.working_mask = mask_image
+            self.add_undo_step()
             self.add_drop_shadow()
 
             print(f"Mask loaded from {mask_path}")
