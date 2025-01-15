@@ -1,100 +1,60 @@
 # Interactive Image Background Remover
 
-A (work in progress) user interface for several background remover models, currently supporting onnx versions of u2net, disnet, rmbg, BiRefNet and interactive editing using Segment Anything (not V2 yet). Similar idea to Photoroom where you can just run the background remover model, or adjust the finer details by adding/removing points/areas/manual paintbrush.
+Interactive Background Remover is a user-friendly tool designed to remove backgrounds from images using a combination of interactive models (Segment Anything) and whole-image models (such as u2net, disnet, rmbg, and BiRefNet). This application provides a graphical interface where users can load an image, apply various models, and fine-tune the results to achieve precise background removal. Similar idea to the Photoroom app where you can refine your background removal, instead of just using the model outputs as-is
 
-Tested on Linux and Windows, but not Mac
+## Features
 
-You can use the python script or download binaries from the releases section. Linux and Windows builds have been tested, Mac has not.
+- **Interactive Model Support**: Utilize Segment Anything for detailed object selection by clicking or drawing boxes on the image.
+- **Whole-Image Model Support**: Apply models like u2net, disnet, rmbg, and BiRefNet for quick background removal across the entire image, which can be further refined.
+- **Zoom and Pan**: Zoom in on specific parts of the image and pan around for detailed editing. The models are only run on the viewed area so you can incrementally build up an image from higher resolution patches.
+- **Manual Paintbrush Mode**: Manually refine the background removal with a paintbrush tool for areas not covered by the models.
+- **Mask Refinement**: Smooth edges, filter anomalous areas and soften the mask for a natural look. You can directly edit the mask for high fidelity background removal.
+- **Drop Shadow**: Basic drop shadow effect for the cutout object.
+- **Background Options**: Choose from various background colors or apply a blurred background effect.
+- **Image Editing**: Includes a built-in image editor and cropper to preprocess images before background removal.
+- **Undo/Redo**
+- **Save Options**: Save the processed image in various formats (PNG, JPEG, WebP) with customizable quality settings.
+- **Clipboard Support**: Load images directly from the clipboard for quick editing.
+- **Windows, Linux and Mac Builds**: In the Github releases. Mac is currently untested, please let me know
 
 ![Screenshot of main window](Images/main_image.jpg)
 
-Load your image, and either run one of the whole image models (u2net, disnet, rmbg, BiRefNet) or click/draw a box to run Segment Anything. Left click is a positive point, right is a negative (avoid this area) point.
+## Installation
 
-The original image is displayed on the left, the current image you are working on is displayed to the right.
+### Prerequisites
 
-Press A to add the current mask to your image, Z to remove.
+- Python 3.x
+- Required Python packages: `tkinter`, `Pillow`, `scipy`, `numpy`, `onnxruntime`, `opencv-python`, `screeninfo`
 
-Scroll wheel to zoom, and middle click to pan around the image. The models will be applied only to the visible zoomed image, which enables much higher detail and working in finer detail than just running the models on the whole image
+```bash
+pip install tkinter Pillow scipy numpy onnxruntime opencv-python screeninfo
+```
 
-Use manual paintbrush mode to draw areas that you want to add/remove to the image without using a model.
-
-Post process mask removes the partial transparency from outputs of whole-image models. 
-
-Includes a built-in image editor and cropper. Loading this will reset your current working image. 
-
-![Screenshot of main window](Images/image_editor.jpg)
-
-Running the script from the command line with multiple images specified will load the images one after another for assisted batch usage.
-
-# Usage
-
-## Running
-
-`pip install` any missing packages or set up a new python environment, copy the background removal models you want to use into the Models folder (see model links below) then run `python backgroundremoval.py`. Any images supplied as arguments will be opened sequentially so you can work on the images in a batch, or it will open a file picker dialog to open a file if no arguements provided.
-
-## Mouse
-
-Left Mouse click: Add coordinate point for segment anything models
-
-Right Mouse click: Add negative coordinate (area for the model to avoid)
-
-Left click and drag: Draw box for segment anything models
-
-## Hotkeys:
-
-a : Add current mask to working image
-
-z : Remove current mask from working image
-
-q: Undo last action
-
-p : Manual paintbrush mode
-
-c : Clear current mask (and coordinate points)
-
-w : Reset the current working image
-
-r : Reset everything (image, masks, coordinates)
-
-v : Clear the visible area on the working image
-
-s : Save image as....
-
-j : Quick save JPG with white background
-
-_Run whole-image models (if downloaded to Models folder)_
-
-u : u2net
-
-i : disnet
-
-o : rmbg
-
-b : BiRefNet-general-bb_swin_v1_tiny-epoch_232
+Or download prebuilt executables for Windows, Linux and Mac from the [Github releases](https://github.com/pricklygorse/Interactive-Image-Background-Remover/releases) 
 
 
+## Model Downloads
 
-# Models
-
-Background removal models in onnx format can be downloaded from these locations:
+This application requires pre-trained background removal/segmentation models in onnx format to function correctly. Please download the necessary models and place them in the Models/ directory. The script checks for models at each start up. 
 
 **Interactive Models**
 - Segment Anything + mobile-sam: [https://huggingface.co/vietanhdev/segment-anything-onnx-models/tree/main](https://huggingface.co/vietanhdev/segment-anything-onnx-models/tree/main)
 
-I recommend using mobile-sam as it has near instant inference results, and you can zoom into the image for higher resolution masks.
+I recommend just using mobile-sam as it has near instant inference results, and you can zoom into the image for higher resolution masks. I haven't found much benefit to using the larger models.
+
+If using quantised Segment Anything models, these require the .quant suffix before .encoder in the filename, which is the opposite of how they are named when downloaded from the links above.
 
 **Whole Image Models**
 - rembg: [https://huggingface.co/briaai/RMBG-1.4/tree/main/onnx](https://huggingface.co/briaai/RMBG-1.4/tree/main/onnx)
+
+   - Please rename model.onnx to rmbg1_4.onnx
+
 - u2net, disnet, BiRefNet, Segment Anything, and more: [https://github.com/danielgatis/rembg/releases/tag/v0.0.0](https://github.com/danielgatis/rembg/releases/tag/v0.0.0)
+- rmbg2: [https://huggingface.co/briaai/RMBG-2.0/tree/main/onnx](https://huggingface.co/briaai/RMBG-2.0/tree/main/onnx)
+   - Please rename model.onnx to rmbg2.onnx, or the quantised versions to rmbg2_q4.onnx etc
 
-Place the models (or symlinks if located elsewhere) in the Models folder. The script checks for models at each start up. 
-
-If using quantised Segment Anything models, these require the .quant suffix before .encoder in the filename, which is the opposite of how they are downloaded from the links above.
-
-The following models are hardcoded, simply add to this section in the python script if you want to include a different model.
-
-``` python
-# will also match quantised versions .quant
+```python
+# partial string match so will also match quantised versions e.g. rmbg2_quant_q4
 sam_models = [
             "mobile_sam",
             "sam_vit_b_01ec64", 
@@ -104,15 +64,88 @@ sam_models = [
 
 whole_models = [
         "rmbg1_4",
-        "rmbg1_4-quant",
+        "rmbg2",
         "isnet-general-use",
         "isnet-anime",
         "u2net",
+        "u2net_human_seg",
         "BiRefNet", # matches all birefnet variations
 ]
 ```
 
+## Usage
 
+### Launching the Application
+
+Run the rebuilt executables: [Github releases](https://github.com/pricklygorse/Interactive-Image-Background-Remover/releases) 
+
+Run the script from the command line:
+
+```bash
+python interactive_background_remover.py
+```
+
+You can also provide image file paths as command-line arguments to load them directly:
+
+```bash
+python interactive_background_remover.py image1.jpg image2.png
+```
+
+
+### Interface Overview
+
+- **Input Canvas**: Displays the original image.
+- **Output Canvas**: Displays the processed image with the background removed.
+- **Controls Panel**: Contains various tools and options for interacting with the image and models.
+
+### Basic Workflow
+
+1. **Load Image**: Click "Open Image" to load an image file or "Open Clipboard" to use an image from the clipboard.
+2. **Select Model**: Choose a model from the "Model Selection" section.
+3. **Zoom and Pan**: Use the full image or zoom into region of interest (arrow keys or middle mouse to pan, mouse scroll to zoom)
+4. **Generate Background Removal Mask**:
+   - **Interactively: Segment Anything**: Left-click to add a positive point, right-click to add a negative (exclusion) point, or drag to draw a box around the object.
+   - **Whole-Image Models**: Click "Run whole-image model" to apply the selected model to the entire image (or zoomed area).
+5. **Refine Background Removal Mask**:
+   - Use the "Add mask" and "Remove mask" buttons to add the model output to the background removal mask.
+   - Toggle "Manual Paintbrush" mode to manually edit the mask.
+   - Check "Post Process Model Mask" (binarise the mask and smooth edges) and "Soften Model Mask/Paintbrush" to adjust the model output
+   - Use Show Full Mask to edit the mask directly instead of the output image
+6. **Adjust Background**: Select a background color or enable the "Blurred" option for a blurred background.
+7. **Save Image**: Click "Save Image As...." to save the processed image.
+
+
+
+### Hotkeys
+
+- `a`: Add current mask to the output image.
+- `z`: Remove current mask from the output image.
+- `q`: Undo the last action.
+- `p`: Toggle manual paintbrush mode.
+- `c`: Clear current mask and coordinate points.
+- `w`: Reset the current working image.
+- `r`: Reset everything (image, masks, coordinates).
+- `v`: Clear the visible area on the working image.
+- `s`: Save as....
+- `j`: Quick save JPEG with a white background.
+- `u`: Run u2net model.
+- `i`: Run disnet model.
+- `o`: Run rmbg1.4 model.
+- `b`: Run BiRefNet model.
+- `Left`, `Right`, `Up`, `Down`: Pan the image.
+
+
+### Image Editing
+
+Click "Edit Image" to open the built-in image editor, where you can crop, rotate, and adjust various image parameters like brightness, contrast, saturation, and white balance.
+
+![Screenshot of main window](Images/image_editor.jpg)
+
+
+## Troubleshooting
+
+- **No models found**: Ensure that the required models are downloaded and placed in the `Models/` directory.
+- **Performance issues**: Zooming out can be laggy, especially with multiple scroll wheel clicks and multiple effects applied such as blurred background and drop shadow.
 
 # Support Me
 

@@ -518,7 +518,7 @@ class BackgroundRemoverGUI:
         self.whole_image_combo.current(0)
         self.whole_image_button.configure(command = lambda: self.run_whole_image_model(None))
 
-        # will also match quantised versions .quant
+        # partial string match so will also match quantised versions e.g. rmbg2_quant_q4
         sam_models = [
             "mobile_sam",
             "sam_vit_b_01ec64",
@@ -528,8 +528,7 @@ class BackgroundRemoverGUI:
 
         whole_models = [
                 "rmbg1_4",
-                "rmbg1_4-quant",
-                "rmbg2_q8",
+                "rmbg2",
                 "isnet-general-use",
                 "isnet-anime",
                 "u2net",
