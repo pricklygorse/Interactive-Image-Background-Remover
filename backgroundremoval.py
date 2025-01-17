@@ -1795,11 +1795,11 @@ class BackgroundRemoverGUI:
         new_size = (int(original_size[0] * downsample_factor), int(original_size[1] * downsample_factor))
         alpha_resized = alpha.resize(new_size, Image.NEAREST)
 
-        blurred_alpha_resized = alpha_resized.filter(ImageFilter.BoxBlur(radius=shadow_radius * downsample_factor))
+        blurred_alpha_resized = alpha_resized.filter(ImageFilter.GaussianBlur(radius=shadow_radius * downsample_factor))
 
         blurred_alpha = blurred_alpha_resized.resize(original_size, Image.NEAREST)
 
-        shadow_opacity_alpha = blurred_alpha.point(lambda p: int(p * shadow_opacity))
+        shadow_opacity_alpha = blurred_alpha.point(lambda p: int(p * shadow_opacity *((shadow_radius/10)+1))) # multiply by 2 to darken more when blur radius is high
 
         shadow_image = Image.new("RGBA", self.working_image.size, (0, 0, 0, 0))
         shadow_image.putalpha(shadow_opacity_alpha)
