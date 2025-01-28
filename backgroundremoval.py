@@ -792,7 +792,8 @@ class BackgroundRemoverGUI:
             
             displayed_image = Image.alpha_composite(checkerboard, displayed_image)
 
-        self.tk_image = ImageTk.PhotoImage(displayed_image)
+        self.input_displayed = displayed_image
+        self.tk_image = ImageTk.PhotoImage(self.input_displayed)
         
         self.canvas.delete("all")
         
@@ -826,8 +827,8 @@ class BackgroundRemoverGUI:
             displayed_image = Image.alpha_composite(checkerboard, displayed_image)
        
 
-
-        self.outputpreviewtk = ImageTk.PhotoImage(displayed_image)
+        self.output_displayed = displayed_image
+        self.outputpreviewtk = ImageTk.PhotoImage(self.output_displayed)
         self.canvas2.delete("all")
         self.canvas2.create_image(self.pad_x, self.pad_y, anchor=tk.NW, image=self.outputpreviewtk)
         
@@ -837,7 +838,7 @@ class BackgroundRemoverGUI:
     def add_undo_step(self):
         self.undo_history_mask.append(self.working_mask.copy())
         if len(self.undo_history_mask) > UNDO_STEPS:
-            self.undo_history_mask.pop(0)  # Keep only the last n states
+            self.undo_history_mask.pop(0)  
     
     def clear_working_image(self):
 
@@ -877,8 +878,8 @@ class BackgroundRemoverGUI:
     def undo(self):
         
         if len(self.undo_history_mask) > 1:
-            self.undo_history_mask.pop()  # Remove the current state
-            self.working_mask = self.undo_history_mask[-1].copy()  # Restore to the previous state
+            self.undo_history_mask.pop() 
+            self.working_mask = self.undo_history_mask[-1].copy()  
         
         # this also calls cutout_working_image and update_output_preview
         self.add_drop_shadow()
