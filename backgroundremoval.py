@@ -1174,8 +1174,11 @@ class BackgroundRemoverGUI:
             else:
                 # u2net, birefnet, rembg2
                 std = (0.229, 0.224, 0.225)
-
-        mean = (0.485, 0.456, 0.406)
+        
+        if "isnet" in os.path.basename(session._model_path):
+            mean = (0.5,0.5,0.5)
+        else:    
+            mean = (0.485, 0.456, 0.406)
 
         im_ary = np.array(input_image)
         im_ary = im_ary / np.max(im_ary)
