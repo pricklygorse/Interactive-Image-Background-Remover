@@ -19,7 +19,8 @@ from screeninfo import get_monitors
 #from line_profiler import profile
 
 DEFAULT_ZOOM_FACTOR = 1.2
-MODEL_ROOT = "./Models/"
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+MODEL_ROOT = os.path.join(SCRIPT_DIR, "Models/")
 STATUS_PROCESSING = "#f00"
 STATUS_NORMAL = "#000000"
 PAINT_BRUSH_DIAMETER = 18
