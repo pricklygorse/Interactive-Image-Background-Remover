@@ -1104,6 +1104,10 @@ class BackgroundRemoverGUI:
     
     
     def run_whole_image_model(self, model_name, target_size=1024):
+        
+        if self.paint_mode.get():
+            return
+        
         if model_name == None:
             model_name = self.whole_image_combo.get()
             target_size = 320 if model_name == "u2net" else 1024
@@ -1841,7 +1845,7 @@ class BackgroundRemoverGUI:
         """Loads the next image from the command-line argument list."""
         if not self.image_paths or self.current_image_index >= len(self.image_paths) - 1:
             print("No more images in the list.")
-            self.NextImg.configure(state=tk.DISABLED) # Ensure it's disabled
+            self.NextImg.configure(state=tk.DISABLED) 
             return
 
         self.current_image_index += 1
@@ -1850,24 +1854,17 @@ class BackgroundRemoverGUI:
         print(f"Loading next image: {next_image_path}")
 
         try:
-            # Load the new image
             new_image = Image.open(next_image_path)
             self.original_image = ImageOps.exif_transpose(new_image)
-
-            # Update save filenames and EXIF
-            # self.update_save_filenames(next_image_path)
             
             self.image_exif = self.original_image.info.get('exif')
             print("EXIF data found" if self.image_exif else "No EXIF data found.")
 
-            # Reset display and working data for the new image
             self.initialise_new_image()
 
-            # Update window title
             self.file_count = f' - Image {self.current_image_index + 1} of {len(self.image_paths)}'
             self.root.title("Background Remover" + self.file_count)
 
-            # Disable button if this is now the last image
             if self.current_image_index >= len(self.image_paths) - 1:
                 self.NextImg.configure(state=tk.DISABLED)
 
@@ -1875,9 +1872,7 @@ class BackgroundRemoverGUI:
 
         except Exception as e:
             messagebox.showerror("Error Loading Image", f"Could not load image:\n{next_image_path}\n\nError: {e}")
-            # Decide what to do here: Stop? Try to skip? For now, just show error.
-            # You might want to automatically call load_next_image again to skip it,
-            # or disable the button.
+
             self.status_label.config(text=f"Error loading {next_image_path}", fg=STATUS_PROCESSING)
 
 
@@ -2379,7 +2374,7 @@ class ImageEditor:
 if __name__ == "__main__":
 
 
-    files_to_process = sys.argv[1:] # Get all arguments after the script name
+    files_to_process = sys.argv[1:] 
 
     if not files_to_process:
         print("No image arguments provided. Opening file dialog...")
