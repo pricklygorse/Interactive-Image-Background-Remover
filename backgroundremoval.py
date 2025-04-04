@@ -25,6 +25,7 @@ STATUS_NORMAL = "#000000"
 PAINT_BRUSH_DIAMETER = 18
 UNDO_STEPS=20
 SOFTEN_RADIUS=1
+MIN_RECT_SIZE = 5
 
 pillow_formats = [
             ("All Image Files", "*.bmp *.gif *.jpg *.jpeg *.JPG *.JPEG *.png *.PNG *.tif *.tiff *.webp"),
@@ -39,21 +40,28 @@ pillow_formats = [
 
 
 class BackgroundRemoverGUI:
-    def __init__(self, root, image_path, file_count=""):
+    def __init__(self, root, image_paths):
         
         self.root = root
-        self.root.title("Background Remover"+file_count)
 
-        self.file_count  = file_count
+
+
+        self.image_paths = image_paths if image_paths else []
+        self.current_image_index = 0
+        
+        self.file_count = ""
+        if len(self.image_paths) > 1:
+            self.file_count = f' - Image {self.current_image_index + 1} of {len(self.image_paths)}'
+        elif len(self.image_paths) == 1:
+            self.file_count = f' - Image 1 of 1'
+
+        self.root.title("Background Remover" + self.file_count)
         
         self.coordinates = []
         self.labels=[]
         self.bgcolor = None
         self.dots=[]
         
-        # For segment anything models, to stop the user accidently drawing a tiny rectangle
-        # instead of clicking to make a point
-        self.min_rect_size = 5
         
         self.panning = False
         self.pan_start_x = 0
@@ -65,21 +73,18 @@ class BackgroundRemoverGUI:
         self.lines_id = []
         self.lines_id2 = []
 
-        if image_path:
-            self.save_file = image_path[0:-4]+"_nobg.png"
-            self.save_file_jpg = image_path[0:-4]+"_nobg.jpg"
+        if self.image_paths:
+            image_path = self.image_paths[self.current_image_index]
+            print(image_path)
+
             self.original_image = Image.open(image_path)
             self.original_image = ImageOps.exif_transpose(self.original_image)
-            try:
-                self.image_exif = self.original_image.info['exif']
-                print("EXIF data found")
-            except KeyError:
-                self.image_exif = None
-                print("No EXIF data found.")
+            self.image_exif = self.original_image.info.get('exif')
+            print("EXIF data found" if self.image_exif else "No EXIF data found.")
         else:
+            # default blank image
             self.original_image = Image.new("RGBA",(500,500),0)
-            self.save_file = "image_nobg.png"
-            self.save_file_jpg = "image_nobg.jpg"
+
             self.image_exif = None # set now so exists when loading clipboard images
         
         self.save_file_type = "png"
@@ -254,19 +259,28 @@ class BackgroundRemoverGUI:
         self.OpenImage = tk.Frame(self.Controls, name="openimage")
         self.OpenImage.configure(borderwidth=1, relief="groove")
         
-        self.openimageclipboard = ttk.Frame(
-            self.OpenImage, name="openimageclipboard")
-        self.openimageclipboard.configure(width=200)
-        self.OpnImg = ttk.Button(self.openimageclipboard, name="opnimg")
+        self.open_nav_frame = ttk.Frame(self.OpenImage, name="open_nav_frame")
+
+        self.OpnImg = ttk.Button(self.open_nav_frame, name="opnimg")
         self.OpnImg.configure(text='Open Image')
-        self.OpnImg.pack(side="left")
-        self.OpnImg.configure(command=self.load_image)
-        
-        self.OpnClp = ttk.Button(self.openimageclipboard, name="opnclp")
+        self.OpnImg.pack(side="left", padx=1)
+        self.OpnImg.configure(command=self.load_image_from_dialog) 
+
+        self.OpnClp = ttk.Button(self.open_nav_frame, name="opnclp")
         self.OpnClp.configure(text='Open Clipboard')
-        self.OpnClp.pack(side="left")
+        self.OpnClp.pack(side="left", padx=1)
         self.OpnClp.configure(command=self.load_clipboard)
-        self.openimageclipboard.pack(side="top")
+
+        # --- Add Next Image Button ---
+        self.NextImg = ttk.Button(self.open_nav_frame, name="nextimg")
+        self.NextImg.configure(text='Next Image >')
+        self.NextImg.pack(side="left", padx=1)
+        self.NextImg.configure(command=self.load_next_image)
+        # Disable initially if less than 2 images were passed
+        if len(self.image_paths) <= 1:
+            self.NextImg.configure(state=tk.DISABLED)
+
+        self.open_nav_frame.pack(side="top")
         
         self.editimageloadmask = ttk.Frame(
             self.OpenImage, name="editimageloadmask")
@@ -1041,7 +1055,7 @@ class BackgroundRemoverGUI:
         if self.box_rectangle2:
             self.canvas2.delete(self.box_rectangle2)
           
-        if dx < self.min_rect_size and dy < self.min_rect_size:
+        if dx < MIN_RECT_SIZE and dy < MIN_RECT_SIZE:
             # Even though deleted from canvas it still needs setting to None
             self.box_rectangle = None
             return  
@@ -1512,6 +1526,8 @@ class BackgroundRemoverGUI:
 
         self.status_label.config(text="", fg=STATUS_NORMAL)
 
+        file_path = self.image_paths[self.current_image_index]
+
         dir_path = os.path.dirname(file_path)
         file_name = os.path.basename(file_path)
 
@@ -1535,9 +1551,9 @@ class BackgroundRemoverGUI:
         workimg = self.apply_background_color(workimg, "White")
         workimg = workimg.convert("RGB")
         if self.image_exif:
-            workimg.save(user_filename, quality=90, exif=self.image_exif)
+            workimg.save(user_filename, quality=95, exif=self.image_exif)
         else:
-            workimg.save(user_filename, quality=90)
+            workimg.save(user_filename, quality=95)
         print("Saved to "+ user_filename)
         self.status_label.config(text="Saved to "+ user_filename)
         self.canvas.update()
@@ -1628,12 +1644,13 @@ class BackgroundRemoverGUI:
 
         ext, file_type = file_types[options["file_type"]]
         
-        initial_file = os.path.splitext(os.path.basename(self.save_file))[0] + ext
+        initial_file = os.path.splitext(os.path.basename(self.image_paths[self.current_image_index]))[0] +"_nobg" + ext
+        print(initial_file)
         user_filename = asksaveasfilename(
             title="Save as",
             defaultextension=ext,
             filetypes=[(file_type, "*" + ext)],
-            initialdir=os.path.dirname(self.save_file),
+            initialdir=os.path.dirname(self.image_paths[self.current_image_index]),
             initialfile=initial_file
         )
 
@@ -1678,7 +1695,8 @@ class BackgroundRemoverGUI:
         except Exception as e:
             messagebox.showerror("Error", f"Failed to save image: {str(e)}")
         if self.save_mask:
-            mask_filename = user_filename.replace(ext, "_mask.png")
+            base_name, _ = os.path.splitext(user_filename)
+            mask_filename = base_name + "_mask.png"
             self.working_mask.save(mask_filename, "PNG")
             print(f"Mask saved to {mask_filename}")
         self.canvas.delete(canvas_text_id)
@@ -1754,30 +1772,44 @@ class BackgroundRemoverGUI:
             self.original_image = img
             
             self.initialise_new_image()
-            self.save_file = "clipboard_nobg.png"
-            self.save_file_jpg = "clipboard_nobg.jpg"
-            self.status_label.config(text=f"File will be saved to {self.save_file}")
+
+            self.image_paths = [os.getcwd()+"/clipboard_image.png"]
+            self.current_image_index=0
+
+            
+
+            self.NextImg.configure(state=tk.DISABLED)
+            self.root.title("Background Remover") # Reset title
+
+            self.status_label.config(text=f"File will be saved to {os.getcwd()+"/clipboard_image.png"}")
         else:
+            #TODO if clipboard contains a path to an image, load it
+            
             messagebox.showerror("Error", f"No image found on clipboard.\nClipboard contains {type(img)}")
         
-    def load_image(self):
+    def load_image_from_dialog(self):
         image_path = askopenfilename(
             title="Select an Image",
             filetypes=pillow_formats
         )
         if not image_path:
             return
+        
         self.original_image = Image.open(image_path)
         self.original_image = ImageOps.exif_transpose(self.original_image)
-        try:
-            self.image_exif = self.original_image.info['exif']
-            print("EXIF data found!")
-        except KeyError:
-            self.image_exif = None
-            print("No EXIF data found.")
-        self.save_file = image_path[0:-4]+"_nobg.png"
+
+        self.image_exif = self.original_image.info.get('exif')
+        print("EXIF data found" if self.image_exif else "No EXIF data found.")
        
         self.initialise_new_image()
+
+
+        self.image_paths = [image_path]
+        self.current_image_index = 0 # Indicates not from list
+        self.NextImg.configure(state=tk.DISABLED)
+        self.root.title("Background Remover") # Reset title
+        self.status_label.config(text=f"Loaded image: {os.path.basename(image_path)}", fg=STATUS_NORMAL)
+
 
     def add_drop_shadow(self):
         
@@ -1842,7 +1874,54 @@ class BackgroundRemoverGUI:
             self.shadow_radius_slider.pack_forget()
             self.shadow_options_frame.pack_forget()
         self.add_drop_shadow()
-        
+    
+
+    def load_next_image(self):
+        """Loads the next image from the command-line argument list."""
+        if not self.image_paths or self.current_image_index >= len(self.image_paths) - 1:
+            print("No more images in the list.")
+            self.NextImg.configure(state=tk.DISABLED) # Ensure it's disabled
+            return
+
+        self.current_image_index += 1
+        next_image_path = self.image_paths[self.current_image_index]
+
+        print(f"Loading next image: {next_image_path}")
+
+        try:
+            # Load the new image
+            new_image = Image.open(next_image_path)
+            self.original_image = ImageOps.exif_transpose(new_image)
+
+            # Update save filenames and EXIF
+            # self.update_save_filenames(next_image_path)
+            
+            self.image_exif = self.original_image.info.get('exif')
+            print("EXIF data found" if self.image_exif else "No EXIF data found.")
+
+            # Reset display and working data for the new image
+            self.initialise_new_image()
+
+            # Update window title
+            self.file_count = f' - Image {self.current_image_index + 1} of {len(self.image_paths)}'
+            self.root.title("Background Remover" + self.file_count)
+
+            # Disable button if this is now the last image
+            if self.current_image_index >= len(self.image_paths) - 1:
+                self.NextImg.configure(state=tk.DISABLED)
+
+            self.status_label.config(text=f"Loaded image {self.current_image_index + 1} of {len(self.image_paths)}", fg=STATUS_NORMAL)
+
+        except Exception as e:
+            messagebox.showerror("Error Loading Image", f"Could not load image:\n{next_image_path}\n\nError: {e}")
+            # Decide what to do here: Stop? Try to skip? For now, just show error.
+            # You might want to automatically call load_next_image again to skip it,
+            # or disable the button.
+            self.status_label.config(text=f"Error loading {next_image_path}", fg=STATUS_PROCESSING)
+
+
+
+
     def initialise_new_image(self):
         
         self.canvas2.delete("all")
@@ -1853,11 +1932,11 @@ class BackgroundRemoverGUI:
         self.reset_all()
 
     def load_mask(self):
-        initial_file = os.path.splitext(os.path.basename(self.save_file))[0] + "_mask.png"
+        initial_file = os.path.splitext(os.path.basename(self.image_paths[self.current_image_index]))[0] + "_mask.png"
         mask_path = askopenfilename(
             title="Select a Mask",
             filetypes=[("PNG files", "*.png")],
-            initialdir=os.path.dirname(self.save_file),
+            initialdir=os.path.dirname(self.image_paths[self.current_image_index]),
             initialfile=initial_file
         )
         if not mask_path:
@@ -2338,25 +2417,23 @@ class ImageEditor:
 
 if __name__ == "__main__":
 
-    if len(sys.argv) <= 1:
-        print("No arguments were given")
-        
-        
-        
-        file_path = askopenfilename(
-            title="Select an Image",
+
+    files_to_process = sys.argv[1:] # Get all arguments after the script name
+
+    if not files_to_process:
+        print("No image arguments provided. Opening file dialog...")
+
+        initial_file = askopenfilename(
+            title="Select an Image to Start",
             filetypes=pillow_formats
         )
+        if initial_file:
+            files_to_process = [initial_file]
+        else:
+            print("No file selected. Starting with a blank canvas.")
 
 
-        root = tk.Tk()
-        app = BackgroundRemoverGUI(root, file_path)
-        root.mainloop()
-    else:
-        files = sys.argv[1:]
-        for count, file_path in enumerate(files):
-            #file_path = sys.argv[1]   
-            root = tk.Tk()
-            app = BackgroundRemoverGUI(root, file_path, f' - Image {count+1} of {len(files)}')
-            root.mainloop()
-    
+    root = tk.Tk()
+    app = BackgroundRemoverGUI(root, files_to_process)
+    root.mainloop()
+
