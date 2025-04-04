@@ -911,95 +911,55 @@ class BackgroundRemoverGUI:
         self.working_image = Image.composite(self.original_image, empty, self.working_mask)
 
     #@profile
+    def _apply_mask_modification(self, operation):
+
+        
+        if self.paint_mode.get():
+            mask = self.generate_paint_mode_mask()
+
+        else:
+            mask = self.model_output_mask
+
+        if mask == None: return
+
+        if self.ppm_var.get():
+            #Apply morphological operations to smooth edges
+            mask = mask.point(lambda p: p > 128 and 255)  # Binarize the mask
+            mask_array = np.array(mask)
+            #morphological opening. removes isolated noise and smoothes the boundaries
+            mask_array = binary_dilation(mask_array, iterations=1)
+            mask_array = binary_erosion(mask_array, iterations=1)
+            mask = Image.fromarray(mask_array.astype(np.uint8) * 255)
+            
+        
+        if self.soften_mask_var.get():
+            mask = mask.filter(ImageFilter.GaussianBlur(radius=SOFTEN_RADIUS))
+
+        paste_box = (
+            int(self.view_x),
+            int(self.view_y),
+            int(self.view_x + self.orig_image_crop.width),
+            int(self.view_y + self.orig_image_crop.height)
+        )
+
+        # Create a temporary mask that's the same size as working_mask
+        temp_fullsize_mask = Image.new("L", self.working_mask.size, 0)
+        temp_fullsize_mask.paste(mask, paste_box)
+
+        self.working_mask = operation(self.working_mask, temp_fullsize_mask)
+
+        self.add_undo_step()
+        
+        # this function also cuts out the new working image and updates preview
+        # even if no shadow is being added
+        self.add_drop_shadow()
+
     def add_to_working_image(self):
+        self._apply_mask_modification(ImageChops.add)
 
-        
-        if self.paint_mode.get():
-            mask = self.generate_paint_mode_mask()
-
-        else:
-            mask = self.model_output_mask
-
-        if mask == None: return
-
-        if self.ppm_var.get():
-            #Apply morphological operations to smooth edges
-            mask = mask.point(lambda p: p > 128 and 255)  # Binarize the mask
-            mask_array = np.array(mask)
-            #morphological opening. removes isolated noise and smoothes the boundaries
-            mask_array = binary_dilation(mask_array, iterations=1)
-            mask_array = binary_erosion(mask_array, iterations=1)
-            mask = Image.fromarray(mask_array.astype(np.uint8) * 255)
-            
-        
-        if self.soften_mask_var.get():
-            mask = mask.filter(ImageFilter.GaussianBlur(radius=SOFTEN_RADIUS))
-
-        paste_box = (
-            int(self.view_x),
-            int(self.view_y),
-            int(self.view_x + self.orig_image_crop.width),
-            int(self.view_y + self.orig_image_crop.height)
-        )
-
-        # Create a temporary mask that's the same size as working_mask
-        temp_fullsize_mask = Image.new("L", self.working_mask.size, 0)
-        temp_fullsize_mask.paste(mask, paste_box)
-
-        self.working_mask = ImageChops.add(self.working_mask, temp_fullsize_mask)
-
-        self.add_undo_step()
-        
-        # this function also cuts out the new working image and updates preview
-        # even if no shadow is being added
-        self.add_drop_shadow()
-
-            
-
-          
-        
     def remove_from_working_image(self):
-        
-        
-        if self.paint_mode.get():
-            mask = self.generate_paint_mode_mask()
+        self._apply_mask_modification(ImageChops.subtract)        
 
-        else:
-            mask = self.model_output_mask
-
-        if mask == None: return
-
-        if self.ppm_var.get():
-            #Apply morphological operations to smooth edges
-            mask = mask.point(lambda p: p > 128 and 255)  # Binarize the mask
-            mask_array = np.array(mask)
-            #morphological opening. removes isolated noise and smoothes the boundaries
-            mask_array = binary_dilation(mask_array, iterations=1)
-            mask_array = binary_erosion(mask_array, iterations=1)
-            mask = Image.fromarray(mask_array.astype(np.uint8) * 255)
-            
-        
-        if self.soften_mask_var.get():
-            mask = mask.filter(ImageFilter.GaussianBlur(radius=SOFTEN_RADIUS))
-
-        paste_box = (
-            int(self.view_x),
-            int(self.view_y),
-            int(self.view_x + self.orig_image_crop.width),
-            int(self.view_y + self.orig_image_crop.height)
-        )
-
-        # Create a temporary mask that's the same size as working_mask
-        temp_fullsize_mask = Image.new("L", self.working_mask.size, 0)
-        temp_fullsize_mask.paste(mask, paste_box)
-
-        self.working_mask = ImageChops.subtract(self.working_mask, temp_fullsize_mask)
-
-        self.add_undo_step()
-        
-        # this function also cuts out the new working image and updates preview
-        # even if no shadow is being added
-        self.add_drop_shadow()
     
     def clear_visible_area(self):
 
