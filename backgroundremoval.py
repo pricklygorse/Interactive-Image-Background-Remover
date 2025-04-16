@@ -1726,7 +1726,10 @@ class BackgroundRemoverGUI:
         self.root.destroy()
         
     def edit_image(self):
-        if messagebox.askyesno("Continue?", "Editing the original image will reset the current working output image. Would you like to edit the image?"): 
+        if messagebox.askyesno("Continue to edit the image?", 
+                               """Editing the original image will reset the progress on your output image. 
+
+Consider saving the current mask first (Save As menu). Would you like to edit the image?"""): 
 
             editor = ImageEditor(self.root, self.original_image, self.file_count)
             self.root.wait_window(editor.crop_window)
