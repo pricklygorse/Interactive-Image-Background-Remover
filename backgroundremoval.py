@@ -358,9 +358,9 @@ class BackgroundRemoverGUI:
         self.Add.pack(expand=True, side="left")
         self.Add.configure(command=self.add_to_working_image)
         self.Remove = ttk.Button(self.EditCluster, name="remove")
-        self.Remove.configure(text='Remove mask')
+        self.Remove.configure(text='Subtract mask')
         self.Remove.pack(expand=True, side="left")
-        self.Remove.configure(command=self.remove_from_working_image)
+        self.Remove.configure(command=self.subtract_from_working_image)
         self.Undo = ttk.Button(self.EditCluster, name="undo")
         self.Undo.configure(text='Undo')
         self.Undo.pack(expand=True, side="left")
@@ -428,7 +428,7 @@ class BackgroundRemoverGUI:
         self.show_mask_checkbox = tk.Checkbutton(self.paint_ppm_frame, name="show_mask_checkbox")
         self.show_mask_var = tk.BooleanVar()
         self.show_mask_checkbox.configure(
-            text='Show Full Mask',
+            text='Show Mask',
             variable=self.show_mask_var,
             command=self.update_output_image_preview)
         self.show_mask_checkbox.pack(fill="x", side="left")
@@ -646,10 +646,8 @@ class BackgroundRemoverGUI:
         self.root.bind("<d>", lambda event: self.copy_entire_image())
         self.root.bind("<r>", lambda event: self.reset_all())
         self.root.bind("<a>", lambda event: self.add_to_working_image())
-        self.root.bind("<z>", lambda event: self.remove_from_working_image())
+        self.root.bind("<s>", lambda event: self.subtract_from_working_image())
         self.root.bind("<w>", lambda event: self.clear_working_image())
-        self.root.bind("<s>", lambda event: self.save_as_image())
-        self.root.bind("<j>", lambda event: self.quick_save_jpeg())
         self.root.bind("<p>", self.paint_mode_toggle)
         self.root.bind("<v>", lambda event: self.clear_visible_area())
         self.root.bind("<e>", lambda event: self.edit_image())
@@ -659,7 +657,14 @@ class BackgroundRemoverGUI:
         self.root.bind("<b>", lambda event: self.run_whole_image_model("BiRefNet-general-bb_swin_v1_tiny-epoch_232"))
         self.root.bind("<n>", lambda event: self.run_whole_image_model("BiRefNet-DIS-bb_pvt_v2_b0-epoch_590"))
         self.root.bind("<m>", lambda event: self.run_whole_image_model("BiRefNet-general-bb_swin_v1_tiny-epoch_232_FP16"))        
-        self.root.bind("<q>", lambda event: self.undo())
+        if platform.system() == "Darwin":  
+            self.root.bind("<Command-z>", lambda event: self.undo())
+            self.root.bind("<Command-s>", lambda event: self.save_as_image())
+            self.root.bind("<Command-Shift-S>", lambda event: self.quick_save_jpeg())
+        else: 
+            self.root.bind("<Control-z>", lambda event: self.undo())
+            self.root.bind("<Control-s>", lambda event: self.save_as_image())
+            self.root.bind("<Control-Shift-S>", lambda event: self.quick_save_jpeg())
         self.root.bind("<Left>", self.pan_left_keyboard)
         self.root.bind("<Right>", self.pan_right_keyboard)
         self.root.bind("<Up>", self.pan_up_keyboard)
@@ -958,7 +963,7 @@ class BackgroundRemoverGUI:
     def add_to_working_image(self):
         self._apply_mask_modification(ImageChops.add)
 
-    def remove_from_working_image(self):
+    def subtract_from_working_image(self):
         self._apply_mask_modification(ImageChops.subtract)        
 
     
@@ -966,7 +971,7 @@ class BackgroundRemoverGUI:
 
         mask_old = self.model_output_mask.copy()
         self.model_output_mask = Image.new("L", self.orig_image_crop.size, 255)
-        self.remove_from_working_image()
+        self.subtract_from_working_image()
         self.model_output_mask = mask_old
     
     def draw_dot(self, x, y,col):
@@ -1930,7 +1935,7 @@ Load your image, and either run one of the whole image models (u2net <u>, disnet
 
 The original image is displayed on the left, the current image you are working on is displayed to the right.
 
-Type A to add the current mask to your image, Z to remove.
+Type A to add the current mask to your image, S to subtract.
 
 Scroll wheel to zoom, and middle click to pan around the image. The models will be applied only to the visible zoomed image, which enables much higher detail and working in finer detail than just running the models on the whole image
 
@@ -1949,15 +1954,15 @@ Left click and drag: Draw box for segment anything models
 Hotkeys:
 
 <a> Add current mask to working image
-<z> Remove current mask from working image
-<q> Undo last action
+<s> Subtract current mask from working image
+<Ctrl+z> Undo last action
 <p> Manual paintbrush mode
 <c> Clear current mask (and coordinate points)
 <w> Reset the current working image
 <r> Reset everything (image, masks, coordinates)
 <v> Clear the visible area on the working image
-<s> Save as....
-<j> Quick save JPG with white background
+<Ctrl+S> Save as....
+<Ctrl+Shift+S> Quick save JPG with white background
 
 Whole image models (if downloaded to Models folder)
 <u> u2net

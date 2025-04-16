@@ -107,7 +107,7 @@ python interactive_background_remover.py image1.jpg image2.png
    - **Interactively: Segment Anything**: Left-click to add a positive point, right-click to add a negative (exclusion) point, or drag to draw a box around the object.
    - **Whole-Image Models**: Click "Run whole-image model" to apply the selected model to the entire image (or zoomed area).
 5. **Refine Background Removal Mask**:
-   - Use the "Add mask" and "Remove mask" buttons to add the model output to the background removal mask.
+   - Use the "Add mask" and "Subtract mask" buttons to add the model output to the background removal mask.
    - Toggle "Manual Paintbrush" mode to manually edit the mask.
    - Check "Post Process Model Mask" (binarise the mask and smooth edges) and "Soften Model Mask/Paintbrush" to adjust the model output
    - Use Show Full Mask to edit the mask directly instead of the output image
@@ -119,15 +119,15 @@ python interactive_background_remover.py image1.jpg image2.png
 ### Hotkeys
 
 - `a`: Add current mask to the output image.
-- `z`: Remove current mask from the output image.
-- `q`: Undo the last action.
+- `s`: Subtract current mask from the output image.
+- `Ctrl+z`: Undo the last action.
 - `p`: Toggle manual paintbrush mode.
 - `c`: Clear current mask and coordinate points.
 - `w`: Reset the current working image.
 - `r`: Reset everything (image, masks, coordinates).
 - `v`: Clear the visible area on the working image.
-- `s`: Save as....
-- `j`: Quick save JPEG with a white background.
+- `Ctrl+s`: Save as....
+- `Ctrl+Shift+S`: Quick save JPEG with a white background.
 - `u`: Run u2net model.
 - `i`: Run disnet model.
 - `o`: Run rmbg1.4 model.
