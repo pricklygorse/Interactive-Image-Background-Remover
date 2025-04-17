@@ -2073,8 +2073,8 @@ class ImageEditor:
             'saturation': (0.1, 2.0, 1.0),
             'white_balance': (2000, 10000, 6500),
             'unsharp_radius': (0.1, 50, 1.0),
-            'unsharp_amount': (0, 5, 0),
-            'unsharp_threshold': (0, 10, 3)
+            'unsharp_amount': (0, 500, 0),
+            'unsharp_threshold': (0, 255, 0)
         }
         
         
@@ -2155,7 +2155,7 @@ class ImageEditor:
              'white_balance': 6500,
              'unsharp_radius': 1.0,
              'unsharp_amount': 0,
-             'unsharp_threshold': 3
+             'unsharp_threshold': 0
          }
          for param, value in default_values.items():
              self.sliders[param].set(value)
@@ -2279,6 +2279,10 @@ class ImageEditor:
 
         img_array = np.array(image)
 
+
+        if white_balance != 6500:
+            img_array = self.adjust_white_balance(img_array, white_balance)
+
         # Combine all masks into a single operation
         x = np.arange(256, dtype=np.float32)
         highlight_mask = self.smooth_transition(x, 192, tone_curve)
@@ -2290,44 +2294,26 @@ class ImageEditor:
             x * midtone * midtone_mask +
             x * shadow * shadow_mask).clip(0, 255).astype(np.uint8)
     
+
         adjusted = lut[img_array]
 
-        if white_balance != 6500:
-            adjusted = self.adjust_white_balance(adjusted, white_balance)
-
-        if unsharp_amount > 0:
-            adjusted = self.apply_unsharp_mask(adjusted, unsharp_radius, unsharp_amount, unsharp_threshold)
     
         adjusted_image = Image.fromarray(adjusted)
         
-        # Combine enhancement operations
-        if saturation != 1.0:
-            enhancer = ImageEnhance.Color(adjusted_image)
-            adjusted_image = enhancer.enhance(saturation)
         if brightness != 1.0:
             enhancer = ImageEnhance.Brightness(adjusted_image)
             adjusted_image = enhancer.enhance(brightness)
         if contrast != 1.0:
             enhancer = ImageEnhance.Contrast(adjusted_image)
             adjusted_image = enhancer.enhance(contrast)
+        if saturation != 1.0:
+            enhancer = ImageEnhance.Color(adjusted_image)
+            adjusted_image = enhancer.enhance(saturation)
                 
-        
+        if unsharp_amount>0:
+            adjusted_image=adjusted_image.filter(ImageFilter.UnsharpMask(radius = int(unsharp_radius), percent = int(unsharp_amount), threshold = int(unsharp_threshold))) 
      
         return adjusted_image
-
-    def apply_unsharp_mask(self, img_array, radius, amount, threshold):
-
-        threshold = int(threshold)
-
-        blurred = cv2.GaussianBlur(img_array, (0, 0), radius)
-
-        unsharp_mask = cv2.subtract(img_array, blurred)
-
-        mask = np.abs(unsharp_mask) > threshold
-
-        sharpened = np.where(mask, img_array + unsharp_mask * amount, img_array)
-
-        return np.clip(sharpened, 0, 255).astype(np.uint8)
 
     
     def adjust_white_balance(self, img_array, temperature):
