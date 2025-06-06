@@ -19,8 +19,13 @@ from screeninfo import get_monitors
 #from line_profiler import profile
 
 DEFAULT_ZOOM_FACTOR = 1.2
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-MODEL_ROOT = os.path.join(SCRIPT_DIR, "Models/")
+if getattr(sys, 'frozen', False):
+    SCRIPT_BASE_DIR = os.path.dirname(sys.executable)
+else:
+    SCRIPT_BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+print(f"Working directory: {SCRIPT_BASE_DIR}")
+MODEL_ROOT = os.path.join(SCRIPT_BASE_DIR, "Models/")
 STATUS_PROCESSING = "#f00"
 STATUS_NORMAL = "#000000"
 PAINT_BRUSH_DIAMETER = 18
@@ -44,8 +49,6 @@ class BackgroundRemoverGUI:
     def __init__(self, root, image_paths):
         
         self.root = root
-
-
 
         self.image_paths = image_paths if image_paths else []
         self.current_image_index = 0
@@ -76,7 +79,7 @@ class BackgroundRemoverGUI:
 
         if self.image_paths:
             image_path = self.image_paths[self.current_image_index]
-            print(image_path)
+            print(f"Image Loaded: {image_path}")
 
             self.original_image = Image.open(image_path)
             self.original_image = ImageOps.exif_transpose(self.original_image)
@@ -149,7 +152,7 @@ class BackgroundRemoverGUI:
                     delattr(self, "encoder_output")
                 self.init_width = self.root.winfo_width()
                 self.init_height = self.root.winfo_height()
-                print(f"Window dimensions {self.root.winfo_height()} {self.root.winfo_width()}")
+                #print(f"Window dimensions {self.root.winfo_height()} {self.root.winfo_width()}")
 
                 # previously I was setting the canvas size based on window dimensions
                 # and i think this was causing a loop
@@ -163,8 +166,8 @@ class BackgroundRemoverGUI:
                 self.canvas_w = self.canvas.winfo_width()
                 self.canvas_h = self.canvas.winfo_height()
 
-                print(f"Input canvas size {self.canvas_w} x {self.canvas_h}")
-                print(f"Output canvas size {self.canvas2.winfo_width()} x {self.canvas2.winfo_height()}")
+                #print(f"Input canvas size {self.canvas_w} x {self.canvas_h}")
+                #print(f"Output canvas size {self.canvas2.winfo_width()} x {self.canvas2.winfo_height()}")
                 # this is from setup_image_display but without clearing the working image
                 self.lowest_zoom_factor = min(self.canvas_w / self.original_image.width, self.canvas_h / self.original_image.height)
                 self.zoom_factor = self.lowest_zoom_factor
@@ -321,7 +324,7 @@ class BackgroundRemoverGUI:
             state="readonly",
             takefocus=False,
             textvariable=self.sam_model_choice,
-            values='mobile_sam',
+            values=['No Models Found'],
             width=22)
         self.sam_combo.pack(side="right")
         self.SegmentAnything.pack(fill="x", padx=2, pady=2, side="top")
@@ -335,7 +338,7 @@ class BackgroundRemoverGUI:
         self.whole_image_combo.configure(
             state="readonly",
             takefocus=False,
-            values='rmbg1_4',
+            values=['No Models Found'],
             width=22)
         self.whole_image_combo.pack(side="right")
         self.Whole.pack(fill="x", padx=2, side="top")
@@ -561,10 +564,11 @@ class BackgroundRemoverGUI:
 
         if len(matches) == 0:
             messagebox.showerror("No segment anything models found in Models folder", "Please see the readme on Github for model download links.")
-
-        models = " ".join(list(dict.fromkeys(matches)))
-        print("SAM models found:", models)
-        self.sam_combo.configure(values=models)
+        else:
+            models = " ".join(list(dict.fromkeys(matches)))
+            print("SAM models found:", models)
+            self.sam_combo.configure(values=models)
+            self.sam_combo.current(0)
 
         matches = []
 
@@ -575,10 +579,11 @@ class BackgroundRemoverGUI:
 
         if len(matches) == 0:
             messagebox.showerror("No whole-image models found in Models folder","Please see the readme on Github for model download links.")
-
-        models = " ".join(list(dict.fromkeys(matches)))
-        print("Whole image models found: ", models)
-        self.whole_image_combo.configure(values=models)
+        else:
+            models = " ".join(list(dict.fromkeys(matches)))
+            print("Whole image models found: ", models)
+            self.whole_image_combo.configure(values=models)
+            self.whole_image_combo.current(0)
 
     def bg_color_select(self, event=None):
         if self.bg_color.get() == "Blurred_(Slow)":
@@ -1115,6 +1120,9 @@ class BackgroundRemoverGUI:
         
         if model_name == None:
             model_name = self.whole_image_combo.get()
+            if model_name=="No Models Found":
+                messagebox.showerror("No whole image models found in Models folder","Please see the readme on Github for model download links.")
+                return
             target_size = 320 if model_name == "u2net" else 1024
 
         try:
@@ -1124,6 +1132,7 @@ class BackgroundRemoverGUI:
             self.status_label.config(text=f"ERROR: {e}", fg=STATUS_PROCESSING)
             self.root.update()
             messagebox.showerror("Error", e)
+            self.clear_coord_overlay()
             return
 
         self.status_label.config(text=f"Processing {model_name}", fg=STATUS_PROCESSING)
@@ -1304,6 +1313,10 @@ class BackgroundRemoverGUI:
 
     def _initialise_sam_model(self):
         if not hasattr(self, "sam_encoder") or self.sam_model != MODEL_ROOT + self.sam_model_choice.get():
+            if self.sam_model_choice.get()=="No Models Found":
+                messagebox.showerror("No Segment Anything models found in Models folder","Please see the readme on Github for model download links.")
+                self.clear_coord_overlay()
+                return
             self.status_label.config(text="Loading model", fg=STATUS_PROCESSING)
             self.status_label.update()
             canvas_text_id, rect_id = self.canvas_text_overlay(f"Loading {self.sam_model_choice.get()}")
@@ -1514,8 +1527,6 @@ class BackgroundRemoverGUI:
         
         if not user_filename.endswith(".jpg"): user_filename+=".jpg"
         
-        print(user_filename)
-
         self.add_drop_shadow()
         workimg = self.working_image
         workimg = self.apply_background_color(workimg, "White")
@@ -1615,7 +1626,7 @@ class BackgroundRemoverGUI:
         ext, file_type = file_types[options["file_type"]]
         
         initial_file = os.path.splitext(os.path.basename(self.image_paths[self.current_image_index]))[0] +"_nobg" + ext
-        print(initial_file)
+
         user_filename = asksaveasfilename(
             title="Save as",
             defaultextension=ext,
@@ -2371,16 +2382,14 @@ if __name__ == "__main__":
     files_to_process = sys.argv[1:] 
 
     if not files_to_process:
-        print("No image arguments provided. Opening file dialog...")
-
+        
         initial_file = askopenfilename(
             title="Select an Image to Start",
             filetypes=pillow_formats
         )
         if initial_file:
             files_to_process = [initial_file]
-        else:
-            print("No file selected. Starting with a blank canvas.")
+
 
 
     root = tk.Tk()
