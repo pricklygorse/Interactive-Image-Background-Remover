@@ -1,10 +1,10 @@
 # Interactive Image Background Remover
 
-Interactive Background Remover is a user-friendly tool designed to remove backgrounds from images using a combination of interactive models (Segment Anything) and whole-image models (such as u2net, disnet, rmbg, and BiRefNet). This application provides a graphical interface where users can load an image, apply various models, and fine-tune the results to achieve precise background removal. Similar idea to the Photoroom app where you can refine your background removal, instead of just using the model outputs as-is
+Interactive Background Remover is a user-friendly tool designed to remove backgrounds from images using a combination of interactive models (Segment Anything) and whole-image models (such as u2net, disnet, rmbg, and BiRefNet). This allows you to refine and fine tune your background removal, in a similar way to apps like Photoroom, instead of only running models on the entire image.
 
 ## Features
 
-- **Interactive Model Support**: Utilize Segment Anything for detailed object selection by clicking or drawing boxes on the image.
+- **Interactive Model Support**: Utilise Segment Anything for detailed object selection by clicking or drawing boxes on the image.
 - **Whole-Image Model Support**: Apply models like u2net, disnet, rmbg, and BiRefNet for quick background removal across the entire image, which can be further refined.
 - **Zoom and Pan**: Zoom in on specific parts of the image and pan around for detailed editing. The models are only run on the viewed area so you can incrementally build up an image from higher resolution patches.
 - **Manual Paintbrush Mode**: Manually refine the background removal with a paintbrush tool for areas not covered by the models.
@@ -13,7 +13,7 @@ Interactive Background Remover is a user-friendly tool designed to remove backgr
 - **Background Options**: Choose from various background colors or apply a blurred background effect.
 - **Image Editing**: Includes a built-in image editor and cropper to preprocess images before background removal.
 - **Undo/Redo**
-- **Save Options**: Save the processed image in various formats (PNG, JPEG, WebP) with customizable quality settings.
+- **Save Options**: Save the processed image in various formats (PNG, JPEG, WebP) with customisable quality settings and auto-trim.
 - **Clipboard Support**: Load images directly from the clipboard for quick editing.
 - **Windows, Linux and Mac Builds**: In the Github releases. Mac is currently untested, please let me know
 
@@ -24,10 +24,10 @@ Interactive Background Remover is a user-friendly tool designed to remove backgr
 ### Prerequisites
 
 - Python 3.x
-- Required Python packages: `tkinter`, `Pillow`, `scipy`, `numpy`, `onnxruntime`, `opencv-python`, `screeninfo`
+- Required Python packages: `Pillow`, `scipy`, `numpy`, `onnxruntime`, `opencv-python`, `screeninfo`, `PyQt6`
 
 ```bash
-pip install tkinter Pillow scipy numpy onnxruntime opencv-python screeninfo
+pip install pyqt6 Pillow scipy numpy onnxruntime opencv-python screeninfo
 ```
 
 Or download prebuilt executables for Windows, Linux and Mac from the [Github releases](https://github.com/pricklygorse/Interactive-Image-Background-Remover/releases) 
@@ -110,7 +110,7 @@ python interactive_background_remover.py image1.jpg image2.png
    - **Whole-Image Models**: Click "Run whole-image model" to apply the selected model to the entire image (or zoomed area).
 5. **Refine Background Removal Mask**:
    - Use the "Add mask" and "Subtract mask" buttons to add the model output to the background removal mask.
-   - Toggle "Manual Paintbrush" mode to manually edit the mask.
+   - Toggle "Manual Paintbrush" mode to manually edit the mask. Right click to draw a mask, left to erase.
    - Check "Post Process Model Mask" (binarise the mask and smooth edges) and "Soften Model Mask/Paintbrush" to adjust the model output
    - Use Show Full Mask to edit the mask directly instead of the output image
 6. **Adjust Background**: Select a background color or enable the "Blurred" option for a blurred background.
@@ -134,7 +134,8 @@ python interactive_background_remover.py image1.jpg image2.png
 - `i`: Run disnet model.
 - `o`: Run rmbg1.4 model.
 - `b`: Run BiRefNet model.
-- `Left`, `Right`, `Up`, `Down`: Pan the image.
+- `Middle Mouse`, `Left`, `Right`, `Up`, `Down`: Pan the image.
+- `Ctrl + trackpad`: Zoom
 
 
 ### Image Editing

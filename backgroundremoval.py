@@ -1,2398 +1,1773 @@
 #!/usr/bin/env python3
-import tkinter as tk
-import tkinter.ttk as ttk
-from tkinter import Canvas, Frame, Button, messagebox
-from tkinter.filedialog import askopenfilename, asksaveasfilename
-from PIL import Image, ImageTk, ImageOps, ImageDraw, ImageEnhance, ImageGrab, ImageFilter, ImageChops
-from scipy.special import expit
+import sys
 import os
 import math
 import numpy as np
-import sys
-import onnxruntime as ort
-from scipy.ndimage import binary_dilation, binary_erosion
-from timeit import default_timer as timer
 import cv2
-from copy import deepcopy
-import platform
-from screeninfo import get_monitors
-#from line_profiler import profile
+from timeit import default_timer as timer
 
-DEFAULT_ZOOM_FACTOR = 1.2
+from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
+                             QPushButton, QLabel, QComboBox, QCheckBox, QFileDialog, 
+                             QMessageBox, QGraphicsView, QGraphicsScene, QGraphicsPixmapItem, 
+                             QSlider, QFrame, QSplitter, QDialog, QScrollArea, 
+                             QGraphicsRectItem, QGraphicsEllipseItem, QGraphicsPathItem, 
+                             QTextEdit, QSizePolicy, QRadioButton, QButtonGroup, QInputDialog, QProgressBar)
+from PyQt6.QtCore import Qt, QTimer, QPointF, QRectF
+from PyQt6.QtGui import (QPixmap, QImage, QColor, QPainter, QPen, QBrush, 
+                         QKeySequence, QShortcut, QCursor)
+
+from PIL import Image, ImageOps, ImageDraw, ImageEnhance, ImageGrab, ImageFilter, ImageChops
+from scipy.special import expit
+from scipy.ndimage import binary_dilation, binary_erosion
+import onnxruntime as ort
+
+# --- Constants ---
+DEFAULT_ZOOM_FACTOR = 1.15
 if getattr(sys, 'frozen', False):
     SCRIPT_BASE_DIR = os.path.dirname(sys.executable)
 else:
     SCRIPT_BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-print(f"Working directory: {SCRIPT_BASE_DIR}")
 MODEL_ROOT = os.path.join(SCRIPT_BASE_DIR, "Models/")
-STATUS_PROCESSING = "#f00"
-STATUS_NORMAL = "#000000"
-PAINT_BRUSH_DIAMETER = 18
-UNDO_STEPS=20
-SOFTEN_RADIUS=1
+PAINT_BRUSH_SCREEN_SIZE = 30 
+UNDO_STEPS = 20
+SOFTEN_RADIUS = 2 
 MIN_RECT_SIZE = 5
 
-pillow_formats = [
-            ("All Image Files", "*.bmp *.gif *.jpg *.jpeg *.JPG *.JPEG *.png *.PNG *.tif *.tiff *.webp"),
-            ("BMP", "*.bmp"),
-            ("GIF", "*.gif"),
-            ("JPEG", "*.jpg *.jpeg *.JPG *.JPEG"),
-            ("PNG", "*.png *.PNG"),
-            ("TIFF", "*.tif *.tiff"),
-            ("WEBP", "*.webp"),
-            ("All Files", "*.*")
-        ]
+print(f"Working directory: {SCRIPT_BASE_DIR}")
+
+# --- Helper Functions ---
+
+def pil2pixmap(im):
+    if im is None: return QPixmap()
+    
+    if im.mode == "RGB":
+        im = im.convert("RGBA")
+    elif im.mode == "L":
+        im = im.convert("RGBA")
+
+    if isinstance(im, np.ndarray):
+        img_data = im
+        height, width, channels = img_data.shape
+    else:
+        img_data = np.array(im, copy=False)
+        width, height = im.size
+        
+    bytes_per_line = width * 4 
+    
+    qim = QImage(img_data.data, width, height, bytes_per_line, QImage.Format.Format_RGBA8888)
+
+    return QPixmap.fromImage(qim)
 
 
-class BackgroundRemoverGUI:
-    def __init__(self, root, image_paths):
+class SaveOptionsDialog(QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Save Options")
+        self.setFixedSize(350, 300)
         
-        self.root = root
+        layout = QVBoxLayout(self)
+        
+        # Format Selection
+        grp = QFrame(); v_grp = QVBoxLayout(grp)
+        v_grp.addWidget(QLabel("<b>File Format:</b>"))
+        
+        self.rb_png = QRadioButton("PNG")
+        self.rb_webp_lossless = QRadioButton("WebP (Lossless)")
+        self.rb_webp_lossy = QRadioButton("WebP (Lossy)")
+        self.rb_jpg = QRadioButton("JPEG")
+        
+        self.bg = QButtonGroup()
+        self.bg.addButton(self.rb_png, 0)
+        self.bg.addButton(self.rb_webp_lossless, 1)
+        self.bg.addButton(self.rb_webp_lossy, 2)
+        self.bg.addButton(self.rb_jpg, 3)
+        self.rb_png.setChecked(True)
+        
+        v_grp.addWidget(self.rb_png)
+        v_grp.addWidget(self.rb_webp_lossless)
+        v_grp.addWidget(self.rb_webp_lossy)
+        v_grp.addWidget(self.rb_jpg)
+        layout.addWidget(grp)
+        
+        # Quality Slider
+        self.q_frame = QFrame()
+        q_layout = QVBoxLayout(self.q_frame)
+        self.lbl_quality = QLabel("Quality: 90")
+        self.sl_quality = QSlider(Qt.Orientation.Horizontal)
+        self.sl_quality.setRange(1, 100)
+        self.sl_quality.setValue(90)
+        self.sl_quality.valueChanged.connect(lambda v: self.lbl_quality.setText(f"Quality: {v}"))
+        
+        q_layout.addWidget(self.lbl_quality)
+        q_layout.addWidget(self.sl_quality)
+        layout.addWidget(self.q_frame)
+        
+        # Save Mask Checkbox
+        self.chk_mask = QCheckBox("Save Mask (appends _mask.png)")
+        layout.addWidget(self.chk_mask)
 
-        self.image_paths = image_paths if image_paths else []
-        self.current_image_index = 0
+        self.chk_trim = QCheckBox("Trim Transparent Pixels (Auto-Crop)")
+        layout.addWidget(self.chk_trim)
         
-        self.file_count = ""
-        if len(self.image_paths) > 1:
-            self.file_count = f' - Image {self.current_image_index + 1} of {len(self.image_paths)}'
-        elif len(self.image_paths) == 1:
-            self.file_count = f' - Image 1 of 1'
+        # Logic to enable/disable quality slider
+        self.bg.idToggled.connect(self.toggle_quality)
+        self.toggle_quality() # Init state
 
-        self.root.title("Background Remover" + self.file_count)
+        # Buttons
+        btns = QHBoxLayout()
+        b_ok = QPushButton("OK"); b_ok.clicked.connect(self.accept)
+        b_cancel = QPushButton("Cancel"); b_cancel.clicked.connect(self.reject)
+        btns.addWidget(b_ok); btns.addWidget(b_cancel)
+        layout.addLayout(btns)
+
+    def toggle_quality(self):
+        # ID 2 is WebP Lossy, 3 is JPEG
+        is_lossy = self.bg.checkedId() in [2, 3]
+        self.q_frame.setEnabled(is_lossy)
+
+    def get_data(self):
+        fmt_map = {0: "png", 1: "webp_lossless", 2: "webp_lossy", 3: "jpeg"}
+        return {
+            "format": fmt_map[self.bg.checkedId()],
+            "quality": self.sl_quality.value(),
+            "save_mask": self.chk_mask.isChecked(),
+            "trim": self.chk_trim.isChecked()
+        }
+
+class SynchronizedGraphicsView(QGraphicsView):
+    def __init__(self, scene, name="View", parent=None):
+        super().__init__(scene, parent)
+        self.name = name
         
-        self.coordinates = []
-        self.labels=[]
-        self.bgcolor = None
-        self.dots=[]
+        self.setMouseTracking(True) 
         
+        self.setRenderHint(QPainter.RenderHint.Antialiasing, False)
+        self.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, False)
         
+        self.setDragMode(QGraphicsView.DragMode.NoDrag)
+        
+        self.setTransformationAnchor(QGraphicsView.ViewportAnchor.NoAnchor)
+        self.setResizeAnchor(QGraphicsView.ViewportAnchor.NoAnchor)
+        self.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        
+        self.sibling = None
         self.panning = False
-        self.pan_start_x = 0
-        self.pan_start_y = 0
-        self.last_x, self.last_y = 0, 0
-        self.pan_step = 30
+        self.pan_start = QPointF()
+        self.controller = None
         
-        self.lines = []
-        self.lines_id = []
-        self.lines_id2 = []
-
-        if self.image_paths:
-            image_path = self.image_paths[self.current_image_index]
-            print(f"Image Loaded: {image_path}")
-
-            self.original_image = Image.open(image_path)
-            self.original_image = ImageOps.exif_transpose(self.original_image)
-            self.image_exif = self.original_image.info.get('exif')
-            print("EXIF data found" if self.image_exif else "No EXIF data found.")
-        else:
-            # default blank image
-            self.original_image = Image.new("RGBA",(500,500),0)
-
-            self.image_exif = None # set now so exists when loading clipboard images
+        self.is_painting = False
+        self.last_paint_pos = None
+        self.box_start = None
+        self.temp_box_item = None
         
-        self.save_file_type = "png"
-        self.save_file_quality = 90
+        self.brush_cursor_item = QGraphicsEllipseItem(0, 0, 10, 10)
+        self.brush_cursor_item.setPen(QPen(QColor(0, 0, 0, 255), 1)) 
+        self.brush_cursor_outer = QGraphicsEllipseItem(0, 0, 10, 10, self.brush_cursor_item)
+        self.brush_cursor_outer.setPen(QPen(QColor(255, 255, 255, 255), 1))
         
-        self.after_id = None  # ID of the scheduled after() call to render higher quality preview if no futher zooming
-        self.zoom_delay = 0.2
+        self.brush_cursor_item.setBrush(QBrush(Qt.BrushStyle.NoBrush)) 
         
-        s = ttk.Style()
-        s.theme_use('alt')
+        self.brush_cursor_item.setZValue(99999) 
         
-        self.style = ttk.Style()
-        self.style.configure("Processing.TButton", foreground="red")
+        self.scene().addItem(self.brush_cursor_item)
+        self.brush_cursor_item.hide()
 
-        # previously used monitor size to calculate canvas size
-        # but think i've fixed resizing now, so use dummy values
+    def set_sibling(self, sibling_view):
+        self.sibling = sibling_view
+        self.horizontalScrollBar().valueChanged.connect(self.sync_scroll_h)
+        self.verticalScrollBar().valueChanged.connect(self.sync_scroll_v)
 
-        #m = [m for m in get_monitors() if m.is_primary][0]
-        self.canvas_w = 200 # (m.width -300) //2
-        self.canvas_h = 200 # m.height-100 
+    def set_controller(self, ctrl):
+        self.controller = ctrl
 
-        # This is the default tkinter initalisation size
-        # If the script notices these dimensions have changed, widgets have been added to the canvas
+    def sync_scroll_h(self, value):
+        if self.sibling and self.sibling.horizontalScrollBar().value() != value:
+            self.sibling.horizontalScrollBar().setValue(value)
 
-        self.init_width = 200
-        self.init_height = 200
+    def sync_scroll_v(self, value):
+        if self.sibling and self.sibling.verticalScrollBar().value() != value:
+            self.sibling.verticalScrollBar().setValue(value)
+
+    def update_point_scales(self):
+        # Get the X scaling factor (m11) from the transform matrix
+        zoom = self.transform().m11()
         
-        self.setup_image_display()
-
-        # Maximising the window doesn't work until after __init__ has run
-        # (although full screen would work)
-        # so use the resize event to maximise the interface, and allow user resizing the window
-        self.root.bind("<Configure>", self.on_resize)
-
-        if platform.system() == "Windows":
-            self.root.state('zoomed')
-        elif platform.system() == "Darwin":
-            self.root.state('zoomed') # untested on mac
-        else:
-            self.root.attributes('-zoomed', True)
-
-        self.root.update_idletasks()
-        self.build_gui()
-        self.update_input_image_preview()
-
-        self.model_output_mask = Image.new("L", (int(self.orig_image_crop.width), 
-                                            int(self.orig_image_crop.height)),0)
-
-        self.set_keybindings()
-
-        self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
-
-
-    def on_resize(self, event):
-       
-        if event.widget==self.root:
-            if not self.root.winfo_height() == self.init_height or not self.root.winfo_width() == self.init_width:
-                # The currently displayed preview that is being used will change, so 
-                # a new encoding has to be calculated
-                if hasattr(self, "encoder_output"):
-                    delattr(self, "encoder_output")
-                self.init_width = self.root.winfo_width()
-                self.init_height = self.root.winfo_height()
-                #print(f"Window dimensions {self.root.winfo_height()} {self.root.winfo_width()}")
-
-                # previously I was setting the canvas size based on window dimensions
-                # and i think this was causing a loop
-                # I think fixed it now, and can use the actual canvas dimensions that are set to auto expand
-
-                # self.canvas_w = (self.init_width -300) //2
-                # self.canvas_h = self.init_height - 40
-                # self.canvas.config(width=self.canvas_w, height=self.canvas_h)
-                # self.canvas2.config(width=self.canvas_w, height=self.canvas_h)
-                self.root.update()
-                self.canvas_w = self.canvas.winfo_width()
-                self.canvas_h = self.canvas.winfo_height()
-
-                #print(f"Input canvas size {self.canvas_w} x {self.canvas_h}")
-                #print(f"Output canvas size {self.canvas2.winfo_width()} x {self.canvas2.winfo_height()}")
-                # this is from setup_image_display but without clearing the working image
-                self.lowest_zoom_factor = min(self.canvas_w / self.original_image.width, self.canvas_h / self.original_image.height)
-                self.zoom_factor = self.lowest_zoom_factor
-                self.view_x = 0
-                self.view_y = 0
-                self.min_zoom=True
-                # make a checkerboard that is always larger than preview window
-                # because both canvas might not be same size if the frame for both canvases doesnt divide by 2
-                self.checkerboard = self.create_checkerboard(self.canvas_w * 2, self.canvas_h * 2, square_size = 10)
-
-                self.update_input_image_preview(Image.BOX)
-
-      
-
-    
-    def setup_image_display(self):
-
-        self.lowest_zoom_factor = min(self.canvas_w / self.original_image.width, self.canvas_h / self.original_image.height)
-  
-        self.working_image = Image.new("RGBA", self.original_image.size, (0, 0, 0, 0))
-        self.working_mask = Image.new("L", self.original_image.size, 0)
+        if zoom == 0: zoom = 1
         
-        self.undo_history_mask = []
-        self.undo_history_mask.append(self.working_mask.copy())
-
-        self.zoom_factor = self.lowest_zoom_factor
-        self.view_x = 0
-        self.view_y = 0
-        self.min_zoom=True
-
-        # make a checkerboard that is always larger than preview window
-        # because both canvas might not be same size if the frame for both canvases doesnt divide by 2
-        self.checkerboard = self.create_checkerboard(self.canvas_w * 2, self.canvas_h * 2, square_size = 10)
+        # If zoom is 2.0 (200%), scale should be 0.5 to look normal
+        inverse_scale = 1.0 / zoom
         
+        for item in self.scene().items():
+            # Check for the tag we set in handle_sam_point
+            if item.data(0) == "sam_point":
+                item.setScale(inverse_scale)
+
+    def wheelEvent(self, event):
+        modifiers = QApplication.keyboardModifiers()
+        is_ctrl = bool(modifiers & Qt.KeyboardModifier.ControlModifier)
         
-    def create_checkerboard(self,width, height, square_size):
-        num_squares_x = width // square_size
-        num_squares_y = height // square_size
+        pixel_delta = event.pixelDelta()
+        angle_delta = event.angleDelta()
         
-        img = Image.new('RGBA', (width, height), 'white')
-        draw = ImageDraw.Draw(img)
+        is_touchpad_gesture = (event.phase() != Qt.ScrollPhase.NoScrollPhase) or not pixel_delta.isNull()
         
-        colors = [(128, 128, 128), (153, 153, 153)]  # 'grey' and 'grey60'
-        
-        for row in range(num_squares_y):
-            for col in range(num_squares_x):
-                color = colors[(row + col) % 2]
-                top_left = (col * square_size, row * square_size)
-                bottom_right = ((col + 1) * square_size, (row + 1) * square_size)
-                draw.rectangle([top_left, bottom_right], fill=color)
-        
-        return img
-    
-    
-
-
-    def build_gui(self):
-        
-        self.root.minsize(width=1024, height=700)  
-
-        # Generated by pybubu designer. 
-        self.main_frame = tk.Frame(self.root, container=False, name="main_frame")
-        #self.main_frame.configure(height=200, width=200)
-
-        self.editor_frame = ttk.Frame(self.main_frame, name="editor_frame")
-        #self.editor_frame.configure(height=200, width=200)
-        self.input_frame = tk.Frame(self.editor_frame, name="input_frame")
-        #self.input_frame.configure(height=10, width=10)
-        self.canvas_input_label = ttk.Label(
-            self.input_frame, name="canvas_input_label")
-        self.canvas_input_label.configure(text='Input')
-        self.canvas_input_label.pack(padx=10, side="top")
-        self.canvas = tk.Canvas(self.input_frame, name="canvas")
-        self.canvas.pack(expand=True, fill="both", side="top")
-        self.input_frame.pack(expand=True, fill="both", side="left")
-        separator_1 = ttk.Separator(self.editor_frame)
-        separator_1.configure(orient="vertical")
-        separator_1.pack(expand=False, fill="y", side="left")
-        self.output_frame = tk.Frame(self.editor_frame, name="output_frame")
-        #self.output_frame.configure(height=10, width=10)
-        self.output = ttk.Label(self.output_frame, name="output")
-        self.output.configure(text='Output')
-        self.output.pack(padx=10, side="top")
-        self.canvas2 = tk.Canvas(self.output_frame, name="canvas2")
-        self.canvas2.pack(expand=True, fill="both", side="top")
-        self.output_frame.pack(expand=True, fill="both", side="left")
-        separator_3 = ttk.Separator(self.editor_frame)
-        separator_3.configure(orient="vertical")
-        separator_3.pack(expand=False, fill="y", side="left")
-        self.Controls = tk.Frame(self.editor_frame, name="controls")
-        self.Controls.configure(height=500, width=300)
-        
-        self.OpenImage = tk.Frame(self.Controls, name="openimage")
-        self.OpenImage.configure(borderwidth=1, relief="groove")
-        
-        self.open_nav_frame = ttk.Frame(self.OpenImage, name="open_nav_frame")
-
-        self.OpnImg = ttk.Button(self.open_nav_frame, name="opnimg")
-        self.OpnImg.configure(text='Open Image')
-        self.OpnImg.pack(side="left", padx=1)
-        self.OpnImg.configure(command=self.load_image_from_dialog) 
-
-        self.OpnClp = ttk.Button(self.open_nav_frame, name="opnclp")
-        self.OpnClp.configure(text='Open Clipboard')
-        self.OpnClp.pack(side="left", padx=1)
-        self.OpnClp.configure(command=self.load_clipboard)
-
-        # --- Add Next Image Button ---
-        self.NextImg = ttk.Button(self.open_nav_frame, name="nextimg")
-        self.NextImg.configure(text='Next Image >')
-        self.NextImg.pack(side="left", padx=1)
-        self.NextImg.configure(command=self.load_next_image)
-        # Disable initially if less than 2 images were passed
-        if len(self.image_paths) <= 1:
-            self.NextImg.configure(state=tk.DISABLED)
-
-        self.open_nav_frame.pack(side="top")
-        
-        self.editimageloadmask = ttk.Frame(
-            self.OpenImage, name="editimageloadmask")
-        self.editimageloadmask.configure(width=200)
-        
-
-        self.EditImage = ttk.Button(self.editimageloadmask, name="editimage")
-        self.EditImage.configure(text='Edit Image')
-        self.EditImage.pack(side="left")
-        self.EditImage.configure(command=self.edit_image)
-
-        self.LoadMask = ttk.Button(self.editimageloadmask, name="loadmask")
-        self.LoadMask.configure(text='Load Mask')
-        self.LoadMask.pack(expand=True, side="left")
-        self.LoadMask.configure(command=self.load_mask)
-
-        self.editimageloadmask.pack(side="top")
-
-        self.OpenImage.pack(fill="x", padx=2, pady=3, side="top")
-        self.ModelSelection = tk.Frame(self.Controls, name="modelselection")
-        self.ModelSelection.configure(
-            borderwidth=1, height=200, relief="groove", width=200)
-        self.model_select_label = tk.Label(
-            self.ModelSelection, name="model_select_label")
-        self.model_select_label.configure(text='Model Selection:')
-        self.model_select_label.pack(
-            anchor="center", fill="x", pady=2, side="top")
-        self.SegmentAnything = tk.Frame(
-            self.ModelSelection, name="segmentanything")
-        self.SegmentAnything.configure(height=200, width=200)
-        self.sam_label = tk.Label(self.SegmentAnything, name="sam_label")
-        self.sam_label.configure(text='Segment Anything')
-        self.sam_label.pack(side="left")
-        self.sam_combo = ttk.Combobox(self.SegmentAnything, name="sam_combo")
-        self.sam_model_choice = tk.StringVar()
-        self.sam_combo.configure(
-            state="readonly",
-            takefocus=False,
-            textvariable=self.sam_model_choice,
-            values=['No Models Found'],
-            width=22)
-        self.sam_combo.pack(side="right")
-        self.SegmentAnything.pack(fill="x", padx=2, pady=2, side="top")
-        self.Whole = tk.Frame(self.ModelSelection, name="whole")
-        self.Whole.configure(height=200, width=200)
-        self.whole_image_label = tk.Label(self.Whole, name="whole_image_label")
-        self.whole_image_label.configure(text='Whole-Image')
-        self.whole_image_label.pack(side="left")
-        self.whole_image_combo = ttk.Combobox(
-            self.Whole, name="whole_image_combo")
-        self.whole_image_combo.configure(
-            state="readonly",
-            takefocus=False,
-            values=['No Models Found'],
-            width=22)
-        self.whole_image_combo.pack(side="right")
-        self.Whole.pack(fill="x", padx=2, side="top")
-        self.ModelSelection.pack(fill="x", padx=2, pady=3, side="top")
-        self.Edit = tk.Frame(self.Controls, name="edit")
-        self.Edit.configure(
-            borderwidth=1,
-            height=200,
-            relief="groove",
-            width=200)
-        label_9 = tk.Label(self.Edit)
-        label_9.configure(text='Edit:')
-        label_9.pack(anchor="center", fill="x", pady=2, side="top")
-        self.SubEdit = tk.Frame(self.Edit, name="subedit")
-        self.SubEdit.configure(height=200, width=200)
-        self.EditCluster = tk.Frame(self.SubEdit, name="editcluster")
-        self.EditCluster.configure(height=200, width=200)
-        self.Add = ttk.Button(self.EditCluster, name="add")
-        self.Add.configure(text='Add mask')
-        self.Add.pack(expand=True, side="left")
-        self.Add.configure(command=self.add_to_working_image)
-        self.Remove = ttk.Button(self.EditCluster, name="remove")
-        self.Remove.configure(text='Subtract mask')
-        self.Remove.pack(expand=True, side="left")
-        self.Remove.configure(command=self.subtract_from_working_image)
-        self.Undo = ttk.Button(self.EditCluster, name="undo")
-        self.Undo.configure(text='Undo')
-        self.Undo.pack(expand=True, side="left")
-        self.Undo.configure(command=self.undo)
-        self.EditCluster.pack(expand=True, fill="x", pady=3, side="top")
-        self.SubEdit.pack(fill="x", side="top")
-        self.whole_image_button = ttk.Button(
-            self.Edit, name="whole_image_button")
-        self.whole_image_button.configure(text='Run whole-image model')
-        self.whole_image_button.pack(fill="x", padx=2, pady=2, side="top")
-        self.ClrPoint = ttk.Button(self.Edit, name="clrpoint")
-        self.ClrPoint.configure(text='Clear Points and Mask Overlay')
-        self.ClrPoint.pack(fill="x", padx=2, pady=2, side="top")
-        self.ClrPoint.configure(command=self.clear_coord_overlay)
-        self.ClrArea = ttk.Button(self.Edit, name="clrarea")
-        self.ClrArea.configure(text='Clear Visible Area')
-        self.ClrArea.pack(fill="x", padx=2, pady=2, side="top")
-        self.ClrArea.configure(command=self.clear_visible_area)
-        self.RstOut = ttk.Button(self.Edit, name="rstout")
-        self.RstOut.configure(text='Clear Output Image')
-        self.RstOut.pack(fill="x", padx=2, pady=2, side="top")
-        self.RstOut.configure(command=self.clear_working_image)
-        self.RstEverything = ttk.Button(self.Edit, name="rsteverything")
-        self.RstEverything.configure(text='Reset Everything!')
-        self.RstEverything.pack(fill="x", padx=2, pady=2, side="top")
-        self.RstEverything.configure(command=self.reset_all)
-        self.copy_in_out = ttk.Button(self.Edit, name="copy_in_out")
-        self.copy_in_out.configure(text='Copy Input to Output')
-        self.copy_in_out.pack(fill="x", padx=2, pady=2, side="top")
-        self.copy_in_out.configure(command=self.copy_entire_image)
-        self.Edit.pack(fill="x", padx=2, pady=3, side="top")
-        self.Options = tk.Frame(self.Controls, name="options")
-        self.Options.configure(
-            borderwidth=1,
-            height=200,
-            relief="groove",
-            width=200)
-        label_12 = tk.Label(self.Options)
-        label_12.configure(text='Options:')
-        label_12.pack(anchor="center", fill="x", pady=2, side="top")
-        self.BgSel = tk.Frame(self.Options, name="bgsel")
-        self.BgSel.configure(height=200, width=200)
-        label_15 = tk.Label(self.BgSel)
-        label_15.configure(text='Background')
-        label_15.pack(side="left")
-        self.bg_color = ttk.Combobox(self.BgSel, name="bg_color")
-        self.bg_color.configure(
-            state="readonly",
-            values='Transparent White Black Red Blue Orange Yellow Green Grey Lightgrey Brown Blurred_(Slow)',
-            width=16)
-        self.bg_color.pack(expand=False, side="right")
-        self.BgSel.pack(fill="x", padx=2, pady=2, side="top")
-        
-        self.paint_ppm_frame = tk.Frame(self.Options, name="paint_ppm_frame")
-        self.paint_ppm_frame.configure(height=200, width=200)
-        
-        self.ManPaint = tk.Checkbutton(self.paint_ppm_frame, name="manpaint")
-        self.paint_mode = tk.BooleanVar()
-        self.ManPaint.configure(
-            text='Manual Paintbrush',
-            variable=self.paint_mode)
-        self.ManPaint.pack(fill="x", side="left")
-        self.ManPaint.configure(command=self.paint_mode_toggle)
-        
-        self.show_mask_checkbox = tk.Checkbutton(self.paint_ppm_frame, name="show_mask_checkbox")
-        self.show_mask_var = tk.BooleanVar()
-        self.show_mask_checkbox.configure(
-            text='Show Mask',
-            variable=self.show_mask_var,
-            command=self.update_output_image_preview)
-        self.show_mask_checkbox.pack(fill="x", side="left")
-
-        
-        self.paint_ppm_frame.pack(side="top")
-
-        
-
-        self.PostMask = tk.Checkbutton(self.Options, name="postmask")
-        self.ppm_var = tk.BooleanVar()
-        self.PostMask.configure(
-            text='Post Process Model Mask',
-            variable=self.ppm_var)
-        self.PostMask.pack()
-
-        self.soften_mask_checkbox = tk.Checkbutton(self.Options, name="soften_mask_checkbox")
-        self.soften_mask_var = tk.BooleanVar()
-        self.soften_mask_checkbox.configure(
-            text='Soften Model Mask/Paintbrush',
-            variable=self.soften_mask_var)
-        self.soften_mask_checkbox.pack()
-
-        self.enable_shadow_var = tk.BooleanVar()
-        self.EnableShadow = tk.Checkbutton(self.Options, text="Enable Drop Shadow (Slow)", variable=self.enable_shadow_var)
-        self.EnableShadow.pack(fill="x", side="top", pady=5)
-        self.EnableShadow.configure(command=self.toggle_shadow_options)
-
-        # Frame for shadow options (initially hidden)
-        self.shadow_options_frame = tk.Frame(self.Options)
-        self.shadow_options_frame.pack(fill="x", padx=5, pady=5)
-
-        self.shadow_opacity_label = tk.Label(self.shadow_options_frame, text="Opacity:")
-        self.shadow_opacity_slider = ttk.Scale(self.shadow_options_frame, from_=0, to=1, orient="horizontal")
-        self.shadow_opacity_slider.set(0.5)
-        #self.shadow_opacity_slider.configure(command=lambda event: self.update_output_image_preview())
-        self.shadow_opacity_slider.configure(command=lambda event: self.add_drop_shadow())
-
-        self.shadow_x_label = tk.Label(self.shadow_options_frame, text="X Offset:")
-        self.shadow_x_slider = ttk.Scale(
-            self.shadow_options_frame, 
-            from_=-200, 
-            to=200, 
-            orient="horizontal",
-        )
-        self.shadow_x_slider.set(50)
-        self.shadow_x_slider.configure(command=lambda event: self.add_drop_shadow())
-
-        self.shadow_y_label = tk.Label(self.shadow_options_frame, text="Y Offset:")
-        self.shadow_y_slider = ttk.Scale(
-            self.shadow_options_frame, 
-            from_=-200, 
-            to=200, 
-            orient="horizontal",
-        )
-        self.shadow_y_slider.set(50)
-        self.shadow_y_slider.configure(command=lambda event: self.add_drop_shadow())
-
-        self.shadow_radius_label = tk.Label(self.shadow_options_frame, text="Blur Radius:")
-        self.shadow_radius_slider = ttk.Scale(
-                    self.shadow_options_frame, 
-                    from_=1, 
-                    to=50, 
-                    orient="horizontal",
-                )
-        self.shadow_radius_slider.set(10)
-        self.shadow_radius_slider.configure(command=lambda event: self.add_drop_shadow())
-
-        # Initially hide the shadow options
-        #self.toggle_shadow_options()
-
-        self.Options.pack(fill="x", padx=2, pady=3, side="top")
-        self.save_png = ttk.Button(self.Controls, name="save_png")
-        self.save_png.configure(text='Save Image As....')
-        self.save_png.pack(fill="x", padx=2, pady=3, side="top")
-        self.save_png.configure(command=self.save_as_image)
-        self.save_jpeg = ttk.Button(self.Controls, name="save_jpeg")
-        self.save_jpeg.configure(text='Quick Save (JPEG white background)')
-        self.save_jpeg.pack(fill="x", padx=2, pady=3, side="top")
-        self.save_jpeg.configure(command=self.quick_save_jpeg)
-        self.HelpAbout = ttk.Button(self.Controls, name="helpabout")
-        self.HelpAbout.configure(text='Help / About')
-        self.HelpAbout.pack(fill="x", padx=2, pady=3, side="bottom")
-        self.HelpAbout.configure(command=self.show_help)
-        self.Controls.pack(fill="y", side="right")
-        self.editor_frame.pack(expand=True, fill="both", side="top")
-        self.messagerow = tk.Frame(self.main_frame, name="messagerow")
-        self.messagerow.configure(background="#ffffff", height=30)
-        self.status_label = tk.Label(self.messagerow, name="status_label")
-        self.status_label.configure(justify="left", text='Status: Idle')
-        self.status_label.pack(expand=True, fill="x", side="left")
-        self.zoom_label = tk.Label(self.messagerow, name="zoom_label")
-        self.zoom_label.configure(text='Zoom: 23%', width=20)
-        self.zoom_label.pack(side="left")
-        self.messagerow.pack(fill="x", side="right")
-        self.main_frame.pack(expand=True, fill="both", side="top")
-
-
-        self.bg_color.current(0)
-        self.bg_color.bind("<<ComboboxSelected>>", self.bg_color_select)
-        self.sam_combo.current(0)
-        self.whole_image_combo.current(0)
-        self.whole_image_button.configure(command = lambda: self.run_whole_image_model(None))
-
-        # partial string match so will also match quantised versions e.g. rmbg2_quant_q4
-        sam_models = [
-            "mobile_sam",
-            "sam_vit_b_01ec64",
-            "sam_vit_h_4b8939",
-            "sam_vit_l_0b3195",
-            ]
-
-        whole_models = [
-                "rmbg1_4",
-                "rmbg2",
-                "isnet-general-use",
-                "isnet-anime",
-                "u2net",
-                "u2net_human_seg",
-                "BiRefNet", # all birefnet variations
-        ]
-
-        matches = []
-
-        for partial_name in sam_models:
-            for filename in os.listdir('Models/'):
-                filename = filename.replace(".encoder.onnx","").replace(".decoder.onnx","")
-                if partial_name in filename:
-                    matches.append(filename)
-
-        if len(matches) == 0:
-            messagebox.showerror("No segment anything models found in Models folder", "Please see the readme on Github for model download links.")
-        else:
-            models = " ".join(list(dict.fromkeys(matches)))
-            print("SAM models found:", models)
-            self.sam_combo.configure(values=models)
-            self.sam_combo.current(0)
-
-        matches = []
-
-        for partial_name in whole_models:
-            for filename in os.listdir('Models/'):
-                if partial_name in filename and ".onnx" in filename:
-                    matches.append(filename.replace(".onnx",""))
-
-        if len(matches) == 0:
-            messagebox.showerror("No whole-image models found in Models folder","Please see the readme on Github for model download links.")
-        else:
-            models = " ".join(list(dict.fromkeys(matches)))
-            print("Whole image models found: ", models)
-            self.whole_image_combo.configure(values=models)
-            self.whole_image_combo.current(0)
-
-    def bg_color_select(self, event=None):
-        if self.bg_color.get() == "Blurred_(Slow)":
-            self.show_blur_options()
-        else:
-            self.update_output_image_preview()
-
-    def show_blur_options(self):
-        option_window = tk.Toplevel(self.root)
-        option_window.title("Blur Options")
-        option_window.geometry("300x100")
-        option_window.resizable(False, False)
-              
-        option_window.transient(self.root)
-
-        blur_radius = tk.IntVar(value=30)  # Default blur radius
-
-        tk.Label(option_window, text="Blur Radius:").pack(anchor="w", padx=10, pady=(10, 0))
-
-        blur_frame = ttk.Frame(option_window)
-        blur_frame.pack(fill="x", padx=10)
-
-        blur_slider = ttk.Scale(
-            blur_frame,
-            from_=1,
-            to=100,
-            orient=tk.HORIZONTAL,
-            variable=blur_radius,
-        )
-        blur_slider.pack(side="left", fill="x", expand=True)
-
-        blur_value_label = ttk.Label(blur_frame, text=str(blur_radius.get()), width=3)
-        blur_value_label.pack(side="left", padx=(5, 0))
-
-        def update_blur_value(event=None):
-            blur_value_label.config(text=str(blur_radius.get()))
-
-        blur_slider.configure(command=update_blur_value)
-
-        def on_ok():
-            self.blur_radius = blur_radius.get()
-            option_window.destroy()
-            self.update_output_image_preview()  # Update preview with new blur
-
-        tk.Button(option_window, text="OK", command=on_ok).pack(pady=10)
-        option_window.bind("<Return>", lambda event: on_ok())
-        option_window.wait_window()
-
-    def set_keybindings(self):
-
-        for canvas in [self.canvas, self.canvas2]:
-            canvas.bind("<ButtonPress-1>", self.start_box)
-            canvas.bind("<B1-Motion>", self.draw_box)
-            canvas.bind("<ButtonRelease-1>", self.end_box)
+        if is_touchpad_gesture and not is_ctrl:
+            # --- PANNING ---
             
-            canvas.bind("<Button-3>", self.generate_sam_mask) # Negative point
-            canvas.bind("<Button-4>", self.zoom)  # Linux scroll up
-            canvas.bind("<Button-5>", self.zoom)  # Linux scroll down
-            canvas.bind("<MouseWheel>", self.zoom) #windows scroll
-            canvas.bind("<ButtonPress-2>", self.start_pan_mouse)
-            canvas.bind("<B2-Motion>", self.pan_mouse)
-            canvas.bind("<ButtonRelease-2>", self.end_pan_mouse)
+            # Calculate movement vector
+            if not pixel_delta.isNull():
+                # Use exact pixels from trackpad
+                dx = pixel_delta.x()
+                dy = pixel_delta.y()
+            else:
+                # Fallback: Convert angle notches to pixels
+                # Standard mouse wheel step is 120. We scale it down for panning.
+                dx = angle_delta.x() / 8
+                dy = angle_delta.y() / 8
+
+            hs = self.horizontalScrollBar()
+            vs = self.verticalScrollBar()
+            
+            # Subtract delta to pan naturally
+            hs.setValue(int(hs.value() - dx))
+            vs.setValue(int(vs.value() - dy))
+            
+            # Sync Sibling
+            if self.sibling:
+                self.sibling.horizontalScrollBar().setValue(hs.value())
+                self.sibling.verticalScrollBar().setValue(vs.value())
+            
+            event.accept()
+            return
+
+        # --- ZOOMING ---
         
-        self.root.bind("<c>", lambda event: self.clear_coord_overlay())
-        self.root.bind("<d>", lambda event: self.copy_entire_image())
-        self.root.bind("<r>", lambda event: self.reset_all())
-        self.root.bind("<a>", lambda event: self.add_to_working_image())
-        self.root.bind("<s>", lambda event: self.subtract_from_working_image())
-        self.root.bind("<w>", lambda event: self.clear_working_image())
-        self.root.bind("<p>", self.paint_mode_toggle)
-        self.root.bind("<v>", lambda event: self.clear_visible_area())
-        self.root.bind("<e>", lambda event: self.edit_image())
-        self.root.bind("<u>", lambda event: self.run_whole_image_model("u2net", target_size=320))
-        self.root.bind("<i>", lambda event: self.run_whole_image_model("isnet-general-use"))
-        self.root.bind("<o>", lambda event: self.run_whole_image_model("rmbg1_4"))
-        self.root.bind("<b>", lambda event: self.run_whole_image_model("BiRefNet-general-bb_swin_v1_tiny-epoch_232"))
-        self.root.bind("<n>", lambda event: self.run_whole_image_model("BiRefNet-DIS-bb_pvt_v2_b0-epoch_590"))
-        self.root.bind("<m>", lambda event: self.run_whole_image_model("BiRefNet-general-bb_swin_v1_tiny-epoch_232_FP16"))        
-        if platform.system() == "Darwin":  
-            self.root.bind("<Command-z>", lambda event: self.undo())
-            self.root.bind("<Command-s>", lambda event: self.save_as_image())
-            self.root.bind("<Command-Shift-S>", lambda event: self.quick_save_jpeg())
-        else: 
-            self.root.bind("<Control-z>", lambda event: self.undo())
-            self.root.bind("<Control-s>", lambda event: self.save_as_image())
-            self.root.bind("<Control-Shift-S>", lambda event: self.quick_save_jpeg())
-        self.root.bind("<Left>", self.pan_left_keyboard)
-        self.root.bind("<Right>", self.pan_right_keyboard)
-        self.root.bind("<Up>", self.pan_up_keyboard)
-        self.root.bind("<Down>", self.pan_down_keyboard)
+        target_viewport_pos = event.position().toPoint()
+        target_scene_pos = self.mapToScene(target_viewport_pos)
         
-    
-    def pan_left_keyboard(self, event):
-        self.view_x = max(0, self.view_x - self.pan_step)
-        self.update_input_image_preview(Image.NEAREST)
-        self.schedule_preview_update()
-
-    def pan_right_keyboard(self, event):
-        max_view_x = max(0, self.original_image.width - self.canvas_w / self.zoom_factor)
-        self.view_x = min(max_view_x, self.view_x + self.pan_step)
-        self.update_input_image_preview(Image.NEAREST)
-        self.schedule_preview_update()
-
-    def pan_up_keyboard(self, event):
-        self.view_y = max(0, self.view_y - self.pan_step)
-        self.update_input_image_preview(Image.NEAREST)
-        self.schedule_preview_update()
-
-    def pan_down_keyboard(self, event):
-        max_view_y = max(0, self.original_image.height - self.canvas_h / self.zoom_factor)
-        self.view_y = min(max_view_y, self.view_y + self.pan_step)
-        self.update_input_image_preview(Image.NEAREST)
-        self.schedule_preview_update()
-    
-    
-    
-
-    def start_pan_mouse(self, event):
-        self.panning = True
-        self.pan_start_x = event.x
-        self.pan_start_y = event.y
-    
-    def pan_mouse(self, event):
+        delta = angle_delta.y()
+        if delta == 0: return
         
+        zoom_in = delta > 0
+        factor = DEFAULT_ZOOM_FACTOR if zoom_in else 1 / DEFAULT_ZOOM_FACTOR
+        
+        current_scale = self.transform().m11()
+        
+        view_rect = self.viewport().rect()
+        scene_rect = self.sceneRect()
+        
+        if scene_rect.width() > 0 and scene_rect.height() > 0:
+            ratio_w = view_rect.width() / scene_rect.width()
+            ratio_h = view_rect.height() / scene_rect.height()
+            min_scale = min(ratio_w, ratio_h)
+        else:
+            min_scale = 0.01 
+            
+        max_scale = 10.0 
+        
+        new_scale = current_scale * factor
+        
+        if new_scale > max_scale:
+            factor = max_scale / current_scale
+            if factor <= 1.0 and zoom_in: return 
+        elif new_scale < min_scale:
+            factor = min_scale / current_scale
+            if factor >= 1.0 and not zoom_in: return 
+        
+        self.scale(factor, factor)
+        self.update_point_scales()
+        
+        # Recenter zoom on mouse
+        new_viewport_pos = self.mapFromScene(target_scene_pos)
+        delta_viewport = new_viewport_pos - target_viewport_pos
+        
+        self.horizontalScrollBar().setValue(self.horizontalScrollBar().value() + delta_viewport.x())
+        self.verticalScrollBar().setValue(self.verticalScrollBar().value() + delta_viewport.y())
+        
+        if self.sibling:
+            self.sibling.setTransform(self.transform())
+            self.sibling.horizontalScrollBar().setValue(self.horizontalScrollBar().value())
+            self.sibling.verticalScrollBar().setValue(self.verticalScrollBar().value())
+            self.sibling.update_point_scales()
+            
+        if self.controller:
+            self.controller.update_zoom_label()
+            self.update_brush_cursor(target_scene_pos)
+            if self.sibling:
+                self.sibling.update_brush_cursor(target_scene_pos)
+        
+        event.accept()
+
+    def keyPressEvent(self, event):
+        pan_step = 20 # Pixels to move
+        if event.key() == Qt.Key.Key_Left:
+            self.horizontalScrollBar().setValue(self.horizontalScrollBar().value() - pan_step)
+        elif event.key() == Qt.Key.Key_Right:
+            self.horizontalScrollBar().setValue(self.horizontalScrollBar().value() + pan_step)
+        elif event.key() == Qt.Key.Key_Up:
+            self.verticalScrollBar().setValue(self.verticalScrollBar().value() - pan_step)
+        elif event.key() == Qt.Key.Key_Down:
+            self.verticalScrollBar().setValue(self.verticalScrollBar().value() + pan_step)
+        else:
+            super().keyPressEvent(event)
+
+    def update_brush_cursor(self, scene_pos):
+        if not self.controller or not self.controller.paint_mode:
+            if self.brush_cursor_item.isVisible():
+                self.brush_cursor_item.hide()
+            return
+        
+        if not self.brush_cursor_item.isVisible():
+            self.brush_cursor_item.show()
+            
+        zoom = self.transform().m11()
+        if zoom == 0: zoom = 1
+        scene_dia = PAINT_BRUSH_SCREEN_SIZE / zoom
+        r = scene_dia / 2
+        
+        rect_centered = QRectF(-r, -r, scene_dia, scene_dia)
+        self.brush_cursor_item.setRect(rect_centered)
+        self.brush_cursor_outer.setRect(rect_centered)
+        self.brush_cursor_item.setPos(scene_pos)
+        
+        pw = max(1.0, 1.0 / zoom)
+        self.brush_cursor_item.setPen(QPen(QColor(0,0,0), pw))
+        self.brush_cursor_outer.setPen(QPen(QColor(255,255,255), pw, Qt.PenStyle.DashLine))
+
+    def mousePressEvent(self, event):
+        scene_pos = self.mapToScene(event.pos())
+        if event.button() == Qt.MouseButton.MiddleButton:
+            self.panning = True
+            self.pan_start = event.pos()
+            self.setCursor(Qt.CursorShape.ClosedHandCursor)
+            event.accept()
+            return
+
+        if self.controller:
+            if self.controller.paint_mode:
+                if event.button() == Qt.MouseButton.LeftButton or event.button() == Qt.MouseButton.RightButton:
+                    self.is_painting = True
+                    self.last_paint_pos = scene_pos
+                    self.controller.handle_paint_start(scene_pos)
+                    event.accept()
+                    return
+            else:
+                if event.button() == Qt.MouseButton.LeftButton:
+                    self.box_start = scene_pos
+                    self.temp_box_item = QGraphicsRectItem()
+                    self.temp_box_item.setPen(QPen(Qt.GlobalColor.red, 2))
+                    self.scene().addItem(self.temp_box_item)
+                    event.accept()
+                elif event.button() == Qt.MouseButton.RightButton:
+                    self.controller.handle_sam_point(scene_pos, is_positive=False)
+                    event.accept()
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        scene_pos = self.mapToScene(event.pos())
+        
+        # --- FIX 2: Update Self AND Sibling cursors ---
+        self.update_brush_cursor(scene_pos)
+        if self.sibling:
+            self.sibling.update_brush_cursor(scene_pos)
+
         if self.panning:
-            dx = event.x - self.pan_start_x
-            dy = event.y - self.pan_start_y
-            
-            self.view_x -= dx / self.zoom_factor
-            self.view_y -= dy / self.zoom_factor
-            
-            # Ensure the view stays within the image bounds
-            self.view_x = max(0, min(self.view_x, self.original_image.width - self.canvas_w / self.zoom_factor))
-            self.view_y = max(0, min(self.view_y, self.original_image.height - self.canvas_h / self.zoom_factor))
-            
-            self.pan_start_x = event.x
-            self.pan_start_y = event.y
-            
-            if hasattr(self, "encoder_output"):
-                delattr(self, "encoder_output")
-            self.clear_coord_overlay()
-            self.model_output_mask = None
-
-            self.update_input_image_preview(Image.NEAREST)
-            
-    
-    def end_pan_mouse(self, event):
-        self.panning = False    
-        self.update_input_image_preview(Image.BOX)
-
-    def zoom(self, event):
-        
-        self.pan_step = 30 / self.zoom_factor
-
-        # Calculate mouse position in original image coordinates
-        mouse_x = self.view_x + event.x / self.zoom_factor
-        mouse_y = self.view_y + event.y / self.zoom_factor
-        
-        # Update zoom factor
-        if event.num == 4 or event.delta>0:  # Zoom in
-            self.zoom_factor *= DEFAULT_ZOOM_FACTOR
-            self.min_zoom= False
-        elif event.num == 5 or event.delta<0:  # Zoom out
-            
-            self.zoom_factor = max(self.zoom_factor / DEFAULT_ZOOM_FACTOR,
-                                   self.lowest_zoom_factor)
-            
-        # Calculate new view coordinates to keep the zoom centered around the mouse position
-        self.view_x = mouse_x - event.x / self.zoom_factor
-        self.view_y = mouse_y - event.y / self.zoom_factor
-        
-        # Ensure the view stays within the image bounds
-        self.view_x = max(0, min(self.view_x, self.original_image.width - self.canvas_w / self.zoom_factor))
-        self.view_y = max(0, min(self.view_y, self.original_image.height - self.canvas_h / self.zoom_factor))
-        
-        self.zoom_label.config(text=f"Zoom: {int(self.zoom_factor * 100)}%")
-
-
-        if self.min_zoom==False: 
-            self.update_input_image_preview(resampling_filter=Image.NEAREST)
-            if hasattr(self, "encoder_output"):
-                delattr(self, "encoder_output")
-            self.clear_coord_overlay()
-
-        if self.lowest_zoom_factor == self.zoom_factor: self.min_zoom=True
-
-        self.schedule_preview_update()
-        
-
-    def schedule_preview_update(self):
-        # Cancel any existing timer and schedule a nicer preview image
-        if self.after_id:
-            self.root.after_cancel(self.after_id)
-
-        self.after_id = self.root.after(int(self.zoom_delay * 1000), self.update_preview_delayed)
-
-    def update_preview_delayed(self):
-        self.update_input_image_preview(resampling_filter=Image.BOX)
-        self.after_id = None
-    
-    def _calculate_preview_image(self, image, resampling_filter):
-        # Calculate the size of the visible area in the original image coordinates
-        view_width = self.canvas_w / self.zoom_factor
-        view_height = self.canvas_h / self.zoom_factor
-
-        left = int(self.view_x)
-        top = int(self.view_y)
-        right = int(self.view_x + min(math.ceil(view_width), image.width))
-        bottom = int(self.view_y + min(math.ceil(view_height), image.height))
-
-        image_to_display = image.crop((left, top, right, bottom))
-
-        image_preview_w = int(image_to_display.width * self.zoom_factor)
-        image_preview_h = int(image_to_display.height * self.zoom_factor)
-
-        self.pad_x = max(0, (self.canvas_w - image_preview_w) // 2)
-        self.pad_y = max(0, (self.canvas_h - image_preview_h) // 2)
-
-        displayed_image = image_to_display.resize((image_preview_w, image_preview_h), resampling_filter)
-        return displayed_image, image_to_display
-
-    #@profile
-    def update_input_image_preview(self, resampling_filter=Image.BOX):
-
-        displayed_image, self.orig_image_crop = self._calculate_preview_image(self.original_image, resampling_filter)
-        
-        if displayed_image.mode == "RGBA":
-            image_preview_w, image_preview_h = displayed_image.size
-            
-            checkerboard = self.checkerboard.crop((0,0,image_preview_w, image_preview_h))
-            
-            displayed_image = Image.alpha_composite(checkerboard, displayed_image)
-
-        self.input_displayed = displayed_image
-        self.tk_image = ImageTk.PhotoImage(self.input_displayed)
-        
-        self.canvas.delete("all")
-        
-        self.canvas.create_image(self.pad_x, self.pad_y, anchor=tk.NW, image=self.tk_image)
-        self.update_output_image_preview(resampling_filter=resampling_filter)
-        
-    #@profile
-    def update_output_image_preview(self, resampling_filter = Image.BOX):
-
-        if self.show_mask_var.get()==False:
-            displayed_image = self.working_image
-        else:
-            displayed_image = self.working_mask.convert("RGBA")
-
-        # apply background color to full sized image because of the blur background option.
-        # otherwise it would be more performant to generate the preview first then apply a solid backgorund colour
-        if not self.bg_color.get() == "Transparent":
-            displayed_image = self.apply_background_color(displayed_image, 
-                                                    self.bg_color.get())
-            displayed_image, _ = self._calculate_preview_image(displayed_image, resampling_filter)
-
-        else:
-            # calculate the smaller preview first before adding the checkerboard
-            displayed_image, _ = self._calculate_preview_image(displayed_image, resampling_filter)
-
-            
-            image_preview_w, image_preview_h = displayed_image.size
-            
-            checkerboard = self.checkerboard.crop((0,0,image_preview_w, image_preview_h))
-            
-            displayed_image = Image.alpha_composite(checkerboard, displayed_image)
-       
-
-        self.output_displayed = displayed_image
-        self.outputpreviewtk = ImageTk.PhotoImage(self.output_displayed)
-        self.canvas2.delete("all")
-        self.canvas2.create_image(self.pad_x, self.pad_y, anchor=tk.NW, image=self.outputpreviewtk)
-        
-        # zooming out can be laggy especially with multiple scroll wheel clicks, so let tkinter show each zoom out step.
-        self.root.update_idletasks()
-
-    def add_undo_step(self):
-        self.undo_history_mask.append(self.working_mask.copy())
-        if len(self.undo_history_mask) > UNDO_STEPS:
-            self.undo_history_mask.pop(0)  
-    
-    def clear_working_image(self):
-
-
-        self.canvas2.delete(self.outputpreviewtk)
-        self.working_image = Image.new(mode="RGBA",size=self.original_image.size) 
-        self.working_mask = Image.new(mode="L",size=self.original_image.size,color=0) 
-        self.add_undo_step()
-        if hasattr(self, "cached_blurred_shadow"): delattr(self,"cached_blurred_shadow")
-        self.update_output_image_preview()
-    
-    def reset_all(self):
-        
-        
-        self.coordinates=[]
-        self.labels=[]
-
-        self.clear_coord_overlay()
-
-        if hasattr(self, "cached_blurred_shadow"):
-            delattr(self,"cached_blurred_shadow")
-
-        self.canvas.delete(self.dots)
-        if hasattr(self, 'overlay_item'):
-            self.canvas.delete(self.overlay_item)
-        
-        if hasattr(self, "encoder_output"):
-            delattr(self, "encoder_output")
-            
-        self.canvas2.delete(self.outputpreviewtk)
-        self.working_image = Image.new(mode="RGBA",size=self.original_image.size) 
-        self.working_mask = Image.new(mode="L",size=self.original_image.size,color=0) 
-        self.add_undo_step()
-
-        self.update_input_image_preview()
-        
-    def undo(self):
-        
-        if len(self.undo_history_mask) > 1:
-            self.undo_history_mask.pop() 
-            self.working_mask = self.undo_history_mask[-1].copy()  
-        
-        # this also calls cutout_working_image and update_output_preview
-        self.add_drop_shadow()
-    
-    def copy_entire_image(self):
-
-        self.working_mask = Image.new(mode="L",size=self.original_image.size, color=255) 
-        
-        self.add_undo_step()
-        # this also calls cutout_working_image and update_output_preview
-        self.add_drop_shadow()
-    
-    def cutout_working_image(self):
-        empty = Image.new("RGBA", self.original_image.size, 0)
-        self.working_image = Image.composite(self.original_image, empty, self.working_mask)
-
-    #@profile
-    def _apply_mask_modification(self, operation):
-
-        
-        if self.paint_mode.get():
-            mask = self.generate_paint_mode_mask()
-
-        else:
-            mask = self.model_output_mask
-
-        if mask == None: return
-
-        if self.ppm_var.get():
-            #Apply morphological operations to smooth edges
-            mask = mask.point(lambda p: p > 128 and 255)  # Binarize the mask
-            mask_array = np.array(mask)
-            #morphological opening. removes isolated noise and smoothes the boundaries
-            mask_array = binary_dilation(mask_array, iterations=1)
-            mask_array = binary_erosion(mask_array, iterations=1)
-            mask = Image.fromarray(mask_array.astype(np.uint8) * 255)
-            
-        
-        if self.soften_mask_var.get():
-            mask = mask.filter(ImageFilter.GaussianBlur(radius=SOFTEN_RADIUS))
-
-        paste_box = (
-            int(self.view_x),
-            int(self.view_y),
-            int(self.view_x + self.orig_image_crop.width),
-            int(self.view_y + self.orig_image_crop.height)
-        )
-
-        # Create a temporary mask that's the same size as working_mask
-        temp_fullsize_mask = Image.new("L", self.working_mask.size, 0)
-        temp_fullsize_mask.paste(mask, paste_box)
-
-        self.working_mask = operation(self.working_mask, temp_fullsize_mask)
-
-        self.add_undo_step()
-        
-        # this function also cuts out the new working image and updates preview
-        # even if no shadow is being added
-        self.add_drop_shadow()
-
-    def add_to_working_image(self):
-        self._apply_mask_modification(ImageChops.add)
-
-    def subtract_from_working_image(self):
-        self._apply_mask_modification(ImageChops.subtract)        
-
-    
-    def clear_visible_area(self):
-
-        mask_old = self.model_output_mask.copy()
-        self.model_output_mask = Image.new("L", self.orig_image_crop.size, 255)
-        self.subtract_from_working_image()
-        self.model_output_mask = mask_old
-    
-    def draw_dot(self, x, y,col):
-
-        fill = "red" if col == 1 else "blue"
-        radius = 3
-        self.dots.append(self.canvas.create_oval(x-radius, y-radius, x+radius, y+radius, fill=fill, outline='red'))
-        
-        # makes sure they are drawn above the overlay
-        for i in self.dots:
-            self.canvas.tag_raise(i)
-    
-    def clear_coord_overlay(self):
-        self.coordinates=[]
-        self.labels=[]
-        
-        for i in self.dots: self.canvas.delete(i)
-        for i in self.lines_id: 
-            self.canvas.delete(i)
-            
-            self.lines=[]
-            
-        for i in self.lines_id2: 
-            
-            self.canvas2.delete(i)
-            self.lines=[]
-        
-        if hasattr(self, 'overlay_item'):
-            self.canvas.delete(self.overlay_item)
-        
-        self.model_output_mask = Image.new("L",self.orig_image_crop.size,0)
-        #self.mask=None
-
-    def start_box(self, event):
-        self.box_start_x = event.x
-        self.box_start_y = event.y
-        self.box_rectangle = None
-        self.box_rectangle2 = None
-    
-    def draw_box(self, event):
-        
-        dx = abs(event.x - self.box_start_x)
-        dy = abs(event.y - self.box_start_y)
-
-        if self.box_rectangle:
-            self.canvas.delete(self.box_rectangle)
-        if self.box_rectangle2:
-            self.canvas2.delete(self.box_rectangle2)
-          
-        if dx < MIN_RECT_SIZE and dy < MIN_RECT_SIZE:
-            # Even though deleted from canvas it still needs setting to None
-            self.box_rectangle = None
-            return  
-        
-        self.box_rectangle = self.canvas.create_rectangle(
-            self.box_start_x, self.box_start_y, event.x, event.y, outline="red")
-        self.box_rectangle2 = self.canvas2.create_rectangle(
-            self.box_start_x, self.box_start_y, event.x, event.y, outline="red")
-    
-    def end_box(self, event):
-
-        if self.box_rectangle:
-            rect_coords = self.canvas.coords(self.box_rectangle)
-            self.canvas.delete(self.box_rectangle)
-            self.canvas2.delete(self.box_rectangle2)
-            
-            scaled_coords = [
-                (rect_coords[0] - self.pad_x) / self.zoom_factor,
-                (rect_coords[1] - self.pad_y) / self.zoom_factor,
-                (rect_coords[2] - self.pad_x)  / self.zoom_factor,
-                (rect_coords[3] - self.pad_y)  / self.zoom_factor,
-            ]
-            
-            self.box_event(scaled_coords)
-        else:
-            self.generate_sam_mask(event)
-    
-    def box_event(self, scaled_coords):
-        self._initialise_sam_model()
-        
-        self.clear_coord_overlay()
-
-        self.coordinates = [[scaled_coords[0], scaled_coords[1]], [scaled_coords[2], scaled_coords[3]]]
-        self.labels = [2, 3]  # Assuming 2 for top-left and 3 for bottom-right
-        
-        self.model_output_mask = self.sam_calculate_mask(self.orig_image_crop, self.sam_encoder, self.sam_decoder, self.coordinates, self.labels)
-        
-        self.generate_coloured_overlay()
-
-        self.coordinates = []
-        self.labels =[]
-    
-    def canvas_text_overlay(self, overlay_text):
-        rect_id = self.canvas.create_rectangle(
-            0,
-            self.canvas_h // 2 - 30,
-            self.canvas_w,
-            self.canvas_h // 2 + 30,
-            fill="#000000",  # Black
-            outline="",
-            stipple="gray50" # Add transparency
-        )
-        canvas_text_id = self.canvas.create_text(
-                self.canvas_w // 2,
-                self.canvas_h // 2,
-                text=overlay_text,
-                fill="white",
-                font=("Arial", 18, "bold"),
-                anchor="center"
-            )
-        self.canvas.update()
-        return canvas_text_id, rect_id
-
-    def load_whole_image_model(self, model_name):
-        if not hasattr(self, f"{model_name}_session"):
-            self.status_label.config(text=f"Loading {model_name}", fg=STATUS_PROCESSING)
-            self.status_label.update()
-
-            self.whole_image_button.configure(text=f"Loading {model_name}"[0:30]+"...", style="Processing.TButton")
-            self.whole_image_button.update()
-
-            canvas_text_id, rect_id = self.canvas_text_overlay(f"Loading {model_name}")
-
-
-            setattr(self, f"{model_name}_session", ort.InferenceSession(f'{MODEL_ROOT}{model_name}.onnx'))
-
-            self.whole_image_button.configure(style="TButton")
-            self.whole_image_button.update()
-
-            self.canvas.delete(canvas_text_id)
-            self.canvas.delete(rect_id)
-
-        return getattr(self, f"{model_name}_session")
-    
-    
-    
-    def run_whole_image_model(self, model_name, target_size=1024):
-        
-        if self.paint_mode.get():
+            delta = event.pos() - self.pan_start
+            self.pan_start = event.pos()
+            hs = self.horizontalScrollBar()
+            vs = self.verticalScrollBar()
+            hs.setValue(hs.value() - int(delta.x()))
+            vs.setValue(vs.value() - int(delta.y()))
+            event.accept()
             return
-        
-        if model_name == None:
-            model_name = self.whole_image_combo.get()
-            if model_name=="No Models Found":
-                messagebox.showerror("No whole image models found in Models folder","Please see the readme on Github for model download links.")
-                return
-            target_size = 320 if model_name == "u2net" else 1024
-
-        try:
-            session = self.load_whole_image_model(model_name)
-        except Exception as e:
-            print(e)
-            self.status_label.config(text=f"ERROR: {e}", fg=STATUS_PROCESSING)
-            self.root.update()
-            messagebox.showerror("Error", e)
-            self.clear_coord_overlay()
+            
+        if self.controller and self.controller.paint_mode and self.is_painting:
+            self.controller.handle_paint_move(self.last_paint_pos, scene_pos)
+            self.last_paint_pos = scene_pos
+            event.accept()
             return
-
-        self.status_label.config(text=f"Processing {model_name}", fg=STATUS_PROCESSING)
-        self.status_label.update()
-
-        canvas_text_id, rect_id = self.canvas_text_overlay(f"Processing {model_name}")
-
-        # Trim the text to 30 characters to fit the text box
-        self.whole_image_button.configure(text=f"Processing {model_name}"[0:30]+"...", style="Processing.TButton")
-        self.whole_image_button.update()
-
-        self.model_output_mask = self.generate_whole_image_model_mask(self.orig_image_crop, session, target_size)
-
-        self.whole_image_button.configure(text=f"Run whole-image model", style="TButton")
-        self.whole_image_button.update()
-
-        self.canvas.delete(rect_id)
-        self.canvas.delete(canvas_text_id)
-
-        self.generate_coloured_overlay()
-     
-        
-    def generate_whole_image_model_mask(self, image,  session, target_size=1024):
-        # adjusted from REMBG.
-        input_image = image.convert("RGB").resize((target_size,target_size), Image.BICUBIC)
-        
-
-        for i in ["isnet", "rmbg1_4"]:
-            if i in os.path.basename(session._model_path):
-                std = (1.0, 1.0, 1.0)
-                break
-            else:
-                # u2net, birefnet, rembg2
-                std = (0.229, 0.224, 0.225)
-        
-        if "isnet" in os.path.basename(session._model_path):
-            mean = (0.5,0.5,0.5)
-        else:    
-            mean = (0.485, 0.456, 0.406)
-
-        im_ary = np.array(input_image)
-        im_ary = im_ary / np.max(im_ary)
-
-        tmpImg = np.zeros((im_ary.shape[0], im_ary.shape[1], 3))
-        tmpImg[:, :, 0] = (im_ary[:, :, 0] - mean[0]) / std[0]
-        tmpImg[:, :, 1] = (im_ary[:, :, 1] - mean[1]) / std[1]
-        tmpImg[:, :, 2] = (im_ary[:, :, 2] - mean[2]) / std[2]
-
-        tmpImg = tmpImg.transpose((2, 0, 1))
-        
-        input_image =  np.expand_dims(tmpImg, 0).astype(np.float32)
-        
-        #Inference
-        input_name = session.get_inputs()[0].name
-        output_name = session.get_outputs()[0].name
-        
-        start = timer()
-        result = session.run([output_name], {input_name: input_image})
-        mask = result[0]
-        
-        
-        self.status_label.config(text=f"{round(timer()-start,2)} seconds inference", fg=STATUS_NORMAL)
-        
-        if "BiRefNet" in os.path.basename(session._model_path):
-            def sigmoid(mat):
-                # For BiRefNet
-                return 1/(1+np.exp(-mat))   
-        
-            pred = sigmoid(result[0][:, 0, :, :])
-    
-            ma = np.max(pred)
-            mi = np.min(pred)
-    
-            pred = (pred - mi) / (ma - mi)
-            pred = np.squeeze(pred)
-    
-            mask = Image.fromarray((pred * 255).astype("uint8"), mode="L")
-            mask = mask.resize(image.size, Image.Resampling.LANCZOS)
-        
-        
-        else:
             
-            # # Postprocess the mask
-            mask = mask.squeeze()  # Remove batch dimension
-            mask = Image.fromarray((mask * 255).astype(np.uint8)).resize(image.size, Image.BICUBIC)
-        
-        mask = mask.convert("L")
-        
-        return mask
-
-
-    def generate_coloured_overlay(self):
+        if self.box_start and self.temp_box_item:
+            rect = QRectF(self.box_start, scene_pos).normalized()
+            self.temp_box_item.setRect(rect)
+            event.accept()
+            return
             
-        self.overlay = ImageOps.colorize(self.orig_image_crop.convert("L"), black="blue", white="white") 
-        self.overlay.putalpha(self.model_output_mask) 
-    
-        image_preview_w = int(self.orig_image_crop.width * self.zoom_factor)
-        image_preview_h = int(self.orig_image_crop.height * self.zoom_factor)
-        
-        self.scaled_overlay = self.overlay.resize((image_preview_w, image_preview_h), Image.NEAREST)
-        
-        self.tk_overlay = ImageTk.PhotoImage(self.scaled_overlay)
-        self.overlay_item = self.canvas.create_image(self.pad_x, self.pad_y, anchor=tk.NW, image=self.tk_overlay)
+        super().mouseMoveEvent(event)
 
-        
-        
-    # PAINT MODE FUNCTIONS   
-    def generate_paint_mode_mask(self):
-        img = Image.new('L', (self.orig_image_crop.width, self.orig_image_crop.height), color='black')
-        draw = ImageDraw.Draw(img)
-        
-        
-        ellipse_radius = PAINT_BRUSH_DIAMETER/2 / self.zoom_factor
-        line_width = int(PAINT_BRUSH_DIAMETER / self.zoom_factor)
-        
-        for x1, y1, x2, y2 in self.lines:
+    def mouseReleaseEvent(self, event):
+        # Handle Panning Release
+        if self.panning and event.button() == Qt.MouseButton.MiddleButton:
+            self.panning = False
+            self.setCursor(Qt.CursorShape.ArrowCursor)
             
-            draw.line((x1, y1, x2, y2), fill='white', width=line_width)
-            draw.ellipse((x1-ellipse_radius, y1-ellipse_radius, x1+ellipse_radius, y1+ellipse_radius), fill='white')
-            draw.ellipse((x2-ellipse_radius, y2-ellipse_radius, x2+ellipse_radius, y2+ellipse_radius), fill='white')
-        
-        return img
-    
-    def paint_mode_toggle(self, event=None):
-        
-        if event:
-            self.ManPaint.toggle()
-        
-        self.root.update()
-#        
-        if self.paint_mode.get():
-            self.clear_coord_overlay()
-            
-            for canvas in [self.canvas, self.canvas2]:
-                canvas.config(cursor="circle")
-
-                canvas.bind("<ButtonPress-1>", self.paint_draw_point)
-                canvas.bind("<B1-Motion>", self.paint_draw_line)
-                canvas.bind("<ButtonRelease-1>", self.paint_reset_coords)
-        else:    
-            self.clear_coord_overlay()
-
-            for canvas in [self.canvas, self.canvas2]:
-                canvas.config(cursor="")
+        # Handle Paint Release (Left OR Right button)
+        if self.controller and self.controller.paint_mode:
+            if event.button() == Qt.MouseButton.LeftButton or event.button() == Qt.MouseButton.RightButton:
+                self.is_painting = False
+                self.last_paint_pos = None
+                self.controller.handle_paint_end()
                 
-            self.set_keybindings()
-
-#
-    def paint_draw_point(self, event):
-        x, y = event.x / self.zoom_factor, event.y / self.zoom_factor
-        brush_radius = PAINT_BRUSH_DIAMETER/2
-        self.lines_id.append(self.canvas.create_oval(event.x-brush_radius, event.y-brush_radius, 
-                                                     event.x+brush_radius, event.y+brush_radius, fill='red'))
-        self.lines_id2.append(self.canvas2.create_oval(event.x-brush_radius, event.y-brush_radius, 
-                                                       event.x+brush_radius, event.y+brush_radius, fill='red'))
-        self.lines.append(((event.x - self.pad_x) / self.zoom_factor,
-                            (event.y - self.pad_y) / self.zoom_factor,
-                            (event.x - self.pad_x) / self.zoom_factor,
-                            (event.y - self.pad_y) / self.zoom_factor,))
-    
-    def paint_draw_line(self, event):
-        
-        if self.last_x and self.last_y:
+        # Handle Box Selection Release (Left Only)
+        if self.box_start and event.button() == Qt.MouseButton.LeftButton:
+            scene_pos = self.mapToScene(event.pos())
+            rect = QRectF(self.box_start, scene_pos).normalized()
+            if self.temp_box_item:
+                self.scene().removeItem(self.temp_box_item)
+                self.temp_box_item = None
+            self.box_start = None
             
-            self.lines_id.append(self.canvas.create_line(self.last_x, self.last_y, event.x, event.y, 
-                                    width=PAINT_BRUSH_DIAMETER, capstyle=tk.ROUND, fill="red"))
-            self.lines_id2.append(self.canvas2.create_line(self.last_x, self.last_y, event.x, event.y, 
-                                    width=PAINT_BRUSH_DIAMETER, capstyle=tk.ROUND, fill="red"))
-            self.lines.append(((self.last_x - self.pad_x) / self.zoom_factor, 
-                               (self.last_y - self.pad_y)/ self.zoom_factor, 
-                               (event.x - self.pad_x) / self.zoom_factor, 
-                               (event.y - self.pad_y) / self.zoom_factor))
-        self.last_x, self.last_y = event.x, event.y
-        
-    def paint_reset_coords(self, event):
-        self.last_x, self.last_y = 0, 0
-     
-
-    def _initialise_sam_model(self):
-        if not hasattr(self, "sam_encoder") or self.sam_model != MODEL_ROOT + self.sam_model_choice.get():
-            if self.sam_model_choice.get()=="No Models Found":
-                messagebox.showerror("No Segment Anything models found in Models folder","Please see the readme on Github for model download links.")
-                self.clear_coord_overlay()
-                return
-            self.status_label.config(text="Loading model", fg=STATUS_PROCESSING)
-            self.status_label.update()
-            canvas_text_id, rect_id = self.canvas_text_overlay(f"Loading {self.sam_model_choice.get()}")
-            self.sam_model = MODEL_ROOT + self.sam_model_choice.get()
-            self.sam_encoder = ort.InferenceSession(self.sam_model + ".encoder.onnx")
-            self.sam_decoder = ort.InferenceSession(self.sam_model + ".decoder.onnx")
-            self.canvas.delete(canvas_text_id)
-            self.canvas.delete(rect_id)
-            self.clear_coord_overlay()
-            if hasattr(self, "encoder_output"): delattr(self, "encoder_output")
-        
-
-    def generate_sam_mask(self, event):
-
-        self._initialise_sam_model()
-    
-        x, y = (event.x-self.pad_x) / self.zoom_factor, (event.y-self.pad_y) / self.zoom_factor
-        self.coordinates.append([x, y])
-        
-        self.labels.append(event.num if event.num <= 1 else 0)
-        
-        # Draw dot so user can see responsiveness,
-        # as model might take a while to run.
-        self.draw_dot(event.x, event.y, event.num)
-        self.canvas.update()
-        
-        self.model_output_mask = self.sam_calculate_mask(self.orig_image_crop, 
-                                            self.sam_encoder, self.sam_decoder, self.coordinates, self.labels)
-        self.generate_coloured_overlay()
-        
-        # Repeated to ensure the dot stays on top
-        self.draw_dot(event.x, event.y, event.num)
-
-    def sam_calculate_mask(self, img, sam_encoder, sam_decoder, coordinates, labels,):
-
-        target_size = 1024
-        input_size = (684, 1024)
-        encoder_input_name = sam_encoder.get_inputs()[0].name
-     
-        img = img.convert("RGB")
-        cv_image = np.array(img)
-        original_size = cv_image.shape[:2]
-
-        scale_x = input_size[1] / cv_image.shape[1]
-        scale_y = input_size[0] / cv_image.shape[0]
-        scale = min(scale_x, scale_y)
-
-        transform_matrix = np.array(
-            [
-                [scale, 0, 0],
-                [0, scale, 0],
-                [0, 0, 1],
-            ]
-        )
-
-        cv_image = cv2.warpAffine(
-            cv_image,
-            transform_matrix[:2],
-            (input_size[1], input_size[0]),
-            flags=cv2.INTER_LINEAR,
-        )
-
-        ## encoder
-        status=""
-
-        if not hasattr(self, "encoder_output"):
-            encoder_inputs = {
-                encoder_input_name: cv_image.astype(np.float32),
-            }
-                     
-            self.status_label.config(text="Calculating Image Embedding. May take a while", fg=STATUS_PROCESSING)
-            canvas_text_id, rect_id = self.canvas_text_overlay(f"Calculating Image Embedding")
-
-            self.root.update()
-            
-            start = timer()
-            self.encoder_output = sam_encoder.run(None, encoder_inputs)
-
-            status = f"{round(timer()-start,2)} seconds to calculate embedding | "
-
-            self.status_label.config(text=status, fg=STATUS_NORMAL)
-            self.canvas.delete(canvas_text_id)
-            self.canvas.delete(rect_id)
-            
-        self.root.update()
-        
-        image_embedding = self.encoder_output[0]
-        
-        input_points = np.array(coordinates)
-        input_labels = np.array(labels)
-        
-        onnx_coord = np.concatenate([input_points, np.array([[0.0, 0.0]])], axis=0)[
-            None, :, :
-        ]
-        onnx_label = np.concatenate([input_labels, np.array([-1])], axis=0)[
-            None, :
-        ].astype(np.float32)
-        onnx_coord = self.apply_coords(onnx_coord, input_size, target_size).astype(
-            np.float32
-        )
-
-        onnx_coord = np.concatenate(
-            [
-                onnx_coord,
-                np.ones((1, onnx_coord.shape[1], 1), dtype=np.float32),
-            ],
-            axis=2,
-        )
-        onnx_coord = np.matmul(onnx_coord, transform_matrix.T)
-        onnx_coord = onnx_coord[:, :, :2].astype(np.float32)
-
-        onnx_mask_input = np.zeros((1, 1, 256, 256), dtype=np.float32)
-        onnx_has_mask_input = np.zeros(1, dtype=np.float32)
-
-        decoder_inputs = {
-            "image_embeddings": image_embedding,
-            "point_coords": onnx_coord,
-            "point_labels": onnx_label,
-            "mask_input": onnx_mask_input,
-            "has_mask_input": onnx_has_mask_input,
-            "orig_im_size": np.array(input_size, dtype=np.float32),
-        }
-        start=timer()
-        masks, a, b = sam_decoder.run(None, decoder_inputs)
-        
-        status += f"{round(timer()-start,2)} seconds inference | "
-        status += f"{round(float(a[0][0]),2)} confidence score"
-
-        self.status_label.config(text=status)
-
-        inv_transform_matrix = np.linalg.inv(transform_matrix)
-        masks = self.transform_masks(masks, original_size, inv_transform_matrix)
-
-        mask = np.zeros((masks.shape[2], masks.shape[3], 3), dtype=np.uint8)
-        for m in masks[0, :, :, :]:
-            mask[m > 0.0] = [255, 255, 255]
-
-        mask = Image.fromarray(mask).convert("L")
-
-        return mask
-    
-    def get_preprocess_shape(self, oldh: int, oldw: int, long_side_length: int):
-        """
-            Compute the output size given input size and target long side length.
-        """
-        scale = long_side_length * 1.0 / max(oldh, oldw)
-        newh, neww = oldh * scale, oldw * scale
-        neww = int(neww + 0.5)
-        newh = int(newh + 0.5)
-
-        return (newh, neww)
-
-
-    def apply_coords(self,coords: np.ndarray, original_size, target_length):
-        """
-           Expects a numpy array of length 2 in the final dimension. Requires the
-           original image size in (H, W) format.
-        """
-        old_h, old_w = original_size
-        new_h, new_w = self.get_preprocess_shape(
-            original_size[0], original_size[1], target_length
-        )
-
-        coords = deepcopy(coords).astype(float)
-        coords[..., 0] = coords[..., 0] * (new_w / old_w)
-        coords[..., 1] = coords[..., 1] * (new_h / old_h)
-
-        return coords
-
-    def transform_masks(self, masks, original_size, transform_matrix):
-        output_masks = []
-
-        for batch in range(masks.shape[0]):
-            batch_masks = []
-            for mask_id in range(masks.shape[1]):
-                mask = masks[batch, mask_id]
-                mask = cv2.warpAffine(
-                    mask,
-                    transform_matrix[:2],
-                    (original_size[1], original_size[0]),
-                    flags=cv2.INTER_LINEAR,
-                )
-                batch_masks.append(mask)
-            output_masks.append(batch_masks)
-
-        return np.array(output_masks)
-   
-      
-    def quick_save_jpeg(self):
-
-        self.status_label.config(text="", fg=STATUS_NORMAL)
-
-        file_path = self.image_paths[self.current_image_index]
-
-        dir_path = os.path.dirname(file_path)
-        file_name = os.path.basename(file_path)
-
-        file_name_nobg = os.path.splitext(file_name)[0] + "_nobg.jpg"
-
-        user_filename = asksaveasfilename(title = "Save as", 
-                                          defaultextension=".jpg", filetypes=[("jpg", ".jpg")],
-                                          
-                                          initialdir=dir_path, initialfile=file_name_nobg,
-                                          )
-
-        if len(user_filename) == 0:
-            return None
-        
-        if not user_filename.endswith(".jpg"): user_filename+=".jpg"
-        
-        self.add_drop_shadow()
-        workimg = self.working_image
-        workimg = self.apply_background_color(workimg, "White")
-        workimg = workimg.convert("RGB")
-        if self.image_exif:
-            workimg.save(user_filename, quality=95, exif=self.image_exif)
-        else:
-            workimg.save(user_filename, quality=95)
-        print("Saved to "+ user_filename)
-        self.status_label.config(text="Saved to "+ user_filename)
-        self.canvas.update()
-
-    
-    def show_save_options(self):
-        option_window = tk.Toplevel(self.root)
-        option_window.title("Save Options")
-        option_window.geometry("300x280")  
-        option_window.resizable(False, False)
-        option_window.transient(self.root)
-        
-        file_type = tk.StringVar(value=self.save_file_type)
-        quality = tk.IntVar(value=self.save_file_quality)
-        
-        def update_quality_state(event=None):
-            if file_type.get() in ["lossy_webp", "jpg"]:
-                quality_slider.config(state="normal")
-                quality_label.config(state="normal")
-                quality_value_label.config(state="normal")
+            # Logic to distinguish between a Click (Point) and a Drag (Box)
+            if rect.width() < MIN_RECT_SIZE and rect.height() < MIN_RECT_SIZE:
+                if self.controller: 
+                    # If we are in paint mode, clicks are paint dots, not SAM points
+                    if not self.controller.paint_mode:
+                        self.controller.handle_sam_point(scene_pos, is_positive=True)
             else:
-                quality_slider.config(state="disabled")
-                quality_label.config(state="disabled")
-                quality_value_label.config(state="disabled")
+                if self.controller and not self.controller.paint_mode: 
+                    self.controller.handle_sam_box(rect)
+                    
+        super().mouseReleaseEvent(event)
         
-        def update_quality_value(event=None):
-            quality_value_label.config(text=str(quality.get()))
+    def leaveEvent(self, event):
+        # --- Clean hide on both screens when leaving ---
+        if self.controller and self.controller.paint_mode:
+            self.brush_cursor_item.hide()
+            if self.sibling:
+                # Direct access to sibling item to ensure sync
+                self.sibling.brush_cursor_item.hide()
+        super().leaveEvent(event)
+
+class ImageEditorDialog(QDialog):
+    def __init__(self, parent, image):
+        super().__init__(parent)
+        self.setWindowTitle("Preprocess and Crop Image")
+        self.resize(1200, 800)
         
-        tk.Label(option_window, text="Select file type:").pack(anchor="w", padx=10, pady=(10, 5))
-        
-        radio_buttons = []
-        for text, value in [("PNG", "png"), ("Lossless WebP", "lossless_webp"), 
-                            ("Lossy WebP", "lossy_webp"), ("JPEG", "jpg")]:
-            rb = tk.Radiobutton(option_window, text=text, variable=file_type, value=value)
-            rb.pack(anchor="w", padx=20)
-            rb.bind("<ButtonRelease-1>", update_quality_state)
-            radio_buttons.append(rb)
-        
-        quality_label = tk.Label(option_window, text="Quality (for Lossy WebP and JPEG):")
-        quality_label.pack(anchor="w", padx=10, pady=(10, 0))
-        
-        quality_frame = ttk.Frame(option_window)
-        quality_frame.pack(fill="x", padx=10)
-        
-        quality_slider = ttk.Scale(quality_frame, from_=1, to=100, orient=tk.HORIZONTAL, variable=quality, command=update_quality_value)
-        quality_slider.pack(side="left", fill="x", expand=True)
-        
-        quality_value_label = ttk.Label(quality_frame, text=str(quality.get()), width=3)
-        quality_value_label.pack(side="left", padx=(5, 0))
-
-        save_mask_var = tk.BooleanVar(value=False)
-        save_mask_checkbox = tk.Checkbutton(option_window, text="Save Mask", variable=save_mask_var)
-        save_mask_checkbox.pack(anchor="w", padx=10, pady=(10, 0))
-
-         # Checkbox explanation label
-        mask_explanation_label = tk.Label(option_window, text="(appends _mask.png to filename)", font=("TkDefaultFont", 8))
-        mask_explanation_label.pack(anchor="w", padx=10)
-        
-        update_quality_state() 
-        
-        result = {"file_type": None, "quality": None}
-        
-        def on_ok():
-            result["file_type"] = file_type.get()
-            result["quality"] = quality.get()
-            self.save_file_type = file_type.get()
-            self.save_file_quality = quality.get()
-            self.save_mask = save_mask_var.get()
-            option_window.destroy()
-        
-        tk.Button(option_window, text="OK", command=on_ok).pack(pady=10)
-        option_window.bind("<Return>", lambda event: on_ok())
-        option_window.wait_window()
-        
-        return result
-    
-    def save_as_image(self):
-        options = self.show_save_options()
-        if not options["file_type"]:
-            return
-
-        file_types = {
-            "png": (".png", "PNG files"),
-            "lossless_webp": (".webp", "WebP files"),
-            "lossy_webp": (".webp", "WebP files"),
-            "jpg": (".jpg", "JPEG files")
-        }
-
-        ext, file_type = file_types[options["file_type"]]
-        
-        initial_file = os.path.splitext(os.path.basename(self.image_paths[self.current_image_index]))[0] +"_nobg" + ext
-
-        user_filename = asksaveasfilename(
-            title="Save as",
-            defaultextension=ext,
-            filetypes=[(file_type, "*" + ext)],
-            initialdir=os.path.dirname(self.image_paths[self.current_image_index]),
-            initialfile=initial_file
-        )
-
-        if not user_filename:
-            return
-
-        canvas_text_id, rect_id = self.canvas_text_overlay("Saving Image")
-
-        if not user_filename.lower().endswith(ext):
-            user_filename += ext
-        
-        # this also calls cutout_working_image and update_output_preview
-        self.add_drop_shadow()
-        workimg = self.working_image
-
-        if not self.bg_color.get() == "Transparent":
-            workimg = self.apply_background_color(workimg, self.bg_color.get())
-
-
-        save_params = {}
-        if self.image_exif:
-            save_params['exif'] = self.image_exif
-
-        if options["file_type"] == "png":
-            save_params['optimize'] = True
-        elif options["file_type"] == "lossless_webp":
-            save_params['lossless'] = True
-        elif options["file_type"] == "lossy_webp":
-            save_params['lossless'] = False
-            save_params['quality'] = options["quality"]
-        elif options["file_type"] == "jpg":
-            save_params['quality'] = options["quality"]
-            workimg = workimg.convert("RGB")
-
-        self.status_label.config(text=f"Saving to {ext.upper()[1:]}", fg=STATUS_PROCESSING)
-        self.root.update()
-
-        try:
-            workimg.save(user_filename, **save_params)
-            print(f"Saved to {user_filename}")
-            self.status_label.config(text=f"Saved to {user_filename}", fg=STATUS_NORMAL)
-        except Exception as e:
-            messagebox.showerror("Error", f"Failed to save image: {str(e)}")
-        if self.save_mask:
-            base_name, _ = os.path.splitext(user_filename)
-            mask_filename = base_name + "_mask.png"
-            self.working_mask.save(mask_filename, "PNG")
-            print(f"Mask saved to {mask_filename}")
-        self.canvas.delete(canvas_text_id)
-        self.canvas.delete(rect_id)
-        self.canvas.update()
-
-    
-
-    def update_bg_color(self):
-                
-        if self.bg_color_var.get() == 1:
-            self.bgcolor = (255, 255, 255, 255)
-
-        else:
-            self.bgcolor = None
-            
-        self.update_output_image_preview()
-
-    #@profile
-    def apply_background_color(self, img, color):
-
-        if color == "Blurred_(Slow)":
-            s=timer()
-            
-            cv_original = np.array(self.original_image)
-            cv_mask = np.array(self.working_mask)
-
-            # bg remover masks tend to be slightly smaller than object
-            # so we need to expand the mask first to catch the pixels outside of
-            # the cutout object, then inpaint using background pixels
-            kernel = np.ones((5,5), np.uint8)  
-            expanded_mask = cv2.dilate(cv_mask, kernel, iterations=1)  
-
-            # (3,3) kernel with 3 iterations: expands 3 pixels out, but more gradually
-            # (7,7) kernel with 1 iteration: expands 3 pixels out all at once, might be more blocky
-            # Both reach 3 pixels out, but the first approach gives smoother edges
-
-            filled_background = cv2.inpaint(cv_original, expanded_mask, 3, cv2.INPAINT_TELEA)
-
-            blur_radius = int(self.blur_radius)
-            if blur_radius % 2 == 0:
-                blur_radius += 1
-            blurred_background = cv2.blur(filled_background, (blur_radius, blur_radius))
-            
-            colored_image = Image.fromarray(blurred_background)
-            colored_image.paste(self.working_image, mask=self.working_mask)
-            print(f"{timer()-s} to calculate blurred background")
-        else:
-            colored_image = Image.new("RGBA", img.size, color)
-            colored_image = Image.alpha_composite(colored_image, img)
-
-        return colored_image
-    
-    def on_closing(self):
-        
-        print("closing")
-        self.root.destroy()
-        
-    def edit_image(self):
-        if messagebox.askyesno("Continue to edit the image?", 
-                               """Editing the original image will reset the progress on your output image. 
-
-Consider saving the current mask first (Save As menu). Would you like to edit the image?"""): 
-
-            editor = ImageEditor(self.root, self.original_image, self.file_count)
-            self.root.wait_window(editor.crop_window)
-            if editor.final_image:
-                self.original_image = editor.final_image
-                self.initialise_new_image()
-        
-    def load_clipboard(self):
-        
-        img = ImageGrab.grabclipboard()
-
-        if "PIL." in str(type(img)):
-            self.original_image = img
-            
-            self.initialise_new_image()
-
-            self.image_paths = [os.getcwd()+"/clipboard_image.png"]
-            self.current_image_index=0
-
-            
-
-            self.NextImg.configure(state=tk.DISABLED)
-            self.root.title("Background Remover") # Reset title
-
-            self.status_label.config(text=f"File will be saved to {os.getcwd()+"/clipboard_image.png"}")
-        else:
-            #TODO if clipboard contains a path to an image, load it
-            
-            messagebox.showerror("Error", f"No image found on clipboard.\nClipboard contains {type(img)}")
-        
-    def load_image_from_dialog(self):
-        image_path = askopenfilename(
-            title="Select an Image",
-            filetypes=pillow_formats
-        )
-        if not image_path:
-            return
-        
-        self.original_image = Image.open(image_path)
-        self.original_image = ImageOps.exif_transpose(self.original_image)
-
-        self.image_exif = self.original_image.info.get('exif')
-        print("EXIF data found" if self.image_exif else "No EXIF data found.")
-       
-        self.initialise_new_image()
-
-
-        self.image_paths = [image_path]
-        self.current_image_index = 0 # Indicates not from list
-        self.NextImg.configure(state=tk.DISABLED)
-        self.root.title("Background Remover") # Reset title
-        self.status_label.config(text=f"Loaded image: {os.path.basename(image_path)}", fg=STATUS_NORMAL)
-
-
-    def add_drop_shadow(self):
-        
-        if not self.enable_shadow_var.get():
-            self.cutout_working_image()
-            self.update_output_image_preview()  
-            return False
-
-        shadow_opacity = self.shadow_opacity_slider.get()
-        shadow_radius = int(self.shadow_radius_slider.get())
-        shadow_x = int(self.shadow_x_slider.get())
-        shadow_y = int(self.shadow_y_slider.get())
-
-        alpha = self.working_mask
-
-        # Downsample for performance
-        original_size = alpha.size
-        downsample_factor = 0.5  
-        new_size = (int(original_size[0] * downsample_factor), int(original_size[1] * downsample_factor))
-        alpha_resized = alpha.resize(new_size, Image.NEAREST)
-
-        blurred_alpha_resized = alpha_resized.filter(ImageFilter.GaussianBlur(radius=shadow_radius * downsample_factor))
-
-        blurred_alpha = blurred_alpha_resized.resize(original_size, Image.NEAREST)
-
-        shadow_opacity_alpha = blurred_alpha.point(lambda p: int(p * shadow_opacity *((shadow_radius/10)+1))) # multiply by 2 to darken more when blur radius is high
-
-        shadow_image = Image.new("RGBA", self.working_image.size, (0, 0, 0, 0))
-        shadow_image.putalpha(shadow_opacity_alpha)
-
-        shadow_with_offset = Image.new("RGBA", self.working_image.size, (0, 0, 0, 0))
-        shadow_with_offset.paste(shadow_image, (shadow_x, shadow_y), shadow_image)
-
-        self.cutout_working_image()
-
-        self.working_image = Image.alpha_composite(shadow_with_offset, self.working_image)
-
-        self.update_output_image_preview()
-
-        return True
-
-    def toggle_shadow_options(self):
-        if self.enable_shadow_var.get():
-            # Show shadow options when checkbox is checked
-            self.shadow_opacity_label.pack(fill="x")
-            self.shadow_opacity_slider.pack(fill="x")
-            self.shadow_x_label.pack(fill="x")
-            self.shadow_x_slider.pack(fill="x")
-            self.shadow_y_label.pack(fill="x")
-            self.shadow_y_slider.pack(fill="x")
-            self.shadow_radius_label.pack(fill="x")
-            self.shadow_radius_slider.pack(fill="x")
-            self.shadow_options_frame.pack(fill="x", padx=5, pady=5)
-        else:
-            self.shadow_opacity_label.pack_forget()
-            self.shadow_opacity_slider.pack_forget()
-            self.shadow_x_label.pack_forget()
-            self.shadow_x_slider.pack_forget()
-            self.shadow_y_label.pack_forget()
-            self.shadow_y_slider.pack_forget()
-            self.shadow_radius_label.pack_forget()
-            self.shadow_radius_slider.pack_forget()
-            self.shadow_options_frame.pack_forget()
-        self.add_drop_shadow()
-    
-
-    def load_next_image(self):
-        """Loads the next image from the command-line argument list."""
-        if not self.image_paths or self.current_image_index >= len(self.image_paths) - 1:
-            print("No more images in the list.")
-            self.NextImg.configure(state=tk.DISABLED) 
-            return
-
-        self.current_image_index += 1
-        next_image_path = self.image_paths[self.current_image_index]
-
-        print(f"Loading next image: {next_image_path}")
-
-        try:
-            new_image = Image.open(next_image_path)
-            self.original_image = ImageOps.exif_transpose(new_image)
-            
-            self.image_exif = self.original_image.info.get('exif')
-            print("EXIF data found" if self.image_exif else "No EXIF data found.")
-
-            self.initialise_new_image()
-
-            self.file_count = f' - Image {self.current_image_index + 1} of {len(self.image_paths)}'
-            self.root.title("Background Remover" + self.file_count)
-
-            if self.current_image_index >= len(self.image_paths) - 1:
-                self.NextImg.configure(state=tk.DISABLED)
-
-            self.status_label.config(text=f"Loaded image {self.current_image_index + 1} of {len(self.image_paths)}", fg=STATUS_NORMAL)
-
-        except Exception as e:
-            messagebox.showerror("Error Loading Image", f"Could not load image:\n{next_image_path}\n\nError: {e}")
-
-            self.status_label.config(text=f"Error loading {next_image_path}", fg=STATUS_PROCESSING)
-
-
-
-
-    def initialise_new_image(self):
-        
-        self.canvas2.delete("all")
-        
-        self.setup_image_display()
-        self.update_input_image_preview()
-        self.clear_coord_overlay()
-        self.reset_all()
-
-    def load_mask(self):
-        initial_file = os.path.splitext(os.path.basename(self.image_paths[self.current_image_index]))[0] + "_mask.png"
-        mask_path = askopenfilename(
-            title="Select a Mask",
-            filetypes=[("PNG files", "*.png")],
-            initialdir=os.path.dirname(self.image_paths[self.current_image_index]),
-            initialfile=initial_file
-        )
-        if not mask_path:
-            return
-
-        try:
-            mask_image = Image.open(mask_path)
-            if mask_image.mode != "L":
-                messagebox.showerror("Error", "The selected file is not a grayscale image.")
-                return
-
-            if mask_image.size != self.original_image.size:
-                messagebox.showerror("Error", "The mask dimensions do not match the original image dimensions.")
-                return
-
-            self.working_mask = mask_image
-            self.add_undo_step()
-            self.add_drop_shadow()
-
-            print(f"Mask loaded from {mask_path}")
-            self.status_label.config(text=f"Mask loaded from {mask_path}", fg=STATUS_NORMAL)
-
-        except Exception as e:
-            messagebox.showerror("Error", f"Failed to load mask: {str(e)}")
-
-        self.canvas.update()
-        
-    def show_help(self):
-        message = """
-            Interactive Background Remover by Sean (Prickly Gorse)
-
-A user interface for removing backgrounds using interactive models (Segment Anything) and Whole Image Models (u2net, disnet, rmbg, BirefNet)
-
-Load your image, and either run one of the whole image models (u2net <u>, disnet <i>, rmbg <o>, BiRefNet) or click/draw a box to run Segment Anything. Left click is a positive point, right is a negative (avoid this area) point.
-
-The original image is displayed on the left, the current image you are working on is displayed to the right.
-
-Type A to add the current mask to your image, S to subtract.
-
-Scroll wheel to zoom, and middle click to pan around the image. The models will be applied only to the visible zoomed image, which enables much higher detail and working in finer detail than just running the models on the whole image
-
-Use paintbrush mode <p> to draw areas that you want to add/remove to the image without using a model.
-
-Post process mask removes the partial transparency from outputs of whole-image models. 
-
-Includes a built in image editor and cropper. Using this will reset your current working image.
-
-Usage:
-
-Left Mouse click: Add coordinate point for segment anything models
-Right Mouse click: Add negative coordinate (area for the model to avoid)
-Left click and drag: Draw box for segment anything models
-
-Hotkeys:
-
-<a> Add current mask to working image
-<s> Subtract current mask from working image
-<Ctrl+z> Undo last action
-<p> Manual paintbrush mode
-<c> Clear current mask (and coordinate points)
-<w> Reset the current working image
-<r> Reset everything (image, masks, coordinates)
-<v> Clear the visible area on the working image
-<Ctrl+S> Save as....
-<Ctrl+Shift+S> Quick save JPG with white background
-
-Whole image models (if downloaded to Models folder)
-<u> u2net
-<i> disnet
-<o> rmbg1.4
-<b> BiRefNet-general-bb_swin_v1_tiny-epoch_232
-
-            """
-        
-        info_window = tk.Toplevel(self.root)
-        info_window.title("Help/About")
-        info_window.geometry("800x800")
-        
-        frame = tk.Frame(info_window)
-        frame.pack(expand=True, fill=tk.BOTH, padx=10, pady=10)
-        
-        text_widget = tk.Text(frame, wrap=tk.WORD)
-        text_widget.pack(side=tk.LEFT, expand=True, fill=tk.BOTH)
-
-        scrollbar = tk.Scrollbar(frame, command=text_widget.yview)
-        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-
-        text_widget.config(yscrollcommand=scrollbar.set)
-
-        text_widget.insert(tk.END, message)
-        text_widget.config(state=tk.DISABLED)
-        
-        close_button = tk.Button(info_window, text="Close", command=info_window.destroy)
-        close_button.pack(pady=10)
-
-
-class ImageEditor:
-    def __init__(self, parent, original_image, file_count):
-
-        self.parent = parent
-        self.file_count = file_count
-        self.original_image = original_image
-        self.rotated_original = original_image
+        # --- Data Setup ---
+        self.original_image = image
+        self.final_image = None
         self.total_rotation = 0
-        self.build_crop_gui()
-
         
-    def build_crop_gui(self):
-   
-        self.crop_window = tk.Toplevel()
-        self.crop_window.title("Preprocess and Crop Image"+self.file_count)
-        
-        # Force it on top
-        self.crop_window.lift()
-        self.crop_window.focus_force()
-        self.crop_window.grab_set()
-        self.crop_window.grab_release()
-        
-        self.original_image = self.original_image
-        self.rotated_original = self.original_image
-        
-
-        # Get the usable screen dimensions
-        m = [m for m in get_monitors() if m.is_primary][0]
-
-        screen_width = (m.width -350)
-        screen_height = m.height-100 
-        # subtract 100 because maximising window doesnt work until __init__ finished,
-        # so we have to start application using full screen dimensions
-        
-        if platform.system() == "Windows":
-            self.crop_window.state('zoomed')
-        elif platform.system() == "Darwin":
-            self.crop_window.state('zoomed') #unsure if works
+        # Create a small preview for real-time editing (Max 1000px dimension)
+        w, h = image.size
+        scale = min(1.0, 1000.0 / max(w, h))
+        if scale < 1.0:
+            self.preview_base = image.resize((int(w * scale), int(h * scale)), Image.Resampling.BILINEAR)
         else:
-            self.crop_window.attributes('-zoomed', True)
-
-                
-        self.image_ratio = min(screen_width / self.original_image.width, screen_height / self.original_image.height)
-        self.scaled_width = int(self.original_image.width * self.image_ratio)
-        self.scaled_height = int(self.original_image.height * self.image_ratio)
+            self.preview_base = image.copy()
+            
+        # The current state of the preview
+        self.display_image = self.preview_base
         
-        self.display_image = self.original_image.resize((self.scaled_width, self.scaled_height))
-        self.crop_window_tk_image = ImageTk.PhotoImage(self.display_image)
+        # --- UI Setup ---
+        self.crop_start = None
+        self.crop_rect_item = None
         
-
-        self.canvas_crop_window = Canvas(self.crop_window, width=screen_width, height=screen_height)
-        self.canvas_crop_window.pack(side=tk.LEFT)
+        layout = QHBoxLayout(self)
+        self.scene = QGraphicsScene()
+        self.view = QGraphicsView(self.scene)
+        self.view.setDragMode(QGraphicsView.DragMode.NoDrag)
+        self.view.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.view.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.view.setBackgroundBrush(QBrush(QColor(40, 40, 40)))
         
-        #self.canvas_crop_window.create_image(screen_width/2, screen_height/2, image=self.crop_window_tk_image)
+        self.pixmap_item = QGraphicsPixmapItem()
+        self.scene.addItem(self.pixmap_item)
+        layout.addWidget(self.view, stretch=2)
         
+        self.view.viewport().installEventFilter(self)
         
-        self.slider_frame = tk.Frame(self.crop_window, width=300)
-        self.slider_frame.pack(side=tk.LEFT)
-        
-        
-        self.croplabel = ttk.Label(self.slider_frame)
-        self.croplabel.configure(text='Click and drag to draw a crop box')
-        self.croplabel.pack(pady=5)
-        
+        # --- Controls ---
+        controls_layout = QVBoxLayout()
+        scroll = QScrollArea()
+        scroll_widget = QWidget()
+        self.sliders_layout = QVBoxLayout(scroll_widget)
         
         self.sliders = {}
-        slider_params = {
-            'highlight': (0.1, 2.0, 1.0),
-            'midtone': (0.1, 2.0, 1.0),
-            'shadow': (0.1, 3.0, 1.0),
-            'tone_curve': (0.01, 0.5, 0.1),
-            'brightness': (0.1, 2.0, 1.0),
-            'contrast': (0.1, 2.0, 1.0),
-            'saturation': (0.1, 2.0, 1.0),
-            'white_balance': (2000, 10000, 6500),
-            'unsharp_radius': (0.1, 50, 1.0),
-            'unsharp_amount': (0, 500, 0),
-            'unsharp_threshold': (0, 255, 0)
+        self.slider_params = {
+            'highlight': (0.1, 2.0, 1.0), 'midtone': (0.1, 2.0, 1.0), 'shadow': (0.1, 3.0, 1.0),
+            'tone_curve': (0.01, 0.5, 0.1), 'brightness': (0.1, 2.0, 1.0), 'contrast': (0.1, 2.0, 1.0),
+            'saturation': (0.1, 2.0, 1.0), 'white_balance': (2000, 10000, 6500), 'unsharp_radius': (0.1, 50, 1.0),
+            'unsharp_amount': (0, 500, 0), 'unsharp_threshold': (0, 255, 0)
         }
         
-        
-        
-        label_width = 15
+        # Update timer to prevent lag while dragging
+        self.update_timer = QTimer()
+        self.update_timer.setSingleShot(True)
+        self.update_timer.setInterval(50) # 50ms 
+        self.update_timer.timeout.connect(self.update_preview)
 
-        for param, (min_val, max_val, default) in slider_params.items():
-            frame = tk.Frame(self.slider_frame)
-            frame.pack(fill=tk.X, pady=2)  
-
-            label = ttk.Label(frame, text=param.replace("_"," ").capitalize(), width=label_width, anchor="w")
-            label.pack(side=tk.LEFT, padx=(5, 10))  #
-
-            # Slider widget
-            self.sliders[param] = tk.Scale(
-                frame,
-                from_=min_val,
-                to=max_val,
-                resolution=0.01,
-                orient=tk.HORIZONTAL,
-                length=300,   
-                width=20
-            )
-            self.sliders[param].set(default)
-            self.sliders[param].pack(side=tk.LEFT) 
-                
-        # Add the command after all sliders are created and set
-        # to avoid the function being called
-        for slider in self.sliders.values():
-            slider.config(command=self.update_crop_preview)
+        for param, (min_v, max_v, default) in self.slider_params.items():
+            lbl = QLabel(param.replace("_", " ").capitalize())
+            slider = QSlider(Qt.Orientation.Horizontal)
+            slider.setRange(0, 100)
+            val_norm = (default - min_v) / (max_v - min_v)
+            slider.setValue(int(val_norm * 100))
             
-        self.rotation_frame = Frame(self.slider_frame)
-        self.rotation_frame.pack(pady=10)
-           
-        self.rotate_left_button = Button(self.rotation_frame, text="Rotate Left", command=lambda: self.rotate_image(90))
-        self.rotate_left_button.pack(side=tk.LEFT, padx=5)
-           
-        self.rotate_right_button = Button(self.rotation_frame, text="Rotate Right", command=lambda: self.rotate_image(-90))
-        self.rotate_right_button.pack(side=tk.LEFT, padx=5)
+            # Connect to timer instead of function directly
+            slider.valueChanged.connect(self.update_timer.start)
+            
+            self.sliders_layout.addWidget(lbl)
+            self.sliders_layout.addWidget(slider)
+            self.sliders[param] = {'widget': slider, 'min': min_v, 'max': max_v}
+            
+        scroll.setWidget(scroll_widget)
+        scroll.setWidgetResizable(True)
+        controls_layout.addWidget(scroll)
 
-        self.reset_frame = Frame(self.slider_frame)
-        self.reset_frame.pack(pady=10)
-        self.reset_button = Button(self.reset_frame, text="Reset to Original", command=self.reset_sliders)
-        self.reset_button.pack(side=tk.LEFT, padx=5)
-        self.common_adjustments = Button(self.reset_frame, text="Use Preset", command=self.common_slider_adjustment)
-        self.common_adjustments.pack(side=tk.LEFT, padx=5)
+        rot_layout = QHBoxLayout()
+        btn_rot_l = QPushButton("Rotate Left"); btn_rot_l.clicked.connect(lambda: self.rotate_image(90))
+        btn_rot_r = QPushButton("Rotate Right"); btn_rot_r.clicked.connect(lambda: self.rotate_image(-90))
+        rot_layout.addWidget(btn_rot_l); rot_layout.addWidget(btn_rot_r)
+        controls_layout.addLayout(rot_layout)
         
+        btn_reset = QPushButton("Reset to Original"); btn_reset.clicked.connect(self.reset_sliders)
+        controls_layout.addWidget(btn_reset)
         
-        self.crop_button = tk.Button(self.slider_frame, text="Continue with this image", command=self.crop_image)
-        self.crop_button.pack(fill=tk.X, pady=10)
+        crop_btn = QPushButton("Apply to Full Image & Save"); crop_btn.clicked.connect(self.apply_full_res_and_accept)
+        controls_layout.addWidget(crop_btn)
+        layout.addLayout(controls_layout, stretch=1)
+        
+        self.update_preview()
 
-         
-        self.start_x = None
-        self.start_y = None
-        self.end_x = None
-        self.end_y = None
-        self.rectangle_crop_window = None
-        
-        self.canvas_crop_window.bind("<ButtonPress-1>", self.crop_canvas_on_press)
-        self.canvas_crop_window.bind("<B1-Motion>", self.crop_canvas_on_drag)
-        self.canvas_crop_window.bind("<ButtonRelease-1>", self.crop_canvas_on_release)
-        
-        self.crop_window.bind("<Return>", lambda x: self.crop_image())
+    def showEvent(self, event):
+        super().showEvent(event)
+        if self.pixmap_item.pixmap():
+            self.view.fitInView(self.pixmap_item, Qt.AspectRatioMode.KeepAspectRatio)
 
-        self.crop_window.update_idletasks()
-        self.crop_window.update()
-        self.update_crop_preview()
+    def eventFilter(self, source, event):
+        if source == self.view.viewport():
+            if event.type() == event.Type.MouseButtonPress and event.button() == Qt.MouseButton.LeftButton:
+                self.crop_start = self.view.mapToScene(event.pos())
+                if self.crop_rect_item: self.scene.removeItem(self.crop_rect_item)
+                self.crop_rect_item = QGraphicsRectItem()
+                self.crop_rect_item.setPen(QPen(Qt.GlobalColor.red, 2))
+                self.scene.addItem(self.crop_rect_item)
+                return True
+            elif event.type() == event.Type.MouseMove and self.crop_start:
+                curr = self.view.mapToScene(event.pos())
+                rect = QRectF(self.crop_start, curr).normalized()
+                self.crop_rect_item.setRect(rect)
+                return True
+            elif event.type() == event.Type.MouseButtonRelease and self.crop_start:
+                self.crop_start = None
+                return True
+        return super().eventFilter(source, event)
+
+    def get_val(self, param):
+        s = self.sliders[param]
+        return s['min'] + (s['widget'].value() / 100.0 * (s['max'] - s['min']))
     
     def reset_sliders(self):
-         default_values = {
-             'highlight': 1.0,
-             'midtone': 1.0,
-             'shadow': 1.0,
-             'brightness': 1.0,
-             'contrast': 1.0,
-             'saturation': 1.0,
-             'tone_curve': 0.1,
-             'white_balance': 6500,
-             'unsharp_radius': 1.0,
-             'unsharp_amount': 0,
-             'unsharp_threshold': 0
-         }
-         for param, value in default_values.items():
-             self.sliders[param].set(value)
-         self.rotate_image(-self.total_rotation)
-    
-    def common_slider_adjustment(self):
-         default_values = {
-             'highlight': 0.75,
-             'midtone': 0.85,
-             'shadow': 1.5,
-             'brightness': 1.50,
-             'contrast': 1.25,
-             'saturation': 1.07,
-             'tone_curve': 0.1,
-             'white_balance': 7000,
-             'unsharp_radius': 1.0,
-             'unsharp_amount': 1.0,
-             'unsharp_threshold': 3
-         }
-         for param, value in default_values.items():
-             self.sliders[param].set(value)     
-
-    
-    def update_crop_preview(self, *args):
-        params = {param: self.sliders[param].get() for param in self.sliders}
-        img_adjusted = self.adjust_image_levels(self.display_image, **params)
-        
-        self.tk_image = ImageTk.PhotoImage(img_adjusted)
-        self.canvas_crop_window.delete("all")  # Clear the canvas
-        self.canvas_crop_window.create_image( self.canvas_crop_window.winfo_width()/2,
-                                             self.canvas_crop_window.winfo_height()/2,
-                                             image=self.tk_image)
-        
-        self.canvas_crop_window.create_rectangle(
-            self.canvas_crop_window.winfo_width()/2 - img_adjusted.width/2,
-            self.canvas_crop_window.winfo_height()/2 - img_adjusted.height/2,
-            self.canvas_crop_window.winfo_width()/2 + img_adjusted.width/2 -1,
-            self.canvas_crop_window.winfo_height()/2 + img_adjusted.height/2 -1,
-            outline="black"
-        )
-
-        
-        if self.rectangle_crop_window:
-            self.rectangle_crop_window = self.canvas_crop_window.create_rectangle(
-                self.start_x, self.start_y, self.end_x, self.end_y, outline="red")
-     
-
-
-
-    def crop_canvas_on_press(self, event):
-          self.start_x, self.start_y = event.x, event.y
-          
-          if self.rectangle_crop_window:
-              self.canvas_crop_window.delete(self.rectangle_crop_window)
-          self.rectangle_crop_window = self.canvas_crop_window.create_rectangle(self.start_x, self.start_y, self.start_x, self.start_y, outline="red")
-          
-    def crop_canvas_on_drag(self, event):
-          # Update the size of the rectangle as the mouse is dragged
-          cur_x, cur_y = event.x, event.y
-          self.canvas_crop_window.coords(self.rectangle_crop_window, self.start_x, self.start_y, cur_x, cur_y)
-          
-    def crop_canvas_on_release(self, event):
-          self.end_x, self.end_y = event.x, event.y
-
-    def crop_image(self):
-        if self.rectangle_crop_window and self.end_x is not None and self.end_y is not None:
-            # Convert the coordinates back to the original image dimensions
-            x1,y1,x2,y2 = self.canvas_crop_window.coords(self.rectangle_crop_window)
-            
-            x1 = x1 - (self.canvas_crop_window.winfo_width()/2) + self.display_image.width/2
-            x2 = x2 - (self.canvas_crop_window.winfo_width()/2) + self.display_image.width/2
-            y1 = y1 - (self.canvas_crop_window.winfo_height()/2) + self.display_image.height/2
-            y2 = y2 - (self.canvas_crop_window.winfo_height()/2) + self.display_image.height/2
-            
-            orig_start_x = int(x1 / self.image_ratio)
-            orig_start_y = int(y1 / self.image_ratio)
-            orig_end_x = int(x2 / self.image_ratio)
-            orig_end_y = int(y2 / self.image_ratio)
-            
-            # Crop the rotated image
-            self.original_image = self.rotated_original.crop((orig_start_x, orig_start_y, orig_end_x, orig_end_y))
-        else:
-            # If no crop box, use the entire rotated image
-            self.original_image = self.rotated_original
-    
-        # Apply color adjustments
-        params = {param: self.sliders[param].get() for param in self.sliders}
-        self.final_image = self.adjust_image_levels(self.original_image, **params)
-
-        self.crop_window.destroy()
-
+        self.update_timer.stop()
+        for param, (min_v, max_v, default) in self.slider_params.items():
+            val_norm = (default - min_v) / (max_v - min_v)
+            self.sliders[param]['widget'].setValue(int(val_norm * 100))
+        self.total_rotation = 0
+        self.update_preview()
 
     def rotate_image(self, angle):
-        self.canvas_crop_window.delete("all")
-        
         self.total_rotation = (self.total_rotation + angle) % 360
-        
-        self.rotated_original = self.original_image.rotate(self.total_rotation, expand=True)
-        
-        # Resize the rotated image to fit the screen
-        screen_width = self.crop_window.winfo_width() - 350
-        screen_height = self.crop_window.winfo_height() - 100
-        self.image_ratio = min(screen_width / self.rotated_original.width, screen_height / self.rotated_original.height)
-        self.scaled_width = int(self.rotated_original.width * self.image_ratio)
-        self.scaled_height = int(self.rotated_original.height * self.image_ratio)
-        
-        self.display_image = self.rotated_original.resize((self.scaled_width, self.scaled_height))
-        
-        # Remove any existing crop box
-        self.start_x = None
-        self.start_y = None
-        self.end_x = None
-        self.end_y = None
-        self.rectangle_crop_window = None
-        
-        self.update_crop_preview()
+        # We don't rotate the PIL images here to avoid quality loss. 
+        # We just store the rotation and apply it during the pipeline.
+        self.update_preview()
 
-    def adjust_image_levels(self, image, highlight, midtone, shadow, brightness, contrast, 
-                            saturation, tone_curve, white_balance,
-                            unsharp_radius, unsharp_amount, unsharp_threshold):
-
-        img_array = np.array(image)
-
-
-        if white_balance != 6500:
-            img_array = self.adjust_white_balance(img_array, white_balance)
-
-        # Combine all masks into a single operation
+    def process_image_pipeline(self, input_img):
+        """Applies all current filters to the given input_img"""
+        
+        # 1. Rotate
+        if self.total_rotation != 0:
+            img = input_img.rotate(self.total_rotation, expand=True)
+        else:
+            img = input_img
+            
+        img_array = np.array(img)
+        
+        # 2. White Balance
+        wb = self.get_val('white_balance')
+        if wb != 6500: img_array = self.adjust_white_balance(img_array, wb)
+        
+        # 3. Tone Curves (LUT)
         x = np.arange(256, dtype=np.float32)
-        highlight_mask = self.smooth_transition(x, 192, tone_curve)
-        shadow_mask = 1 - self.smooth_transition(x, 64, tone_curve)
-        midtone_mask = 1 - highlight_mask - shadow_mask
-    
-        # Create a lookup table
-        lut = (x * highlight * highlight_mask +
-            x * midtone * midtone_mask +
-            x * shadow * shadow_mask).clip(0, 255).astype(np.uint8)
-    
-
-        adjusted = lut[img_array]
-
-    
-        adjusted_image = Image.fromarray(adjusted)
+        tone = self.get_val('tone_curve')
+        hl_mask = expit((x - 192) / (255 * tone))
+        sh_mask = 1 - expit((x - 64) / (255 * tone))
+        mt_mask = 1 - hl_mask - sh_mask
+        lut = (x * self.get_val('highlight') * hl_mask + x * self.get_val('midtone') * mt_mask + x * self.get_val('shadow') * sh_mask).clip(0, 255).astype(np.uint8)
         
-        if brightness != 1.0:
-            enhancer = ImageEnhance.Brightness(adjusted_image)
-            adjusted_image = enhancer.enhance(brightness)
-        if contrast != 1.0:
-            enhancer = ImageEnhance.Contrast(adjusted_image)
-            adjusted_image = enhancer.enhance(contrast)
-        if saturation != 1.0:
-            enhancer = ImageEnhance.Color(adjusted_image)
-            adjusted_image = enhancer.enhance(saturation)
-                
-        if unsharp_amount>0:
-            adjusted_image=adjusted_image.filter(ImageFilter.UnsharpMask(radius = int(unsharp_radius), percent = int(unsharp_amount), threshold = int(unsharp_threshold))) 
-     
-        return adjusted_image
+        if len(img_array.shape) == 3:
+            # If RGBA, only apply to RGB
+            if img_array.shape[2] >= 3:
+                img_array[:,:,:3] = lut[img_array[:,:,:3]]
+        else: 
+            img_array = lut[img_array]
+        
+        img = Image.fromarray(img_array)
+        
+        # Pillow Enhancements
+        if self.get_val('brightness') != 1.0: img = ImageEnhance.Brightness(img).enhance(self.get_val('brightness'))
+        if self.get_val('contrast') != 1.0: img = ImageEnhance.Contrast(img).enhance(self.get_val('contrast'))
+        if self.get_val('saturation') != 1.0: img = ImageEnhance.Color(img).enhance(self.get_val('saturation'))
+        
+        # Unsharp Mask
+        amt = self.get_val('unsharp_amount')
+        if amt > 0: 
+            img = img.filter(ImageFilter.UnsharpMask(
+                radius=int(self.get_val('unsharp_radius')), 
+                percent=int(amt), 
+                threshold=int(self.get_val('unsharp_threshold'))
+            ))
+            
+        return img
 
-    
-    def adjust_white_balance(self, img_array, temperature):
-        rgb = self.kelvin_to_rgb(temperature)
-        r_factor, g_factor, b_factor = [x / max(rgb) for x in rgb]
-    
-        #img_array = np.array(image)
-    
-        avg_brightness = np.mean(img_array[:,:,:3])
-    
-        img_array[:,:,0] = np.clip(img_array[:,:,0] * r_factor, 0, 255)
-        img_array[:,:,1] = np.clip(img_array[:,:,1] * g_factor, 0, 255)
-        img_array[:,:,2] = np.clip(img_array[:,:,2] * b_factor, 0, 255)
-    
-        new_avg_brightness = np.mean(img_array[:,:,:3])
-    
-        brightness_factor = avg_brightness / new_avg_brightness
-        img_array[:,:,:3] = np.clip(img_array[:,:,:3] * brightness_factor, 0, 255)
-    
-        #adjusted = Image.fromarray(img_array.astype('uint8'), mode=image.mode)
-    
+    def update_preview(self):
+        self.display_image = self.process_image_pipeline(self.preview_base)
+        
+        # Update View
+        self.pixmap_item.setPixmap(pil2pixmap(self.display_image))
+        self.view.setSceneRect(self.pixmap_item.boundingRect())
+        # Only fit in view if it's the first load or rotation changed significantly
+        if not self.view.sceneRect().isEmpty():
+             self.view.fitInView(self.pixmap_item, Qt.AspectRatioMode.KeepAspectRatio)
+
+    def adjust_white_balance(self, img_array, temp):
+        t = temp / 100
+        if t <= 66:
+            r, g, b = 255, 99.47 * math.log(t) - 161.1, (0 if t<=19 else 138.5 * math.log(t-10) - 305)
+        else:
+            r, g, b = 329.7 * math.pow(t-60, -0.133), 288.1 * math.pow(t-60, -0.075), 255
+        
+        r, g, b = max(0, min(255, r)), max(0, min(255, g)), max(0, min(255, b))
+        
+        # Using numpy vectorized operations for speed
+        if img_array.shape[2] >= 3:
+            rgb = img_array[:,:,:3].astype(float)
+            avg = np.mean(rgb)
+            
+            # Avoid division by zero
+            r_scale = 255/max(1, r)
+            g_scale = 255/max(1, g)
+            b_scale = 255/max(1, b)
+            
+            rgb[:,:,0] *= r_scale
+            rgb[:,:,1] *= g_scale
+            rgb[:,:,2] *= b_scale
+            
+            current_avg = np.mean(rgb)
+            if current_avg > 0:
+                rgb *= (avg / current_avg)
+                
+            img_array[:,:,:3] = np.clip(rgb, 0, 255).astype(np.uint8)
+            
         return img_array
 
+    def apply_full_res_and_accept(self):
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        try:
+            full_res_processed = self.process_image_pipeline(self.original_image)
+            
+            if self.crop_rect_item:
+                rect = self.crop_rect_item.rect().normalized()
+                
+                # We need to map the crop rectangle from the Preview scale to the Full Res scale
+                preview_w = self.pixmap_item.pixmap().width()
+                preview_h = self.pixmap_item.pixmap().height()
+                full_w = full_res_processed.width
+                full_h = full_res_processed.height
+                
+                scale_x = full_w / preview_w
+                scale_y = full_h / preview_h
+                
+                x = int(rect.x() * scale_x)
+                y = int(rect.y() * scale_y)
+                w = int(rect.width() * scale_x)
+                h = int(rect.height() * scale_y)
+                
+                if w > 0 and h > 0:
+                    self.final_image = full_res_processed.crop((x, y, x+w, y+h))
+                else:
+                    self.final_image = full_res_processed
+            else: 
+                self.final_image = full_res_processed
+                
+            self.accept()
+        finally:
+            QApplication.restoreOverrideCursor()
 
-    def kelvin_to_rgb(self, kelvin):
-        temp = kelvin / 100
+# --- Main Application ---
+
+class BackgroundRemoverGUI(QMainWindow):
+    def __init__(self, image_paths):
+        super().__init__()
+        self.image_paths = image_paths if image_paths else []
+        self.current_image_index = 0
+        self.setWindowTitle("Interactive Image Background Remover")
+        self.resize(1600, 900)
+
+        self.coordinates = []
+        self.labels = []
+        self.undo_history = []
+        self.paint_mode = False
+        self.sam_model_path = None
+        self.image_exif = None
+        self.blur_radius = 30
         
-        if temp <= 66:
-            red = 255
-            green = temp
-            green = 99.4708025861 * math.log(green) - 161.1195681661
-            if temp <= 19:
-                blue = 0
-            else:
-                blue = temp - 10
-                blue = 138.5177312231 * math.log(blue) - 305.0447927307
-        else:
-            red = temp - 60
-            red = 329.698727446 * math.pow(red, -0.1332047592)
-            green = temp - 60
-            green = 288.1221695283 * math.pow(green, -0.0755148492)
-            blue = 255
+        self.original_image = None
+        self.working_image = None
+        self.working_mask = None
+        self.model_output_mask = None
 
-        return (max(0, min(255, red)),
-                max(0, min(255, green)),
-                max(0, min(255, blue)))
-     
-     
-    def smooth_transition(self, x, center, steepness):
-         return expit((x - center) / (255 * steepness))
+        self.init_ui()
+        self.setup_keybindings()
+
+        self.shadow_timer = QTimer()
+        self.shadow_timer.setSingleShot(True)
+        self.shadow_timer.setInterval(50) # Wait 50ms after last movement
+        self.shadow_timer.timeout.connect(self.update_output_preview)
+
+        # Let the UI build before loading image, so the correct display zoom is shown
+        # 30ms seems long enough on my PC
+        if self.image_paths:
+            QTimer.singleShot(30, lambda: self.load_image(self.image_paths[0]))
+        else:
+            self.load_blank_image()
+
+    def init_ui(self):
+        main = QWidget(); self.setCentralWidget(main)
+        layout = QHBoxLayout(main)
+
+        # --- Sidebar ---
+        sidebar = QFrame(); sidebar.setFixedWidth(300)
+        sl = QVBoxLayout(sidebar)
+        
+        nav = QHBoxLayout()
+        btn_o = QPushButton("Open"); btn_o.clicked.connect(self.load_image_dialog)
+        btn_c = QPushButton("Clipboard"); btn_c.clicked.connect(self.load_clipboard)
+        self.btn_next = QPushButton("Next >")
+        self.btn_next.clicked.connect(self.load_next_image)
+        nav.addWidget(btn_o); nav.addWidget(btn_c); nav.addWidget(self.btn_next)
+        sl.addLayout(nav)
+        
+        btn_ed = QPushButton("Edit Image"); btn_ed.clicked.connect(self.open_image_editor)
+        sl.addWidget(btn_ed)
+        btn_lm = QPushButton("Load Mask"); btn_lm.clicked.connect(self.load_mask_dialog)
+        sl.addWidget(btn_lm)
+
+        sl.addWidget(QLabel("<b>Models:</b>"))
+        # 1. SAM (Interactive) Label & Tooltip
+        lbl_sam = QLabel("Interactive (SAM):")
+        lbl_sam.setToolTip("<b>Segment Anything Models</b><br>"
+                           "These require you to interact with the image.<br>"
+                           "<i>Usage: Left-click to add points or drag to draw boxes around the subject.</i>")
+        sl.addWidget(lbl_sam)
+
+        # SAM Combo
+        self.combo_sam = QComboBox()
+        self.combo_sam.setToolTip(lbl_sam.toolTip()) # Reuse the tooltip
+        self.populate_sam_models()
+        sl.addWidget(self.combo_sam)
+        
+        # 2. Whole Image (Automatic) Label & Tooltip
+        lbl_whole = QLabel("Automatic (Whole Image):")
+        lbl_whole.setToolTip("<b>Whole-Image Models</b><br>"
+                             "These run automatically on the entire image.<br>"
+                             "<i>Usage: Select a model and click 'Run Whole-Image'. No points needed.</i>")
+        sl.addWidget(lbl_whole)
+
+        # Whole Image Combo
+        self.combo_whole = QComboBox()
+        self.combo_whole.setToolTip(lbl_whole.toolTip()) # Reuse the tooltip
+        self.populate_whole_models()
+        sl.addWidget(self.combo_whole)
+        
+        btn_whole = QPushButton("Run Whole-Image"); btn_whole.clicked.connect(lambda: self.run_whole_image_model(None))
+        sl.addWidget(btn_whole)
+
+        sl.addWidget(QLabel("<b>Actions:</b>"))
+        h_act = QHBoxLayout()
+        btn_add = QPushButton("Add Mask"); btn_add.clicked.connect(self.add_mask)
+        btn_sub = QPushButton("Sub Mask"); btn_sub.clicked.connect(self.subtract_mask)
+        h_act.addWidget(btn_add); h_act.addWidget(btn_sub)
+        sl.addLayout(h_act)
+        
+        h_ut = QHBoxLayout()
+        btn_undo = QPushButton("Undo"); btn_undo.clicked.connect(self.undo)
+        btn_clr = QPushButton("Clear Points/Masks"); btn_clr.clicked.connect(self.clear_overlay)
+        h_ut.addWidget(btn_undo); h_ut.addWidget(btn_clr)
+        sl.addLayout(h_ut)
+        
+        h_rs = QHBoxLayout()
+        btn_rst = QPushButton("Reset Img"); btn_rst.clicked.connect(self.reset_working_image)
+        btn_all = QPushButton("Reset All"); btn_all.clicked.connect(self.reset_all)
+        h_rs.addWidget(btn_rst); h_rs.addWidget(btn_all)
+        sl.addLayout(h_rs)
+        
+        h_vs = QHBoxLayout()
+        btn_cp = QPushButton("Copy In->Out"); btn_cp.clicked.connect(self.copy_input_to_output)
+        btn_c_vis = QPushButton("Clear Visible"); btn_c_vis.clicked.connect(self.clear_visible_area)
+        h_vs.addWidget(btn_cp); h_vs.addWidget(btn_c_vis) 
+        sl.addLayout(h_vs)
+
+        sl.addWidget(QLabel("<b>Options:</b>"))
+        self.combo_bg = QComboBox()
+        
+        colors = ["Transparent", "White", "Black", "Red", "Blue", 
+                  "Orange", "Yellow", "Green", "Grey", 
+                  "Lightgrey", "Brown", "Blurred (Slow)"]
+        self.combo_bg.addItems(colors)
+        self.combo_bg.currentTextChanged.connect(self.handle_bg_change)
+        sl.addWidget(self.combo_bg)
+        
+        self.chk_paint = QCheckBox("Paintbrush (P)"); self.chk_paint.toggled.connect(self.toggle_paint_mode)
+        sl.addWidget(self.chk_paint)
+        
+        self.chk_show_mask = QCheckBox("Show Mask"); self.chk_show_mask.toggled.connect(self.update_output_preview)
+        sl.addWidget(self.chk_show_mask)
+        
+        self.chk_post = QCheckBox("Binary Mask (no partial transparency)")
+        sl.addWidget(self.chk_post)
+        
+        self.chk_soften = QCheckBox("Soften Mask/Paintbrush Edges")
+        sl.addWidget(self.chk_soften)
+        
+        self.chk_shadow = QCheckBox("Drop Shadow")
+        self.chk_shadow.toggled.connect(self.toggle_shadow_options)
+        sl.addWidget(self.chk_shadow)
+
+        self.shadow_frame = QFrame()
+        sf_layout = QVBoxLayout(self.shadow_frame)
+        sf_layout.setContentsMargins(0,0,0,0)
+        
+        def make_slider(lbl, min_v, max_v, def_v, cb):
+            l = QLabel(f"{lbl}: {def_v}")
+            s = QSlider(Qt.Orientation.Horizontal)
+            s.setRange(min_v, max_v)
+            s.setValue(def_v)
+            # Restart timer instead of calling cb directly
+            s.valueChanged.connect(lambda v: (l.setText(f"{lbl}: {v}"), self.shadow_timer.start())) 
+            return l, s
+
+        self.lbl_s_op, self.sl_s_op = make_slider("Opacity", 0, 255, 128, self.update_output_preview)
+        self.lbl_s_x, self.sl_s_x = make_slider("X Offset", -100, 100, 30, self.update_output_preview)
+        self.lbl_s_y, self.sl_s_y = make_slider("Y Offset", -100, 100, 30, self.update_output_preview)
+        self.lbl_s_r, self.sl_s_r = make_slider("Blur Rad", 1, 50, 10, self.update_output_preview)
+        
+        for w in [self.lbl_s_op, self.sl_s_op, self.lbl_s_x, self.sl_s_x, self.lbl_s_y, self.sl_s_y, self.lbl_s_r, self.sl_s_r]:
+            sf_layout.addWidget(w)
+            
+        sl.addWidget(self.shadow_frame)
+        self.shadow_frame.hide()
+
+        sl.addStretch()
+        btn_save = QPushButton("Save As..."); btn_save.clicked.connect(self.save_image)
+        sl.addWidget(btn_save)
+        btn_qsave = QPushButton("Quick Save JPG"); btn_qsave.clicked.connect(self.quick_save_jpeg)
+        sl.addWidget(btn_qsave)
+        btn_help = QPushButton("Help / About"); btn_help.clicked.connect(self.show_help)
+        sl.addWidget(btn_help)
+
+        self.splitter = QSplitter(Qt.Orientation.Horizontal)
+        
+        w_in = QWidget(); l_in = QVBoxLayout(w_in)
+        l_in.addWidget(QLabel("Input (Left: Point/Box, Right: Neg Point, Mid: Pan) Models are run on the current viewport"))
+        self.scene_input = QGraphicsScene()
+        self.view_input = SynchronizedGraphicsView(self.scene_input, name="Input View") 
+        self.view_input.set_controller(self)
+        self.view_input.setBackgroundBrush(QBrush(QColor(220, 220, 220), Qt.BrushStyle.DiagCrossPattern))
+
+        self.input_pixmap_item = QGraphicsPixmapItem(); self.scene_input.addItem(self.input_pixmap_item)
+        self.overlay_pixmap_item = QGraphicsPixmapItem(); self.overlay_pixmap_item.setOpacity(0.5); self.scene_input.addItem(self.overlay_pixmap_item)
+        
+        l_in.addWidget(self.view_input)
+        self.splitter.addWidget(w_in)
+        
+        w_out = QWidget(); l_out = QVBoxLayout(w_out)
+        l_out.addWidget(QLabel("Output"))
+        self.scene_output = QGraphicsScene()
+        self.view_output = SynchronizedGraphicsView(self.scene_output, name="Output View")
+        self.view_output.set_controller(self) 
+        self.view_output.setBackgroundBrush(QBrush(QColor(220, 220, 220), Qt.BrushStyle.DiagCrossPattern))
+        
+        self.output_pixmap_item = QGraphicsPixmapItem()
+        self.scene_output.addItem(self.output_pixmap_item)
+        
+        l_out.addWidget(self.view_output)
+        self.splitter.addWidget(w_out)
+        
+        self.view_input.set_sibling(self.view_output)
+        self.view_output.set_sibling(self.view_input)
+        
+        layout.addWidget(sidebar)
+        layout.addWidget(self.splitter)
+        
+        self.status_label = QLabel("Idle")
+        self.zoom_label = QLabel("Zoom: 100%")
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setRange(0, 0)  # Sets "Indeterminate" (bouncing) mode
+        self.progress_bar.setTextVisible(False)
+        self.progress_bar.setFixedWidth(200)
+        self.progress_bar.hide()
+        
+        self.statusBar().addWidget(self.status_label)
+        self.statusBar().addPermanentWidget(self.progress_bar) # Add to right side
+        self.statusBar().addPermanentWidget(self.zoom_label)
+
+    def update_window_title(self): # <--- NEW METHOD
+        base_title = "Interactive Image Background Remover"
+        
+        if not self.image_paths:
+            self.setWindowTitle(base_title)
+            return
+
+        total_count = len(self.image_paths)
+        
+        if total_count == 1 and self.image_paths[0] == "Clipboard":
+            title = f"{base_title} [Clipboard]"
+        elif total_count > 1:
+            current = self.current_image_index + 1
+            # Show the count and the current file name
+            file_name = os.path.basename(self.image_paths[self.current_image_index])
+            title = f"{base_title} [{current}/{total_count}] - {file_name}"
+        else: # Single image from file/arg
+            file_name = os.path.basename(self.image_paths[0])
+            title = f"{base_title} - {file_name}"
+
+        self.setWindowTitle(title)
+
+    def set_loading(self, is_loading, message=None):
+        if is_loading:
+            self.progress_bar.show()
+            self.status_label.setText(message if message else "Processing...")
+            QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+            QApplication.processEvents() 
+        else:
+            self.progress_bar.hide()
+            self.status_label.setText(message if message else "Idle")
+            QApplication.restoreOverrideCursor()
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        w = self.splitter.width()
+        self.splitter.setSizes([w//2, w//2])
+
+    def populate_sam_models(self):
+        sam_models = ["mobile_sam", "sam_vit_b", "sam_vit_h", "sam_vit_l"]
+        matches = []
+        if os.path.exists(MODEL_ROOT):
+            for filename in os.listdir(MODEL_ROOT):
+                for partial in sam_models:
+                    if partial in filename and ".onnx" in filename:
+                        matches.append(filename.replace(".encoder.onnx","").replace(".decoder.onnx",""))
+        self.combo_sam.clear()
+        if matches:
+            self.combo_sam.addItems(sorted(list(set(matches))))
+            idx = self.combo_sam.findText("mobile_sam", Qt.MatchFlag.MatchContains)
+            if idx >= 0: self.combo_sam.setCurrentIndex(idx)
+        else: self.combo_sam.addItem("No Models Found")
+
+    def populate_whole_models(self):
+        whole_models = ["rmbg", "isnet", "u2net", "BiRefNet"]
+        matches = []
+        if os.path.exists(MODEL_ROOT):
+            for filename in os.listdir(MODEL_ROOT):
+                for partial in whole_models:
+                    if partial in filename and ".onnx" in filename:
+                        matches.append(filename.replace(".onnx",""))
+        self.combo_whole.clear()
+        if matches: self.combo_whole.addItems(sorted(list(set(matches))))
+        else: self.combo_whole.addItem("No Models Found")
+
+    def setup_keybindings(self):
+        QShortcut(QKeySequence("A"), self).activated.connect(self.add_mask)
+        QShortcut(QKeySequence("S"), self).activated.connect(self.subtract_mask)
+        QShortcut(QKeySequence("C"), self).activated.connect(self.clear_overlay)
+        QShortcut(QKeySequence("W"), self).activated.connect(self.reset_working_image)
+        QShortcut(QKeySequence("R"), self).activated.connect(self.reset_all)
+        QShortcut(QKeySequence("V"), self).activated.connect(self.clear_visible_area)
+        QShortcut(QKeySequence("Ctrl+Z"), self).activated.connect(self.undo)
+        QShortcut(QKeySequence("P"), self).activated.connect(self.chk_paint.toggle)
+        QShortcut(QKeySequence("Ctrl+S"), self).activated.connect(self.save_image)
+        QShortcut(QKeySequence("Ctrl+Shift+S"), self).activated.connect(self.quick_save_jpeg)
+        
+        QShortcut(QKeySequence("U"), self).activated.connect(lambda: self.run_whole_image_model("u2net", 320))
+        QShortcut(QKeySequence("I"), self).activated.connect(lambda: self.run_whole_image_model("isnet"))
+        QShortcut(QKeySequence("O"), self).activated.connect(lambda: self.run_whole_image_model("rmbg"))
+        QShortcut(QKeySequence("B"), self).activated.connect(lambda: self.run_whole_image_model("BiRefNet"))
+
+    def handle_bg_change(self, text):
+        if "Blur" in text:
+            val, ok = QInputDialog.getInt(self, "Blur Radius", "Set Blur Radius:", 
+                                         value=getattr(self, 'blur_radius', 30), 
+                                         min=1, max=100)
+            if ok:
+                self.blur_radius = val
+        self.update_output_preview()
+
+    def load_image(self, path):
+        try:
+            img = Image.open(path)
+            img = ImageOps.exif_transpose(img)
+            self.original_image = img.convert("RGBA")
+            self.image_exif = img.info.get('exif')
+            self.init_working_buffers()
+            self.update_input_view()
+            self.update_output_preview()
+            self.status_label.setText(f"Loaded: {os.path.basename(path)}")
+            self.update_next_button_state()
+            self.update_window_title()
+        except Exception as e: QMessageBox.critical(self, "Error", str(e))
+
+    def load_blank_image(self):
+        self.original_image = Image.new("RGBA", (800, 600), (0,0,0,0))
+        self.init_working_buffers()
+        self.update_input_view()
+
+    def load_clipboard(self):
+        img = ImageGrab.grabclipboard()
+
+        if isinstance(img, Image.Image):
+            self.original_image = img.convert("RGBA")
+            self.image_paths = ["Clipboard"]
+            self.init_working_buffers()
+            self.update_input_view()
+            self.update_output_preview()
+            self.status_label.setText("Loaded from Clipboard")
+            self.update_window_title()
+            if hasattr(self, 'update_next_button_state'):
+                self.update_next_button_state()
+            return
+
+        QMessageBox.information(self, "Clipboard Empty", 
+                                "No image or valid image path found on the clipboard.")
+
+    def load_image_dialog(self):
+        file_filter = "Images (*.png *.jpg *.jpeg *.webp *.bmp *.tif *.tiff *.PNG *.JPG *.JPEG *.WEBP *.BMP *.TIF *.TIFF);;All Files (*)"
+        fnames, _ = QFileDialog.getOpenFileNames(self, "Open", "", file_filter)
+        if fnames:
+            self.image_paths = fnames
+            self.current_image_index = 0
+            self.load_image(fnames[0])
+            if hasattr(self, 'update_next_button_state'):
+                self.update_next_button_state()
+
+    def load_mask_dialog(self):
+        fname, _ = QFileDialog.getOpenFileName(self, "Open Mask", "", "Images (*.png)")
+        if fname:
+            mask = Image.open(fname).convert("L")
+            if mask.size == self.original_image.size:
+                self.add_undo_step()
+                self.working_mask = mask
+                self.update_output_preview()
+
+    def load_next_image(self):
+        if self.image_paths and self.image_paths[0] != "Clipboard" and len(self.image_paths) > 1:
+            if self.current_image_index < len(self.image_paths) - 1:
+                self.current_image_index += 1
+                self.load_image(self.image_paths[self.current_image_index])
+
+    def update_next_button_state(self):
+        if not self.image_paths:
+            self.btn_next.setEnabled(False)
+            return
+
+        is_clipboard = (self.image_paths[0] == "Clipboard")
+        has_more_images = (self.current_image_index < len(self.image_paths) - 1)
+        
+        self.btn_next.setEnabled(has_more_images and not is_clipboard)
+
+    def init_working_buffers(self):
+        size = self.original_image.size 
+        self.working_image = Image.new("RGBA", size, (0,0,0,0))
+        self.working_mask = Image.new("L", size, 0)
+        self.model_output_mask = Image.new("L", size, 0)
+        self.undo_history = [self.working_mask.copy()]
+        
+        if hasattr(self, "encoder_output"): 
+            delattr(self, "encoder_output")
+        self.last_crop_rect = None 
+        
+        # Scratchpad for painting (Invisible QImage)
+        # Used to rasterise the vector path when you let go of the mouse.
+        self.paint_image = QImage(size[0], size[1], QImage.Format.Format_ARGB32_Premultiplied)
+        
+        self.clear_overlay()
+
+    def update_input_view(self):
+        if self.original_image:
+            # 1. Update the Pixmap
+            self.input_pixmap_item.setPixmap(pil2pixmap(self.original_image))
+            rect = self.input_pixmap_item.boundingRect()
+            self.view_input.setSceneRect(rect)
+
+            self.view_input.resetTransform()
+
+            self.view_input.fitInView(self.input_pixmap_item, Qt.AspectRatioMode.KeepAspectRatio)
+
+            # Set to fill the screen, but could add small padding if preferred
+            self.view_input.scale(1, 1)
+
+            if self.view_output:
+                self.view_output.setSceneRect(rect)
+                self.view_output.setTransform(self.view_input.transform())
+            
+            self.update_zoom_label()
+
+    def update_zoom_label(self):
+        zoom = self.view_input.transform().m11() * 100
+        self.zoom_label.setText(f"Zoom: {int(zoom)}%")
+
+    def get_viewport_crop(self):
+        vp = self.view_input.viewport().rect()
+        sr = self.view_input.mapToScene(vp).boundingRect()
+        ir = QRectF(0, 0, self.original_image.width, self.original_image.height)
+        cr = sr.intersected(ir)
+        x, y, w, h = int(cr.x()), int(cr.y()), int(cr.width()), int(cr.height())
+        if w <= 0 or h <= 0: return self.original_image, 0, 0
+        return self.original_image.crop((x, y, x+w, y+h)), x, y
+
+    def _init_sam(self):
+        model_name = self.combo_sam.currentText()
+        if "Select" in model_name or "No Models" in model_name: return False
+        
+        model_path = os.path.join(MODEL_ROOT, model_name)
+        if self.sam_model_path != model_path:
+            try:
+                self.status_label.setText(f"Loading {model_name}...")
+                QApplication.processEvents()
+                self.sam_encoder = ort.InferenceSession(model_path + ".encoder.onnx")
+                self.sam_decoder = ort.InferenceSession(model_path + ".decoder.onnx")
+                self.sam_model_path = model_path
+                if hasattr(self, "encoder_output"): delattr(self, "encoder_output")
+            except Exception as e:
+                QMessageBox.critical(self, "Error", f"Could not load model: {e}")
+                return False
+        return True
+
+    def handle_sam_point(self, scene_pos, is_positive):
+        self.coordinates.append([scene_pos.x(), scene_pos.y()])
+        self.labels.append(1 if is_positive else 0)
+        c = Qt.GlobalColor.green if is_positive else Qt.GlobalColor.red
+        
+        radius = 5  # Base radius (on screen pixels)
+        dot = QGraphicsEllipseItem(-radius, -radius, radius * 2, radius * 2)
+        
+        dot.setPos(scene_pos)
+
+        dot.setPen(QPen(c))
+        dot.setBrush(QBrush(c))
+        
+        dot.setData(0, "sam_point")
+        
+        self.scene_input.addItem(dot)
+        
+        self.view_input.update_point_scales()
+
+        self.run_sam_inference()
+
+    def handle_sam_box(self, rect):
+        self.coordinates = [[rect.left(), rect.top()], [rect.right(), rect.bottom()]]
+        self.labels = [2, 3]
+        self.run_sam_inference()
+
+    def run_sam_inference(self):
+        if not self._init_sam(): return
+        
+        crop, x_off, y_off = self.get_viewport_crop()
+        if crop.width == 0: return
+
+        # Filter points not in the viewport
+        view_rect = QRectF(x_off, y_off, crop.width, crop.height)
+        valid_coords = []
+        valid_labels = []
+        
+        for (cx, cy), label in zip(self.coordinates, self.labels):
+            if view_rect.contains(cx, cy):
+                valid_coords.append([cx - x_off, cy - y_off])
+                valid_labels.append(label)
+
+        if not valid_coords:
+            self.model_output_mask = Image.new("L", self.original_image.size, 0)
+            self.overlay_pixmap_item.setPixmap(QPixmap())
+            self.status_label.setText("Idle (No points in view)")
+            return
+
+        current_crop_rect = (x_off, y_off, crop.width, crop.height)
+        
+        final_status = "Idle"
+        
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        try:
+            target_size, input_size = 1024, (684, 1024)
+            img_np = np.array(crop.convert("RGB"))
+            
+            encoder_time = 0.0
+            decoder_time = 0.0
+            
+            # --- Encoder ---
+            if not hasattr(self, "encoder_output") or getattr(self, "last_crop_rect", None) != current_crop_rect:
+                self.status_label.setText("Running SAM Encoder...")
+                QApplication.processEvents() 
+
+                t_start = timer()
+                
+                scale = min(input_size[1] / img_np.shape[1], input_size[0] / img_np.shape[0])
+                transform_matrix = np.array([[scale, 0, 0], [0, scale, 0], [0, 0, 1]])
+                cv_image = cv2.warpAffine(img_np, transform_matrix[:2], (input_size[1], input_size[0]), flags=cv2.INTER_LINEAR)
+                
+                encoder_inputs = {self.sam_encoder.get_inputs()[0].name: cv_image.astype(np.float32)}
+                self.encoder_output = self.sam_encoder.run(None, encoder_inputs)
+                
+                self.last_crop_rect = current_crop_rect
+                self.last_transform = transform_matrix
+                self.last_orig_size = img_np.shape[:2]
+                
+                encoder_time = (timer() - t_start) * 1000
+
+            # --- Decoder ---
+            t_start = timer()
+            
+            embedding = self.encoder_output[0]
+            onnx_coord = np.concatenate([np.array(valid_coords), np.array([[0.0, 0.0]])], axis=0)[None, :, :]
+            onnx_label = np.concatenate([np.array(valid_labels), np.array([-1])], axis=0)[None, :].astype(np.float32)
+            coords_aug = np.concatenate([onnx_coord, np.ones((1, onnx_coord.shape[1], 1), dtype=np.float32)], axis=2)
+            onnx_coord = np.matmul(coords_aug, self.last_transform.T)[:, :, :2].astype(np.float32)
+
+            decoder_inputs = {
+                "image_embeddings": embedding,
+                "point_coords": onnx_coord, "point_labels": onnx_label,
+                "mask_input": np.zeros((1, 1, 256, 256), dtype=np.float32),
+                "has_mask_input": np.zeros(1, dtype=np.float32),
+                "orig_im_size": np.array(input_size, dtype=np.float32),
+            }
+            masks = self.sam_decoder.run(None, decoder_inputs)[0]
+            
+            inv_mtx = np.linalg.inv(self.last_transform)
+            mask_resized = cv2.warpAffine(masks[0, 0, :, :], inv_mtx[:2], (self.last_orig_size[1], self.last_orig_size[0]), flags=cv2.INTER_LINEAR)
+            mask_final = (mask_resized > 0.0).astype(np.uint8) * 255
+            
+            decoder_time = (timer() - t_start) * 1000
+            
+            self.model_output_mask = Image.new("L", self.original_image.size, 0)
+            self.model_output_mask.paste(Image.fromarray(mask_final, mode="L"), (x_off, y_off))
+            self.show_mask_overlay()
+
+            if encoder_time > 0:
+                final_status = f"SAM: Encoder {encoder_time:.0f}ms | Decoder {decoder_time:.0f}ms"
+            else:
+                final_status = f"SAM: Encoder (Cached) | Decoder {decoder_time:.0f}ms"
+
+        except Exception as e: 
+            print(f"SAM Error: {e}")
+            final_status = "SAM Error"
+        finally:
+            QApplication.restoreOverrideCursor()
+            self.set_loading(False, final_status)
+
+    def run_whole_image_model(self, model_name=None, target_size=1024):
+        # TODO read model inputs instead of hardcoding based on filename
+
+        if not model_name: model_name = self.combo_whole.currentText()
+        if "Select" in model_name: return
+        
+        found_name = None
+        for f in os.listdir(MODEL_ROOT):
+            if model_name in f and f.endswith(".onnx"): found_name = f.replace(".onnx",""); break
+        if not found_name: 
+            self.status_label.setText(f"Model {model_name} not found"); return
+        
+        model_name = found_name
+        crop, x_off, y_off = self.get_viewport_crop()
+
+        if "BiRefNet_HR" in model_name: target_size=2048
+        
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        self.set_loading(True, f"Processing {model_name}...")
+        QApplication.processEvents()
+        
+        final_status = "Idle"
+        load_time = 0.0
+        inference_time = 0.0
+
+        try:
+
+            if not hasattr(self, f"{model_name}_session"):
+                t_start_load = timer()
+                
+                sess_options = ort.SessionOptions()
+                sess_options.enable_cpu_mem_arena = False 
+                session = ort.InferenceSession(os.path.join(MODEL_ROOT, model_name + ".onnx"),sess_options=sess_options)
+                setattr(self, f"{model_name}_session", session)
+                load_time = (timer() - t_start_load) * 1000
+                
+            # Retrieve the session (fast)
+            session = getattr(self, f"{model_name}_session")
+            
+            # --- Preprocessing ---
+            img_r = crop.convert("RGB").resize((target_size, target_size), Image.BICUBIC)
+            
+            if "isnet" in model_name or "rmbg" in model_name: mean, std = (0.5, 0.5, 0.5), (1.0, 1.0, 1.0)
+            else: mean, std = (0.485, 0.456, 0.406), (0.229, 0.224, 0.225)
+            
+            im = np.array(img_r) / 255.0
+            tmp = np.zeros((im.shape[0], im.shape[1], 3))
+            tmp[:,:,0] = (im[:,:,0] - mean[0])/std[0]
+            tmp[:,:,1] = (im[:,:,1] - mean[1])/std[1]
+            tmp[:,:,2] = (im[:,:,2] - mean[2])/std[2]
+            
+            inp = np.expand_dims(tmp.transpose((2, 0, 1)), 0).astype(np.float32)
+            
+            t_start_inf = timer() 
+            result = session.run(None, {session.get_inputs()[0].name: inp})[0]
+            inference_time = (timer() - t_start_inf) * 1000
+
+            # --- Postprocessing ---
+            if "BiRefNet" in model_name:
+                pred = 1 / (1 + np.exp(-result[0][0]))
+                mask = (pred - pred.min()) / (pred.max() - pred.min())
+            else:
+                mask = result[0][0]
+                mask = (mask - mask.min()) / (mask.max() - mask.min())
+            
+            res_mask = Image.fromarray((mask * 255).astype("uint8"), "L").resize(crop.size, Image.Resampling.LANCZOS)
+            self.model_output_mask = Image.new("L", self.original_image.size, 0)
+            self.model_output_mask.paste(res_mask, (x_off, y_off))
+            self.show_mask_overlay()
+            
+            load_str = f"{load_time:.0f}ms" if load_time > 0 else "Cached"
+            final_status = f"{model_name}: Load {load_str} | Inf {inference_time:.0f}ms"
+            
+        except Exception as e: 
+            QMessageBox.critical(self, "Error", str(e))
+            final_status = "Inference Error"
+        finally:
+            QApplication.restoreOverrideCursor()
+            self.set_loading(False, final_status)
+
+    def show_mask_overlay(self):
+        if self.model_output_mask:
+            blue = Image.new("RGB", self.original_image.size, (0, 0, 255))
+            overlay = blue.convert("RGBA")
+            overlay.putalpha(self.model_output_mask)
+            self.overlay_pixmap_item.setPixmap(pil2pixmap(overlay))
+
+    def clear_overlay(self):
+        self.coordinates = []
+        self.labels = []
+        self.model_output_mask = Image.new("L", self.original_image.size, 0)
+        self.overlay_pixmap_item.setPixmap(QPixmap())
+        
+        # Clear the invisible paint scratchpad
+        if hasattr(self, 'paint_image'):
+            self.paint_image.fill(Qt.GlobalColor.transparent)
+
+        # Remove points/boxes AND the temporary paint path if it exists
+        cursor_item = self.view_input.brush_cursor_item
+        items_to_remove = []
+        
+        # Check if we have a temporary paint path lingering
+        if hasattr(self, 'temp_path_item') and self.temp_path_item:
+            items_to_remove.append(self.temp_path_item)
+            self.temp_path_item = None
+
+        for item in self.scene_input.items():
+            # Don't delete the background image or the blue overlay
+            if item == self.input_pixmap_item or item == self.overlay_pixmap_item: continue
+            
+            # Don't delete the cursor
+            if item == cursor_item or item.parentItem() == cursor_item: continue
+            
+            # Delete SAM points/boxes
+            if isinstance(item, (QGraphicsEllipseItem, QGraphicsRectItem, QGraphicsPathItem)):
+                items_to_remove.append(item)
+                
+        for item in items_to_remove:
+            self.scene_input.removeItem(item)
+
+    def clear_visible_area(self):
+        if not self.model_output_mask: return
+        crop, x, y = self.get_viewport_crop()
+        vis_mask = Image.new("L", self.original_image.size, 0)
+        draw = ImageDraw.Draw(vis_mask)
+        draw.rectangle([x, y, x+crop.width, y+crop.height], fill=255)
+        self.working_mask = ImageChops.subtract(self.working_mask, vis_mask)
+        self.update_output_preview()
+
+    def add_undo_step(self):
+        self.undo_history.append(self.working_mask.copy())
+        if len(self.undo_history) > UNDO_STEPS: self.undo_history.pop(0)
+
+    def undo(self):
+        if self.undo_history:
+            self.working_mask = self.undo_history.pop()
+            self.update_output_preview()
+
+    def add_mask(self): self.modify_mask(ImageChops.add)
+    def subtract_mask(self): self.modify_mask(ImageChops.subtract)
+    
+    def modify_mask(self, op):
+        if not self.model_output_mask: return
+        self.add_undo_step()
+        m = self.model_output_mask
+        
+        if self.chk_soften.isChecked():
+            m = m.filter(ImageFilter.GaussianBlur(radius=SOFTEN_RADIUS))
+            
+        if self.chk_post.isChecked():
+            arr = np.array(m)
+            arr = binary_erosion(binary_dilation(arr))
+            m = Image.fromarray((arr*255).astype(np.uint8))
+        self.working_mask = op(self.working_mask, m)
+        self.update_output_preview()
+
+    def toggle_shadow_options(self, checked):
+        if checked: self.shadow_frame.show()
+        else: self.shadow_frame.hide()
+        self.update_output_preview()
+
+    def render_output_image(self, shadow_downscale=0.125):
+        if not self.original_image: return
+        empty = Image.new("RGBA", self.original_image.size, 0)
+        cutout = Image.composite(self.original_image, empty, self.working_mask)
+        
+        if self.chk_shadow.isChecked():
+            op = self.sl_s_op.value()
+            rad = self.sl_s_r.value()
+            off_x, off_y = self.sl_s_x.value(), self.sl_s_y.value()
+            
+            orig_size = self.working_mask.size
+            
+            # Process shadow at a much lower resolution for performance. This feature is very slow
+            small_w = max(1, int(orig_size[0] * shadow_downscale))
+            small_h = max(1, int(orig_size[1] * shadow_downscale))
+            
+            shadow_small = self.working_mask.resize((small_w, small_h), Image.Resampling.NEAREST)
+            
+            scaled_rad = rad * shadow_downscale
+            shadow_small = shadow_small.filter(ImageFilter.GaussianBlur(scaled_rad))
+            
+            shadow = shadow_small.resize(orig_size, Image.Resampling.BICUBIC)
+            
+            shadow = shadow.point(lambda p: int(p * (op/255)))
+            
+            sl = Image.new("RGBA", self.original_image.size, 0)
+            sl.putalpha(shadow)
+            bg_layer = Image.new("RGBA", self.original_image.size, 0)
+            bg_layer.paste(sl, (off_x, off_y), sl)
+            cutout = Image.alpha_composite(bg_layer, cutout)
+
+        bg_txt = self.combo_bg.currentText()
+        if bg_txt == "Transparent": 
+            final = cutout
+        elif "Blur" in bg_txt:
+            m_np = np.array(self.working_mask)
+            k = np.ones((5,5),np.uint8)
+            d_mask = cv2.dilate(m_np, k, iterations=1)
+            orig_rgb = cv2.cvtColor(np.array(self.original_image), cv2.COLOR_RGBA2RGB)
+            f_bg = cv2.inpaint(orig_rgb, d_mask, 3, cv2.INPAINT_TELEA)
+            rad = getattr(self, 'blur_radius', 30)
+            if rad % 2 == 0: rad += 1
+            blur = cv2.blur(f_bg, (rad, rad))
+            final = Image.fromarray(blur).convert("RGBA")
+            final.alpha_composite(cutout)
+        else:
+            final = Image.new("RGBA", self.original_image.size, bg_txt.lower())
+            final.alpha_composite(cutout)
+        return final
+
+    def update_output_preview(self, *args):
+
+        if self.chk_show_mask.isChecked(): 
+            final = self.working_mask.convert("RGBA")
+        else:
+            final = self.render_output_image()
+        
+        self.output_pixmap_item.setPixmap(pil2pixmap(final))
+        self.view_output.setSceneRect(self.view_input.sceneRect())
+
+    def reset_all(self):
+        self.clear_overlay()
+        self.add_undo_step()
+        self.working_mask = Image.new("L", self.original_image.size, 0)
+        self.update_output_preview()
+        
+    def reset_working_image(self):
+        self.add_undo_step()
+        self.working_mask = Image.new("L", self.original_image.size, 0)
+        self.update_output_preview()
+        
+    def copy_input_to_output(self):
+        self.add_undo_step()
+        self.working_mask = Image.new("L", self.original_image.size, 255)
+        self.update_output_preview()
+
+    def toggle_paint_mode(self, enabled):
+        self.paint_mode = enabled
+        self.view_input.setCursor(Qt.CursorShape.CrossCursor if enabled else Qt.CursorShape.ArrowCursor)
+        self.view_output.setCursor(Qt.CursorShape.CrossCursor if enabled else Qt.CursorShape.ArrowCursor)
+        
+        # Update cursor on both views
+        cursor_pos = self.view_input.mapFromGlobal(QCursor.pos())
+        scene_pos = self.view_input.mapToScene(cursor_pos)
+        self.view_input.update_brush_cursor(scene_pos)
+        self.view_output.update_brush_cursor(scene_pos)
+
+    def handle_paint_start(self, pos):
+        from PyQt6.QtGui import QPainterPath # Local import
+
+        buttons = QApplication.mouseButtons()
+        self.is_erasing = bool(buttons & Qt.MouseButton.RightButton)
+        
+        zoom = self.view_input.transform().m11()
+        if zoom == 0: zoom = 1
+        
+        # Calculate width in scene coordinates
+        self.brush_width = PAINT_BRUSH_SCREEN_SIZE / zoom
+        
+        # Temporary vector path for performance
+        self.current_path = QPainterPath()
+        self.current_path.moveTo(pos)
+        # Ensure a dot appears on single click
+        self.current_path.lineTo(pos.x() + 0.001, pos.y()) 
+
+        self.temp_path_item = QGraphicsPathItem()
+        self.temp_path_item.setPath(self.current_path)
+        
+        # Red for Paint, White for Erase
+        color = QColor(255, 0, 0, 150) if not self.is_erasing else QColor(255, 255, 255, 150)
+        pen = QPen(color, self.brush_width, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin)
+        self.temp_path_item.setPen(pen)
+        self.temp_path_item.setZValue(100) 
+        
+        self.scene_input.addItem(self.temp_path_item)
+
+        self.temp_path_item_out = QGraphicsPathItem()
+        self.temp_path_item_out.setPath(self.current_path)
+        self.temp_path_item_out.setPen(pen) # Use same pen
+        self.temp_path_item_out.setZValue(100)
+        self.scene_output.addItem(self.temp_path_item_out)
+
+    def handle_paint_move(self, last, curr):
+        
+        if hasattr(self, 'current_path'):
+            self.current_path.lineTo(curr)
+            self.temp_path_item.setPath(self.current_path)
+
+            if hasattr(self, 'temp_path_item_out'):
+                self.temp_path_item_out.setPath(self.current_path)
+
+    def handle_paint_end(self):
+      
+        # Clean up visual item
+        if hasattr(self, 'temp_path_item'):
+            self.scene_input.removeItem(self.temp_path_item)
+            self.temp_path_item = None
+        if hasattr(self, 'temp_path_item_out'):
+            self.scene_output.removeItem(self.temp_path_item_out)
+            self.temp_path_item_out = None
+            
+        if not hasattr(self, 'current_path'): return
+
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        try:
+            # Setup the scratchpad QImage
+            self.paint_image.fill(Qt.GlobalColor.transparent)
+            
+            painter = QPainter(self.paint_image)
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+            
+            # Draw the recorded path onto the scratchpad
+            # White because we just want the alpha shape
+            pen = QPen(QColor(255, 255, 255, 255), self.brush_width, 
+                      Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin)
+            painter.setPen(pen)
+            painter.drawPath(self.current_path)
+            painter.end()
+            
+            # Convert Scratchpad to PIL Mask (Fast Buffer Access)
+            ptr = self.paint_image.constBits()
+            ptr.setsize(self.paint_image.sizeInBytes())
+            h, w = self.paint_image.height(), self.paint_image.width()
+            
+            # Zero-copy view into the QImage data
+            arr = np.array(ptr, copy=False).reshape(h, w, 4)
+            # Extract the Blue channel (or Alpha) as our mask
+            stroke_mask = Image.fromarray(arr[:, :, 0].copy(), mode="L")
+            
+            # Apply to Model Output
+            if self.is_erasing:
+                self.model_output_mask = ImageChops.subtract(self.model_output_mask, stroke_mask)
+            else:
+                self.model_output_mask = ImageChops.add(self.model_output_mask, stroke_mask)
+            
+            self.show_mask_overlay()
+            
+        finally:
+            if hasattr(self, 'current_path'): del self.current_path
+            QApplication.restoreOverrideCursor()
+
+    def open_image_editor(self):
+        if not self.original_image: return
+        
+        reply = QMessageBox.question(self, "Edit Image", 
+                                     "Editing the original image will reset the progress on your output image.\n\n"
+                                     "Consider saving the current mask first. Continue?",
+                                     QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        
+        if reply == QMessageBox.StandardButton.Yes:
+            dlg = ImageEditorDialog(self, self.original_image)
+            if dlg.exec():
+                if dlg.final_image:
+                    self.original_image = dlg.final_image.convert("RGBA")
+                    self.init_working_buffers()
+                    self.update_input_view()
+                    self.update_output_preview()
+
+    def quick_save_jpeg(self):
+        if not self.original_image or not self.image_paths: return
+        orig_path = self.image_paths[0] if self.image_paths[0] != "Clipboard" else "clipboard.png"
+        path = os.path.splitext(orig_path)[0] + "_nobg.jpg"
+        
+        fname, _ = QFileDialog.getSaveFileName(self, "Quick Save", path, "JPG (*.jpg)")
+        if fname:
+            if not fname.lower().endswith(".jpg"): fname += ".jpg"
+            empty = Image.new("RGBA", self.original_image.size, 0)
+            cutout = Image.composite(self.original_image, empty, self.working_mask)
+            final = Image.new("RGB", self.original_image.size, "white")
+            final.paste(cutout, (0,0), cutout)
+            
+            save_params = {'quality': 95}
+            if self.image_exif: save_params['exif'] = self.image_exif
+            
+            final.save(fname, **save_params)
+            self.status_label.setText(f"Quick saved to {fname}")
+
+    def save_image(self):
+        if not self.image_paths: return
+        
+        dlg = SaveOptionsDialog(self)
+        if not dlg.exec(): return
+        data = dlg.get_data()
+        
+        fmt = data['format']
+        ext_map = {"png": "png", "webp_lossless": "webp", "webp_lossy": "webp", "jpeg": "jpg"}
+        default_ext = ext_map[fmt]
+        
+        initial_name = os.path.splitext(self.image_paths[0])[0] + "_nobg." + default_ext
+        fname, _ = QFileDialog.getSaveFileName(self, "Save Image", initial_name, f"{default_ext.upper()} (*.{default_ext})")
+        if not fname: return
+        
+        if not fname.lower().endswith(f".{default_ext}"): fname += f".{default_ext}"
+
+
+        final_image = self.render_output_image()
+
+        # If trimming is enabled, calculate the crop box and apply it.
+        if data.get('trim', False):
+            bbox = self.working_mask.getbbox()
+            if bbox:
+                min_x, min_y, max_x, max_y = bbox
+                
+                # Expand bounding box to include shadow if enabled
+                if self.chk_shadow.isChecked():
+                    shadow_off_x, shadow_off_y = self.sl_s_x.value(), self.sl_s_y.value()
+                    s_rad = self.sl_s_r.value()
+                    s_min_x = min_x + shadow_off_x - s_rad
+                    s_min_y = min_y + shadow_off_y - s_rad
+                    s_max_x = max_x + shadow_off_x + s_rad
+                    s_max_y = max_y + shadow_off_y + s_rad
+                    
+                    min_x = min(min_x, s_min_x)
+                    min_y = min(min_y, s_min_y)
+                    max_x = max(max_x, s_max_x)
+                    max_y = max(max_y, s_max_y)
+
+                # Crop the fully rendered image to the calculated bounding box
+                # Clamp the calculated coordinates to the image boundaries
+                orig_w, orig_h = final_image.size
+                
+                final_min_x = max(0, int(min_x))
+                final_min_y = max(0, int(min_y))
+                final_max_x = min(orig_w, int(max_x))
+                final_max_y = min(orig_h, int(max_y))
+                # Check for empty crop after clamping (e.g., if shadow only extends outside)
+                if final_max_x > final_min_x and final_max_y > final_min_y:
+                    # Apply the crop to the fully rendered image
+                    final_image = final_image.crop((final_min_x, final_min_y, final_max_x, final_max_y))
+                # Else: no change, keep the empty image (which is what render_output_image returns if mask is empty)
+
+        if fmt == "jpeg":
+            background = Image.new("RGB", final_image.size, (255, 255, 255))
+            # Ensure the image has an alpha channel to use as a mask
+            if final_image.mode != 'RGBA':
+                final_image = final_image.convert('RGBA')
+            background.paste(final_image, mask=final_image.split()[3])
+            final_image = background
+        
+        save_params = {}
+        if self.image_exif: save_params['exif'] = self.image_exif
+        if fmt == "jpeg": save_params['quality'] = data['quality']
+        elif fmt == "webp_lossy": save_params['quality'] = data['quality']
+        elif fmt == "webp_lossless": save_params['lossless'] = True
+        elif fmt == "png": save_params['optimize'] = True
+
+        try:
+            final_image.save(fname, **save_params)
+            self.status_label.setText(f"Saved to {fname}")
+        except Exception as e:
+            QMessageBox.critical(self, "Save Error", str(e))
+            
+        if data['save_mask']:
+            mname = os.path.splitext(fname)[0] + "_mask.png"
+            self.working_mask.save(mname)
+            self.status_label.setText(f"Saved to {os.path.basename(fname)} and {os.path.basename(mname)}")
+
+    def show_help(self):
+        d = QDialog(self)
+        d.setWindowTitle("Help / About")
+        d.resize(600, 500)
+        l = QVBoxLayout(d)
+        t = QTextEdit()
+        t.setReadOnly(True)
+        t.setText("""Interactive Background Remover by Sean (Prickly Gorse)
+
+Load an image, then use Whole Image models (U, I, O, B) or Segment Anything (Left Click/Drag Box).
+Working mask appears as blue overlay on Input.
+Press 'A' to Add mask to Output, 'S' to Subtract.
+
+Image segmentation models are run on the current view, so you can zoom into details to fine tune your background removal.
+
+Controls:
+- Left Click: Add Point (SAM) / Start Box
+- Right Click: Add Negative Point
+- Middle Click: Pan
+- Scroll: Zoom 
+- Ctrl: Zoom with touchpad
+- P: Toggle Paintbrush (draw manually on mask). Right click - Add, Left click - Erase
+
+Shortcuts:
+- A: Add current mask to output
+- S: Subtract current mask from output
+- C: Clear overlay points
+- W: Reset output image
+- R: Reset everything
+- U: Run u2net
+- I: Run isnet
+- O: Run rmbg1_4
+- B: Run BiRefNet
+- Ctrl+S: Save As
+- Ctrl+Shift+S: Quick Save JPG (White BG)
+- Ctrl+Z: Undo
+        """)
+        l.addWidget(t)
+        d.exec()
 
 if __name__ == "__main__":
-
-
-    files_to_process = sys.argv[1:] 
-
-    if not files_to_process:
-        
-        initial_file = askopenfilename(
-            title="Select an Image to Start",
-            filetypes=pillow_formats
-        )
-        if initial_file:
-            files_to_process = [initial_file]
-
-
-
-    root = tk.Tk()
-    app = BackgroundRemoverGUI(root, files_to_process)
-    root.mainloop()
-
+    app = QApplication(sys.argv)
+    window = BackgroundRemoverGUI(sys.argv[1:])
+    window.showMaximized()
+    sys.exit(app.exec())

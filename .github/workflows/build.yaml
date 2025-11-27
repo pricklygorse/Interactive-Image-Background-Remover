@@ -31,28 +31,14 @@ jobs:
       - name: Install dependencies
         shell: bash
         run: |
-          if [[ "$RUNNER_OS" == "Linux" ]]; then
-            sudo apt-get update
-            sudo apt-get install -y tk-dev
-          elif [[ "$RUNNER_OS" == "macOS" ]]; then
-            brew update
-            brew install tcl-tk
-          elif [[ "$RUNNER_OS" == "Windows" ]]; then
-            # No need to install tcl-tk for windows in this case
-            echo "Skipping tcl-tk install on Windows"
-          fi
           python -m pip install --upgrade pip
-          pip install pyinstaller
+          pip install pyinstaller pyqt6
           pip install -r requirements.txt
 
       - name: Build executable
         shell: bash
         run: |
-          if [[ "$RUNNER_OS" == "Linux" ]]; then
-            echo "Adding Tcl/Tk to LD_LIBRARY_PATH"
-            echo "LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu:$LD_LIBRARY_PATH" >> $GITHUB_ENV
-          fi
-          pyinstaller --onefile --collect-all PIL backgroundremoval.py  
+          pyinstaller --onefile --collect-all PyQt6 --collect-all PIL backgroundremoval.py  
           
       - name: Rename executables 
         shell: bash
