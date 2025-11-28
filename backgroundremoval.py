@@ -6,7 +6,7 @@ import numpy as np
 import cv2
 from timeit import default_timer as timer
 
-from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
+from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QSizePolicy, 
                              QPushButton, QLabel, QComboBox, QCheckBox, QFileDialog, 
                              QMessageBox, QGraphicsView, QGraphicsScene, QGraphicsPixmapItem, 
                              QSlider, QFrame, QSplitter, QDialog, QScrollArea, 
@@ -754,9 +754,12 @@ class BackgroundRemoverGUI(QMainWindow):
         sl.addLayout(nav)
         
         btn_ed = QPushButton("Edit Image"); btn_ed.clicked.connect(self.open_image_editor)
-        sl.addWidget(btn_ed)
         btn_lm = QPushButton("Load Mask"); btn_lm.clicked.connect(self.load_mask_dialog)
-        sl.addWidget(btn_lm)
+
+        h_edit_load_buttons = QHBoxLayout()
+        h_edit_load_buttons.addWidget(btn_ed)
+        h_edit_load_buttons.addWidget(btn_lm)
+        sl.addLayout(h_edit_load_buttons)
 
         sl.addWidget(QLabel("<b>Models:</b>"))
         # 1. SAM (Interactive) Label & Tooltip
@@ -843,22 +846,34 @@ class BackgroundRemoverGUI(QMainWindow):
         sf_layout = QVBoxLayout(self.shadow_frame)
         sf_layout.setContentsMargins(0,0,0,0)
         
-        def make_slider(lbl, min_v, max_v, def_v, cb):
-            l = QLabel(f"{lbl}: {def_v}")
+        def make_slider_row(lbl_text, min_v, max_v, def_v):
+            h_layout = QHBoxLayout()
+            
+            l = QLabel(f"{lbl_text}: {def_v}")
+            l.setSizePolicy(QSizePolicy.Policy.MinimumExpanding, QSizePolicy.Policy.Preferred)
+            l.setMinimumWidth(80)
+            
             s = QSlider(Qt.Orientation.Horizontal)
             s.setRange(min_v, max_v)
             s.setValue(def_v)
-            # Restart timer instead of calling cb directly
-            s.valueChanged.connect(lambda v: (l.setText(f"{lbl}: {v}"), self.shadow_timer.start())) 
-            return l, s
+            s.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+            
+            s.valueChanged.connect(lambda v: (l.setText(f"{lbl_text}: {v}"), self.shadow_timer.start()))
+            
+            h_layout.addWidget(l)
+            h_layout.addWidget(s)
+            
+            return l, s, h_layout
 
-        self.lbl_s_op, self.sl_s_op = make_slider("Opacity", 0, 255, 128, self.update_output_preview)
-        self.lbl_s_x, self.sl_s_x = make_slider("X Offset", -100, 100, 30, self.update_output_preview)
-        self.lbl_s_y, self.sl_s_y = make_slider("Y Offset", -100, 100, 30, self.update_output_preview)
-        self.lbl_s_r, self.sl_s_r = make_slider("Blur Rad", 1, 50, 10, self.update_output_preview)
+        self.lbl_s_op, self.sl_s_op, h_op_layout = make_slider_row("Opacity", 0, 255, 128)
+        self.lbl_s_x, self.sl_s_x, h_x_layout = make_slider_row("X Offset", -100, 100, 30)
+        self.lbl_s_y, self.sl_s_y, h_y_layout = make_slider_row("Y Offset", -100, 100, 30)
+        self.lbl_s_r, self.sl_s_r, h_r_layout = make_slider_row("Blur Rad", 1, 50, 10)
         
-        for w in [self.lbl_s_op, self.sl_s_op, self.lbl_s_x, self.sl_s_x, self.lbl_s_y, self.sl_s_y, self.lbl_s_r, self.sl_s_r]:
-            sf_layout.addWidget(w)
+        sf_layout.addLayout(h_op_layout)
+        sf_layout.addLayout(h_x_layout)
+        sf_layout.addLayout(h_y_layout)
+        sf_layout.addLayout(h_r_layout)
             
         sl.addWidget(self.shadow_frame)
         self.shadow_frame.hide()
@@ -872,8 +887,10 @@ class BackgroundRemoverGUI(QMainWindow):
         sl.addWidget(btn_help)
 
         self.splitter = QSplitter(Qt.Orientation.Horizontal)
+        self.splitter.setChildrenCollapsible(False)
         
         w_in = QWidget(); l_in = QVBoxLayout(w_in)
+        w_in.setMinimumWidth(150)
         l_in.addWidget(QLabel("Input (Left: Point/Box, Right: Neg Point, Mid: Pan) Models are run on the current viewport"))
         self.scene_input = QGraphicsScene()
         self.view_input = SynchronizedGraphicsView(self.scene_input, name="Input View") 
@@ -887,6 +904,7 @@ class BackgroundRemoverGUI(QMainWindow):
         self.splitter.addWidget(w_in)
         
         w_out = QWidget(); l_out = QVBoxLayout(w_out)
+        w_out.setMinimumWidth(150)
         l_out.addWidget(QLabel("Output"))
         self.scene_output = QGraphicsScene()
         self.view_output = SynchronizedGraphicsView(self.scene_output, name="Output View")
