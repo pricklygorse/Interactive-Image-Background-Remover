@@ -176,6 +176,14 @@ class SynchronizedGraphicsView(QGraphicsView):
         self.scene().addItem(self.brush_cursor_item)
         self.brush_cursor_item.hide()
 
+    def dragEnterEvent(self, event):
+        # Pass the event to the parent to handle
+        event.ignore()
+
+    def dropEvent(self, event):
+        # Pass the event to the parent to handle
+        event.ignore()
+
     def set_sibling(self, sibling_view):
         self.sibling = sibling_view
         self.horizontalScrollBar().valueChanged.connect(self.sync_scroll_h)
@@ -738,6 +746,7 @@ class BackgroundRemoverGUI(QMainWindow):
             self.load_blank_image()
 
     def init_ui(self):
+        self.setAcceptDrops(True)
         main = QWidget(); self.setCentralWidget(main)
         layout = QHBoxLayout(main)
 
@@ -896,6 +905,8 @@ class BackgroundRemoverGUI(QMainWindow):
         self.view_input = SynchronizedGraphicsView(self.scene_input, name="Input View") 
         self.view_input.set_controller(self)
         self.view_input.setBackgroundBrush(QBrush(QColor(220, 220, 220), Qt.BrushStyle.DiagCrossPattern))
+        self.view_input.setAcceptDrops(True)
+
 
         self.input_pixmap_item = QGraphicsPixmapItem(); self.scene_input.addItem(self.input_pixmap_item)
         self.overlay_pixmap_item = QGraphicsPixmapItem(); self.overlay_pixmap_item.setOpacity(0.5); self.scene_input.addItem(self.overlay_pixmap_item)
@@ -910,6 +921,7 @@ class BackgroundRemoverGUI(QMainWindow):
         self.view_output = SynchronizedGraphicsView(self.scene_output, name="Output View")
         self.view_output.set_controller(self) 
         self.view_output.setBackgroundBrush(QBrush(QColor(220, 220, 220), Qt.BrushStyle.DiagCrossPattern))
+        self.view_output.setAcceptDrops(True)
         
         self.output_pixmap_item = QGraphicsPixmapItem()
         self.scene_output.addItem(self.output_pixmap_item)
@@ -934,6 +946,30 @@ class BackgroundRemoverGUI(QMainWindow):
         self.statusBar().addWidget(self.status_label)
         self.statusBar().addPermanentWidget(self.progress_bar) # Add to right side
         self.statusBar().addPermanentWidget(self.zoom_label)
+
+    def dragEnterEvent(self, event):
+        if event.mimeData().hasUrls():
+            # Check if any of the files are images
+            supported_exts = ['.png', '.jpg', '.jpeg', '.webp', '.bmp', '.tif', '.tiff']
+            for url in event.mimeData().urls():
+                if url.isLocalFile():
+                    path = url.toLocalFile()
+                    if os.path.splitext(path)[1].lower() in supported_exts:
+                        event.acceptProposedAction()
+                        return
+        super().dragEnterEvent(event)
+
+    def dropEvent(self, event):
+        urls = event.mimeData().urls()
+        if urls:
+            supported_exts = ['.png', '.jpg', '.jpeg', '.webp', '.bmp', '.tif', '.tiff']
+            fnames = [url.toLocalFile() for url in urls if url.isLocalFile() and os.path.splitext(url.toLocalFile())[1].lower() in supported_exts]
+            
+            if fnames:
+                self.image_paths = sorted(fnames)
+                self.current_image_index = 0
+                self.load_image(self.image_paths[0])
+        super().dropEvent(event)
 
     def update_window_title(self): # <--- NEW METHOD
         base_title = "Interactive Image Background Remover"
