@@ -38,7 +38,7 @@ jobs:
       - name: Build executable
         shell: bash
         run: |
-          pyinstaller --onefile --collect-all PyQt6 --collect-all PIL backgroundremoval.py  
+          pyinstaller --onefile --windowed --collect-all PyQt6 --collect-all PIL backgroundremoval.py
           
       - name: Rename executables 
         shell: bash
