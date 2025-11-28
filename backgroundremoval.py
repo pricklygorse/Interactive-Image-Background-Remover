@@ -1,7 +1,11 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 import sys
 import os
 import math
+import subprocess
+import json
+import base64
+
 import numpy as np
 import cv2
 from timeit import default_timer as timer
@@ -21,6 +25,8 @@ from scipy.special import expit
 from scipy.ndimage import binary_dilation, binary_erosion
 import onnxruntime as ort
 
+
+
 # --- Constants ---
 DEFAULT_ZOOM_FACTOR = 1.15
 if getattr(sys, 'frozen', False):
@@ -35,6 +41,52 @@ SOFTEN_RADIUS = 2
 MIN_RECT_SIZE = 5
 
 print(f"Working directory: {SCRIPT_BASE_DIR}")
+
+
+
+def run_model_in_subprocess(model_path, input_tensor, prefer_gpu=True):
+    """
+    Run a single ONNX inference in a short-lived subprocess (onnx_worker.py).
+
+    input_tensor: np.ndarray (float32), e.g. shape (1, C, H, W)
+    Returns: flattened np.ndarray(float32). Caller reshapes as needed.
+    """
+    arr = np.asarray(input_tensor, dtype=np.float32)
+    payload = {
+        "model_path": model_path,
+        "input": base64.b64encode(arr.tobytes()).decode("utf8"),
+        "input_shape": list(arr.shape),
+        "prefer_gpu": bool(prefer_gpu),
+    }
+
+    proc = subprocess.Popen(
+        [sys.executable, "onnx_worker.py"],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    stdout_data, stderr_data = proc.communicate(json.dumps(payload).encode("utf8"))
+
+    if proc.returncode != 0:
+        raise RuntimeError(
+            f"onnx_worker failed with exit code {proc.returncode}: "
+            f"{stderr_data.decode('utf8', errors='ignore')}"
+        )
+
+    out_bytes = base64.b64decode(stdout_data)
+    return np.frombuffer(out_bytes, dtype=np.float32)
+
+
+
+# --- GPU Detection ---
+def gpu_available():
+    try:
+        return "CUDAExecutionProvider" in ort.get_available_providers()
+    except:
+        return False
+
+
+
 
 # --- Helper Functions ---
 
@@ -722,6 +774,8 @@ class BackgroundRemoverGUI(QMainWindow):
         self.working_mask = None
         self.model_output_mask = None
 
+        self.setup_drag_drop()
+
         self.init_ui()
         self.setup_keybindings()
 
@@ -825,6 +879,23 @@ class BackgroundRemoverGUI(QMainWindow):
         
         self.chk_paint = QCheckBox("Paintbrush (P)"); self.chk_paint.toggled.connect(self.toggle_paint_mode)
         sl.addWidget(self.chk_paint)
+
+        # GPU Toggle
+        self.chk_gpu = QCheckBox("Use GPU (if available)")
+        self.chk_gpu.setChecked(True)  # default ON
+
+        # Disable if GPU unavailable
+        try:
+            if "CUDAExecutionProvider" not in ort.get_available_providers():
+                self.chk_gpu.setChecked(False)
+                self.chk_gpu.setEnabled(False)
+        except:
+            self.chk_gpu.setChecked(False)
+            self.chk_gpu.setEnabled(False)
+
+        sl.addWidget(self.chk_gpu)
+
+
         
         self.chk_show_mask = QCheckBox("Show Mask"); self.chk_show_mask.toggled.connect(self.update_output_preview)
         sl.addWidget(self.chk_show_mask)
@@ -842,7 +913,8 @@ class BackgroundRemoverGUI(QMainWindow):
         self.shadow_frame = QFrame()
         sf_layout = QVBoxLayout(self.shadow_frame)
         sf_layout.setContentsMargins(0,0,0,0)
-        
+
+
         def make_slider(lbl, min_v, max_v, def_v, cb):
             l = QLabel(f"{lbl}: {def_v}")
             s = QSlider(Qt.Orientation.Horizontal)
@@ -916,6 +988,60 @@ class BackgroundRemoverGUI(QMainWindow):
         self.statusBar().addWidget(self.status_label)
         self.statusBar().addPermanentWidget(self.progress_bar) # Add to right side
         self.statusBar().addPermanentWidget(self.zoom_label)
+
+
+    
+    # --- ONNX Runtime: GPU/CPU Provider Selection ---
+    def get_ort_providers(self):
+        providers_available = ort.get_available_providers()
+        print("Available Providers:", providers_available)
+
+        # If checkbox is checked AND GPU available
+        if self.chk_gpu.isChecked() and "CUDAExecutionProvider" in providers_available:
+            print("Trying GPU provider...")
+            return ["CUDAExecutionProvider"]  # FORCE GPU ONLY
+
+        print("Using CPU provider...")
+        return ["CPUExecutionProvider"]
+
+
+
+    # Modified version with drag-and-drop enabled
+    # NOTE: Only the top-level changes are shown here due to size.
+    # Insert these methods inside BackgroundRemoverGUI class:
+
+    def setup_drag_drop(self):
+        self.setAcceptDrops(True)
+
+    def dragEnterEvent(self, event):
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def dropEvent(self, event):
+        urls = event.mimeData().urls()
+        if not urls:
+            return
+        paths = [u.toLocalFile() for u in urls]
+        self.image_paths = paths
+        self.current_image_index = 0
+        self.load_image(paths[0])
+
+    # Add this line inside __init__ of BackgroundRemoverGUI:
+    #     self.setup_drag_drop()
+
+    # Insert these exactly:
+    # In BackgroundRemoverGUI.__init__ add:
+    #     self.setup_drag_drop()
+
+    # This is the minimal patch required. Full integration requires placing
+    # the above methods directly into your full script.
+
+
+
+
+
 
     def update_window_title(self): # <--- NEW METHOD
         base_title = "Interactive Image Background Remover"
@@ -1132,21 +1258,48 @@ class BackgroundRemoverGUI(QMainWindow):
 
     def _init_sam(self):
         model_name = self.combo_sam.currentText()
-        if "Select" in model_name or "No Models" in model_name: return False
+        if "Select" in model_name or "No Models" in model_name:
+            return False
         
         model_path = os.path.join(MODEL_ROOT, model_name)
-        if self.sam_model_path != model_path:
-            try:
-                self.status_label.setText(f"Loading {model_name}...")
-                QApplication.processEvents()
-                self.sam_encoder = ort.InferenceSession(model_path + ".encoder.onnx")
-                self.sam_decoder = ort.InferenceSession(model_path + ".decoder.onnx")
-                self.sam_model_path = model_path
-                if hasattr(self, "encoder_output"): delattr(self, "encoder_output")
-            except Exception as e:
-                QMessageBox.critical(self, "Error", f"Could not load model: {e}")
-                return False
+        if self.sam_model_path == model_path:
+            # Already loaded
+            return True
+        
+        try:
+            self.status_label.setText(f"Loading {model_name}...")
+            QApplication.processEvents()
+
+            # Match “no sticky arena” behavior on CPU; still fine with CUDA
+            sess_options = ort.SessionOptions()
+            sess_options.enable_cpu_mem_arena = False
+
+            providers = self.get_ort_providers()
+
+            self.sam_encoder = ort.InferenceSession(
+                model_path + ".encoder.onnx",
+                sess_options=sess_options,
+                providers=providers,
+            )
+
+            self.sam_decoder = ort.InferenceSession(
+                model_path + ".decoder.onnx",
+                sess_options=sess_options,
+                providers=providers,
+            )
+
+            print("SAM encoder providers:", self.sam_encoder.get_providers())
+            print("SAM decoder providers:", self.sam_decoder.get_providers())
+
+            self.sam_model_path = model_path
+            if hasattr(self, "encoder_output"):
+                delattr(self, "encoder_output")
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Could not load model: {e}")
+            return False
+
         return True
+
 
     def handle_sam_point(self, scene_pos, is_positive):
         self.coordinates.append([scene_pos.x(), scene_pos.y()])
@@ -1269,84 +1422,94 @@ class BackgroundRemoverGUI(QMainWindow):
             self.set_loading(False, final_status)
 
     def run_whole_image_model(self, model_name=None, target_size=1024):
-        # TODO read model inputs instead of hardcoding based on filename
+        # Runs the whole-image model in a separate process via onnx_worker.py
 
-        if not model_name: model_name = self.combo_whole.currentText()
-        if "Select" in model_name: return
+        if not model_name:
+            model_name = self.combo_whole.currentText()
+        if "Select" in model_name or "No Models" in model_name:
+            return
         
+        # Find actual .onnx name that contains this substring
         found_name = None
-        for f in os.listdir(MODEL_ROOT):
-            if model_name in f and f.endswith(".onnx"): found_name = f.replace(".onnx",""); break
-        if not found_name: 
-            self.status_label.setText(f"Model {model_name} not found"); return
+        if os.path.exists(MODEL_ROOT):
+            for f in os.listdir(MODEL_ROOT):
+                if model_name in f and f.endswith(".onnx"):
+                    found_name = f.replace(".onnx", "")
+                    break
+        if not found_name:
+            self.status_label.setText(f"Model {model_name} not found")
+            return
         
         model_name = found_name
         crop, x_off, y_off = self.get_viewport_crop()
+        if crop.width == 0 or crop.height == 0:
+            return
 
-        if "BiRefNet_HR" in model_name: target_size=2048
+        # Some models use larger input
+        if "BiRefNet_HR" in model_name:
+            target_size = 2048
         
         QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
         self.set_loading(True, f"Processing {model_name}...")
         QApplication.processEvents()
         
         final_status = "Idle"
-        load_time = 0.0
         inference_time = 0.0
 
         try:
-
-            if not hasattr(self, f"{model_name}_session"):
-                t_start_load = timer()
-                
-                sess_options = ort.SessionOptions()
-                sess_options.enable_cpu_mem_arena = False 
-                session = ort.InferenceSession(os.path.join(MODEL_ROOT, model_name + ".onnx"),sess_options=sess_options)
-                setattr(self, f"{model_name}_session", session)
-                load_time = (timer() - t_start_load) * 1000
-                
-            # Retrieve the session (fast)
-            session = getattr(self, f"{model_name}_session")
-            
-            # --- Preprocessing ---
+            # --- Preprocessing (same as your original code) ---
             img_r = crop.convert("RGB").resize((target_size, target_size), Image.BICUBIC)
             
-            if "isnet" in model_name or "rmbg" in model_name: mean, std = (0.5, 0.5, 0.5), (1.0, 1.0, 1.0)
-            else: mean, std = (0.485, 0.456, 0.406), (0.229, 0.224, 0.225)
+            if "isnet" in model_name or "rmbg" in model_name:
+                mean, std = (0.5, 0.5, 0.5), (1.0, 1.0, 1.0)
+            else:
+                mean, std = (0.485, 0.456, 0.406), (0.229, 0.224, 0.225)
             
             im = np.array(img_r) / 255.0
-            tmp = np.zeros((im.shape[0], im.shape[1], 3))
-            tmp[:,:,0] = (im[:,:,0] - mean[0])/std[0]
-            tmp[:,:,1] = (im[:,:,1] - mean[1])/std[1]
-            tmp[:,:,2] = (im[:,:,2] - mean[2])/std[2]
+            tmp = np.zeros((im.shape[0], im.shape[1], 3), dtype=np.float32)
+            tmp[:, :, 0] = (im[:, :, 0] - mean[0]) / std[0]
+            tmp[:, :, 1] = (im[:, :, 1] - mean[1]) / std[1]
+            tmp[:, :, 2] = (im[:, :, 2] - mean[2]) / std[2]
             
+            # HWC -> NCHW with batch dim
             inp = np.expand_dims(tmp.transpose((2, 0, 1)), 0).astype(np.float32)
-            
-            t_start_inf = timer() 
-            result = session.run(None, {session.get_inputs()[0].name: inp})[0]
-            inference_time = (timer() - t_start_inf) * 1000
 
-            # --- Postprocessing ---
+            # --- Inference in subprocess ---
+            t_start_inf = timer()
+            model_path = os.path.join(MODEL_ROOT, model_name + ".onnx")
+            prefer_gpu = self.chk_gpu.isChecked()
+
+            flat_result = run_model_in_subprocess(model_path, inp, prefer_gpu=prefer_gpu)
+            inference_time = (timer() - t_start_inf) * 1000.0
+
+            # Your models all use (1, 1, H, W) here
+            result = flat_result.reshape(1, 1, target_size, target_size)
+
+            # --- Postprocessing (same as before) ---
             if "BiRefNet" in model_name:
-                pred = 1 / (1 + np.exp(-result[0][0]))
-                mask = (pred - pred.min()) / (pred.max() - pred.min())
+                pred = 1.0 / (1.0 + np.exp(-result[0][0]))
+                mask = (pred - pred.min()) / (pred.max() - pred.min() + 1e-6)
             else:
                 mask = result[0][0]
-                mask = (mask - mask.min()) / (mask.max() - mask.min())
+                mask = (mask - mask.min()) / (mask.max() - mask.min() + 1e-6)
             
-            res_mask = Image.fromarray((mask * 255).astype("uint8"), "L").resize(crop.size, Image.Resampling.LANCZOS)
+            res_mask = Image.fromarray(
+                (mask * 255).astype("uint8"), "L"
+            ).resize(crop.size, Image.Resampling.LANCZOS)
+
             self.model_output_mask = Image.new("L", self.original_image.size, 0)
             self.model_output_mask.paste(res_mask, (x_off, y_off))
             self.show_mask_overlay()
             
-            load_str = f"{load_time:.0f}ms" if load_time > 0 else "Cached"
-            final_status = f"{model_name}: Load {load_str} | Inf {inference_time:.0f}ms"
+            final_status = f"{model_name}: Subproc Inf {inference_time:.0f}ms"
             
-        except Exception as e: 
+        except Exception as e:
             QMessageBox.critical(self, "Error", str(e))
             final_status = "Inference Error"
         finally:
             QApplication.restoreOverrideCursor()
             self.set_loading(False, final_status)
+
 
     def show_mask_overlay(self):
         if self.model_output_mask:
