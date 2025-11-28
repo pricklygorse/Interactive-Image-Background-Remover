@@ -1,3 +1,9 @@
+﻿import sys, onnxruntime as ort
+print("RUNNING PYTHON:", sys.executable)
+print("ORT PROVIDERS:", ort.get_available_providers())
+
+
+
 #!/usr/bin/env python3
 import sys
 import os
@@ -35,6 +41,20 @@ SOFTEN_RADIUS = 2
 MIN_RECT_SIZE = 5
 
 print(f"Working directory: {SCRIPT_BASE_DIR}")
+
+
+
+
+
+# --- GPU Detection ---
+def gpu_available():
+    try:
+        return "CUDAExecutionProvider" in ort.get_available_providers()
+    except:
+        return False
+
+
+
 
 # --- Helper Functions ---
 
@@ -722,6 +742,8 @@ class BackgroundRemoverGUI(QMainWindow):
         self.working_mask = None
         self.model_output_mask = None
 
+        self.setup_drag_drop()
+
         self.init_ui()
         self.setup_keybindings()
 
@@ -825,6 +847,23 @@ class BackgroundRemoverGUI(QMainWindow):
         
         self.chk_paint = QCheckBox("Paintbrush (P)"); self.chk_paint.toggled.connect(self.toggle_paint_mode)
         sl.addWidget(self.chk_paint)
+
+        # GPU Toggle
+        self.chk_gpu = QCheckBox("Use GPU (if available)")
+        self.chk_gpu.setChecked(True)  # default ON
+
+        # Disable if GPU unavailable
+        try:
+            if "CUDAExecutionProvider" not in ort.get_available_providers():
+                self.chk_gpu.setChecked(False)
+                self.chk_gpu.setEnabled(False)
+        except:
+            self.chk_gpu.setChecked(False)
+            self.chk_gpu.setEnabled(False)
+
+        sl.addWidget(self.chk_gpu)
+
+
         
         self.chk_show_mask = QCheckBox("Show Mask"); self.chk_show_mask.toggled.connect(self.update_output_preview)
         sl.addWidget(self.chk_show_mask)
@@ -842,7 +881,8 @@ class BackgroundRemoverGUI(QMainWindow):
         self.shadow_frame = QFrame()
         sf_layout = QVBoxLayout(self.shadow_frame)
         sf_layout.setContentsMargins(0,0,0,0)
-        
+
+
         def make_slider(lbl, min_v, max_v, def_v, cb):
             l = QLabel(f"{lbl}: {def_v}")
             s = QSlider(Qt.Orientation.Horizontal)
@@ -916,6 +956,60 @@ class BackgroundRemoverGUI(QMainWindow):
         self.statusBar().addWidget(self.status_label)
         self.statusBar().addPermanentWidget(self.progress_bar) # Add to right side
         self.statusBar().addPermanentWidget(self.zoom_label)
+
+
+    
+    # --- ONNX Runtime: GPU/CPU Provider Selection ---
+    def get_ort_providers(self):
+        providers_available = ort.get_available_providers()
+        print("Available Providers:", providers_available)
+
+        # If checkbox is checked AND GPU available
+        if self.chk_gpu.isChecked() and "CUDAExecutionProvider" in providers_available:
+            print("Trying GPU provider...")
+            return ["CUDAExecutionProvider"]  # FORCE GPU ONLY
+
+        print("Using CPU provider...")
+        return ["CPUExecutionProvider"]
+
+
+
+    # Modified version with drag-and-drop enabled
+    # NOTE: Only the top-level changes are shown here due to size.
+    # Insert these methods inside BackgroundRemoverGUI class:
+
+    def setup_drag_drop(self):
+        self.setAcceptDrops(True)
+
+    def dragEnterEvent(self, event):
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def dropEvent(self, event):
+        urls = event.mimeData().urls()
+        if not urls:
+            return
+        paths = [u.toLocalFile() for u in urls]
+        self.image_paths = paths
+        self.current_image_index = 0
+        self.load_image(paths[0])
+
+    # Add this line inside __init__ of BackgroundRemoverGUI:
+    #     self.setup_drag_drop()
+
+    # Insert these exactly:
+    # In BackgroundRemoverGUI.__init__ add:
+    #     self.setup_drag_drop()
+
+    # This is the minimal patch required. Full integration requires placing
+    # the above methods directly into your full script.
+
+
+
+
+
 
     def update_window_title(self): # <--- NEW METHOD
         base_title = "Interactive Image Background Remover"
@@ -1139,8 +1233,21 @@ class BackgroundRemoverGUI(QMainWindow):
             try:
                 self.status_label.setText(f"Loading {model_name}...")
                 QApplication.processEvents()
-                self.sam_encoder = ort.InferenceSession(model_path + ".encoder.onnx")
-                self.sam_decoder = ort.InferenceSession(model_path + ".decoder.onnx")
+
+                providers = self.get_ort_providers()
+
+                self.sam_encoder = ort.InferenceSession(
+                    model_path + ".encoder.onnx",
+                    providers=providers
+                )
+
+                self.sam_decoder = ort.InferenceSession(
+                    model_path + ".decoder.onnx",
+                    providers=providers
+                )
+
+                print("Actual Session Providers:", session.get_providers())
+
                 self.sam_model_path = model_path
                 if hasattr(self, "encoder_output"): delattr(self, "encoder_output")
             except Exception as e:
@@ -1300,7 +1407,16 @@ class BackgroundRemoverGUI(QMainWindow):
                 
                 sess_options = ort.SessionOptions()
                 sess_options.enable_cpu_mem_arena = False 
-                session = ort.InferenceSession(os.path.join(MODEL_ROOT, model_name + ".onnx"),sess_options=sess_options)
+                providers = self.get_ort_providers()
+
+                session = ort.InferenceSession(
+                    os.path.join(MODEL_ROOT, model_name + ".onnx"),
+                    providers=providers
+                )
+
+                print("Actual Session Providers:", session.get_providers())
+
+
                 setattr(self, f"{model_name}_session", session)
                 load_time = (timer() - t_start_load) * 1000
                 
