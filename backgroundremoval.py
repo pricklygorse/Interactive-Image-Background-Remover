@@ -18,8 +18,6 @@ from PyQt6.QtGui import (QPixmap, QImage, QColor, QPainter, QPen, QBrush,
                          QKeySequence, QShortcut, QCursor)
 
 from PIL import Image, ImageOps, ImageDraw, ImageEnhance, ImageGrab, ImageFilter, ImageChops
-from scipy.special import expit
-from scipy.ndimage import binary_dilation, binary_erosion
 import onnxruntime as ort
 
 
@@ -69,6 +67,9 @@ def pil2pixmap(im):
     qim = QImage(img_data.data, width, height, bytes_per_line, QImage.Format.Format_RGBA8888)
 
     return QPixmap.fromImage(qim)
+
+def sigmoid(x):
+    return 1 / (1 + np.exp(-x))
 
 
 class SaveOptionsDialog(QDialog):
@@ -614,8 +615,8 @@ class ImageEditorDialog(QDialog):
         # 3. Tone Curves (LUT)
         x = np.arange(256, dtype=np.float32)
         tone = self.get_val('tone_curve')
-        hl_mask = expit((x - 192) / (255 * tone))
-        sh_mask = 1 - expit((x - 64) / (255 * tone))
+        hl_mask = sigmoid((x - 192) / (255 * tone))
+        sh_mask = 1 - sigmoid((x - 64) / (255 * tone))
         mt_mask = 1 - hl_mask - sh_mask
         lut = (x * self.get_val('highlight') * hl_mask + x * self.get_val('midtone') * mt_mask + x * self.get_val('shadow') * sh_mask).clip(0, 255).astype(np.uint8)
         
@@ -774,9 +775,22 @@ class BackgroundRemoverGUI(QMainWindow):
         layout = QHBoxLayout(main)
 
         # --- Sidebar ---
-        sidebar = QFrame(); sidebar.setFixedWidth(300)
-        sl = QVBoxLayout(sidebar)
+        sidebar_container = QFrame()
+        sidebar_container.setFixedWidth(300)
+        sidebar_layout = QVBoxLayout(sidebar_container)
+        sidebar_layout.setContentsMargins(0, 0, 0, 0)
+
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setFrameShape(QFrame.Shape.NoFrame)
+        scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         
+        scroll_widget = QWidget()
+        sl = QVBoxLayout(scroll_widget) # Main layout for controls
+        scroll_widget.setFixedWidth(sidebar_container.width()) # Constrain content width
+        scroll_area.setWidget(scroll_widget)
+        sidebar_layout.addWidget(scroll_area)
         nav = QHBoxLayout()
         btn_o = QPushButton("Open"); btn_o.clicked.connect(self.load_image_dialog)
         btn_c = QPushButton("Clipboard"); btn_c.clicked.connect(self.load_clipboard)
@@ -833,11 +847,11 @@ class BackgroundRemoverGUI(QMainWindow):
         self.populate_sam_models()
         sl.addWidget(self.combo_sam)
         
-        # 2. Whole Image (Automatic) Label & Tooltip
+        # 2. Automatic Label & Tooltip
         lbl_whole = QLabel("Automatic (Whole Image):")
-        lbl_whole.setToolTip("<b>Whole-Image Models</b><br>"
+        lbl_whole.setToolTip("<b>Automatic Models</b><br>"
                              "These run automatically on the entire image.<br>"
-                             "<i>Usage: Select a model and click 'Run Whole-Image'. No points needed.</i>")
+                             "<i>Usage: Select a model and click 'Run Automatic'. No points needed.</i>")
         sl.addWidget(lbl_whole)
 
         # Whole Image Combo
@@ -846,7 +860,7 @@ class BackgroundRemoverGUI(QMainWindow):
         self.populate_whole_models()
         sl.addWidget(self.combo_whole)
         
-        btn_whole = QPushButton("Run Whole-Image"); btn_whole.clicked.connect(lambda: self.run_whole_image_model(None))
+        btn_whole = QPushButton("Run Automatic"); btn_whole.clicked.connect(lambda: self.run_automatic_model(None))
         sl.addWidget(btn_whole)
 
         sl.addWidget(QLabel("<b>Actions:</b>"))
@@ -949,7 +963,7 @@ class BackgroundRemoverGUI(QMainWindow):
         
         w_in = QWidget(); l_in = QVBoxLayout(w_in)
         w_in.setMinimumWidth(150)
-        l_in.addWidget(QLabel("Input (Left: Point/Box, Right: Neg Point, Mid: Pan) Models are run on the current viewport"))
+        l_in.addWidget(QLabel("Interactive Input. Models are run on the current viewport"))
         self.scene_input = QGraphicsScene()
         self.view_input = SynchronizedGraphicsView(self.scene_input, name="Input View") 
         self.view_input.set_controller(self)
@@ -965,7 +979,7 @@ class BackgroundRemoverGUI(QMainWindow):
         
         w_out = QWidget(); l_out = QVBoxLayout(w_out)
         w_out.setMinimumWidth(150)
-        l_out.addWidget(QLabel("Output"))
+        l_out.addWidget(QLabel("Output Composite"))
         self.scene_output = QGraphicsScene()
         self.view_output = SynchronizedGraphicsView(self.scene_output, name="Output View")
         self.view_output.set_controller(self) 
@@ -981,8 +995,8 @@ class BackgroundRemoverGUI(QMainWindow):
         self.view_input.set_sibling(self.view_output)
         self.view_output.set_sibling(self.view_input)
         
-        layout.addWidget(sidebar)
-        layout.addWidget(self.splitter)
+        layout.addWidget(sidebar_container)
+        layout.addWidget(self.splitter, 1) # Give splitter stretch factor and add it to the main layout
         
         self.status_label = QLabel("Idle")
         self.zoom_label = QLabel("Zoom: 100%")
@@ -1097,10 +1111,10 @@ class BackgroundRemoverGUI(QMainWindow):
         QShortcut(QKeySequence("Ctrl+S"), self).activated.connect(self.save_image)
         QShortcut(QKeySequence("Ctrl+Shift+S"), self).activated.connect(self.quick_save_jpeg)
         
-        QShortcut(QKeySequence("U"), self).activated.connect(lambda: self.run_whole_image_model("u2net", 320))
-        QShortcut(QKeySequence("I"), self).activated.connect(lambda: self.run_whole_image_model("isnet"))
-        QShortcut(QKeySequence("O"), self).activated.connect(lambda: self.run_whole_image_model("rmbg"))
-        QShortcut(QKeySequence("B"), self).activated.connect(lambda: self.run_whole_image_model("BiRefNet"))
+        QShortcut(QKeySequence("U"), self).activated.connect(lambda: self.run_automatic_model("u2net", 320))
+        QShortcut(QKeySequence("I"), self).activated.connect(lambda: self.run_automatic_model("isnet"))
+        QShortcut(QKeySequence("O"), self).activated.connect(lambda: self.run_automatic_model("rmbg"))
+        QShortcut(QKeySequence("B"), self).activated.connect(lambda: self.run_automatic_model("BiRefNet"))
 
 
     def set_sam_gpu_enabled(self, checked: bool):
@@ -1459,7 +1473,7 @@ class BackgroundRemoverGUI(QMainWindow):
             QApplication.restoreOverrideCursor()
             self.set_loading(False, final_status)
 
-    def run_whole_image_model(self, model_name=None, target_size=1024):
+    def run_automatic_model(self, model_name=None, target_size=1024):
         # TODO read model inputs instead of hardcoding based on filename
 
         # 1) Figure out which model name to use
@@ -1660,8 +1674,10 @@ class BackgroundRemoverGUI(QMainWindow):
             m = m.filter(ImageFilter.GaussianBlur(radius=SOFTEN_RADIUS))
             
         if self.chk_post.isChecked():
-            arr = np.array(m)
-            arr = binary_erosion(binary_dilation(arr))
+            # Convert to boolean array for morphological operations
+            arr = np.array(m) > 128
+            kernel = np.ones((3,3), np.uint8)
+            arr = cv2.erode(cv2.dilate(arr.astype(np.uint8), kernel, iterations=1), kernel, iterations=1).astype(bool)
             m = Image.fromarray((arr*255).astype(np.uint8))
         self.working_mask = op(self.working_mask, m)
         self.update_output_preview()
@@ -1760,6 +1776,9 @@ class BackgroundRemoverGUI(QMainWindow):
 
     def handle_paint_start(self, pos):
         from PyQt6.QtGui import QPainterPath # Local import
+
+        # If a path is already being drawn, do nothing.
+        if hasattr(self, 'current_path'): return
 
         buttons = QApplication.mouseButtons()
         self.is_erasing = bool(buttons & Qt.MouseButton.RightButton)
@@ -1977,7 +1996,7 @@ class BackgroundRemoverGUI(QMainWindow):
         t.setReadOnly(True)
         t.setText("""Interactive Background Remover by Sean (Prickly Gorse)
 
-Load an image, then use Whole Image models (U, I, O, B) or Segment Anything (Left Click/Drag Box).
+Load an image, then use either a Automatic background removal model (e.g. u2net, isnet, BiRefNet) or Interactive Segment Anything (Left Click/Drag Box).
 Working mask appears as blue overlay on Input.
 Press 'A' to Add mask to Output, 'S' to Subtract.
 
