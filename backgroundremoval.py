@@ -752,9 +752,22 @@ class BackgroundRemoverGUI(QMainWindow):
         layout = QHBoxLayout(main)
 
         # --- Sidebar ---
-        sidebar = QFrame(); sidebar.setFixedWidth(300)
-        sl = QVBoxLayout(sidebar)
+        sidebar_container = QFrame()
+        sidebar_container.setFixedWidth(300)
+        sidebar_layout = QVBoxLayout(sidebar_container)
+        sidebar_layout.setContentsMargins(0, 0, 0, 0)
+
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setFrameShape(QFrame.Shape.NoFrame)
+        scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         
+        scroll_widget = QWidget()
+        sl = QVBoxLayout(scroll_widget) # Main layout for controls
+        scroll_widget.setFixedWidth(sidebar_container.width()) # Constrain content width
+        scroll_area.setWidget(scroll_widget)
+        sidebar_layout.addWidget(scroll_area)
         nav = QHBoxLayout()
         btn_o = QPushButton("Open"); btn_o.clicked.connect(self.load_image_dialog)
         btn_c = QPushButton("Clipboard"); btn_c.clicked.connect(self.load_clipboard)
@@ -933,8 +946,8 @@ class BackgroundRemoverGUI(QMainWindow):
         self.view_input.set_sibling(self.view_output)
         self.view_output.set_sibling(self.view_input)
         
-        layout.addWidget(sidebar)
-        layout.addWidget(self.splitter)
+        layout.addWidget(sidebar_container)
+        layout.addWidget(self.splitter, 1) # Give splitter stretch factor and add it to the main layout
         
         self.status_label = QLabel("Idle")
         self.zoom_label = QLabel("Zoom: 100%")
@@ -1574,6 +1587,9 @@ class BackgroundRemoverGUI(QMainWindow):
 
     def handle_paint_start(self, pos):
         from PyQt6.QtGui import QPainterPath # Local import
+
+        # If a path is already being drawn, do nothing.
+        if hasattr(self, 'current_path'): return
 
         buttons = QApplication.mouseButtons()
         self.is_erasing = bool(buttons & Qt.MouseButton.RightButton)
