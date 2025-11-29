@@ -2,6 +2,7 @@
 import sys
 import os
 import math
+import gc
 import numpy as np
 import cv2
 from timeit import default_timer as timer
@@ -12,7 +13,7 @@ from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QH
                              QSlider, QFrame, QSplitter, QDialog, QScrollArea, 
                              QGraphicsRectItem, QGraphicsEllipseItem, QGraphicsPathItem, 
                              QTextEdit, QSizePolicy, QRadioButton, QButtonGroup, QInputDialog, QProgressBar)
-from PyQt6.QtCore import Qt, QTimer, QPointF, QRectF
+from PyQt6.QtCore import Qt, QTimer, QPointF, QRectF, QSettings
 from PyQt6.QtGui import (QPixmap, QImage, QColor, QPainter, QPen, QBrush, 
                          QKeySequence, QShortcut, QCursor)
 
@@ -20,6 +21,16 @@ from PIL import Image, ImageOps, ImageDraw, ImageEnhance, ImageGrab, ImageFilter
 from scipy.special import expit
 from scipy.ndimage import binary_dilation, binary_erosion
 import onnxruntime as ort
+
+
+# --- ONNX Runtime / GPU detection ---
+try:
+    ORT_AVAILABLE_PROVIDERS = ort.get_available_providers()
+    CUDA_AVAILABLE = "CUDAExecutionProvider" in ORT_AVAILABLE_PROVIDERS
+except Exception:
+    ORT_AVAILABLE_PROVIDERS = []
+    CUDA_AVAILABLE = False
+
 
 # --- Constants ---
 DEFAULT_ZOOM_FACTOR = 1.15
@@ -724,6 +735,18 @@ class BackgroundRemoverGUI(QMainWindow):
         self.sam_model_path = None
         self.image_exif = None
         self.blur_radius = 30
+
+
+        # persistent settings
+        self.settings = QSettings("PricklyGorse", "InteractiveBackgroundRemover")
+
+        # GPU / CUDA options
+        self.cuda_available = CUDA_AVAILABLE
+
+        # Remembered preferences (fall back to False)
+        self.use_gpu = bool(self.settings.value("use_gpu", False, type=bool)) and self.cuda_available
+        self.use_sam_gpu = bool(self.settings.value("use_sam_gpu", False, type=bool)) and self.cuda_available
+
         
         self.original_image = None
         self.working_image = None
@@ -770,6 +793,20 @@ class BackgroundRemoverGUI(QMainWindow):
         h_edit_load_buttons.addWidget(btn_lm)
         sl.addLayout(h_edit_load_buttons)
 
+        # --- Execution provider options ---
+        sl.addWidget(QLabel("<b>Execution:</b>"))
+        self.chk_gpu = QCheckBox("Use GPU for whole-image models")
+        if not self.cuda_available:
+            self.chk_gpu.setEnabled(False)
+            self.chk_gpu.setToolTip("CUDAExecutionProvider not available. Install onnxruntime-gpu and CUDA.")
+        else:
+            self.chk_gpu.setChecked(self.use_gpu)
+            self.chk_gpu.setToolTip("Run whole-image ONNX models on GPU.")
+        self.chk_gpu.toggled.connect(self.set_gpu_enabled)
+        sl.addWidget(self.chk_gpu)
+
+
+
         sl.addWidget(QLabel("<b>Models:</b>"))
         # 1. SAM (Interactive) Label & Tooltip
         lbl_sam = QLabel("Interactive (SAM):")
@@ -777,6 +814,18 @@ class BackgroundRemoverGUI(QMainWindow):
                            "These require you to interact with the image.<br>"
                            "<i>Usage: Left-click to add points or drag to draw boxes around the subject.</i>")
         sl.addWidget(lbl_sam)
+
+        # SAM GPU toggle
+        self.chk_sam_gpu = QCheckBox("Use GPU for SAM (interactive)")
+        if not self.cuda_available:
+            self.chk_sam_gpu.setEnabled(False)
+            self.chk_sam_gpu.setToolTip("CUDAExecutionProvider not available.")
+        else:
+            self.chk_sam_gpu.setChecked(self.use_sam_gpu)
+            self.chk_sam_gpu.setToolTip("Run SAM encoder/decoder on GPU.")
+        self.chk_sam_gpu.toggled.connect(self.set_sam_gpu_enabled)
+        sl.addWidget(self.chk_sam_gpu)
+
 
         # SAM Combo
         self.combo_sam = QComboBox()
@@ -1053,6 +1102,61 @@ class BackgroundRemoverGUI(QMainWindow):
         QShortcut(QKeySequence("O"), self).activated.connect(lambda: self.run_whole_image_model("rmbg"))
         QShortcut(QKeySequence("B"), self).activated.connect(lambda: self.run_whole_image_model("BiRefNet"))
 
+
+    def set_sam_gpu_enabled(self, checked: bool):
+        """Toggle GPU for SAM and clear SAM sessions so they reload with the new provider."""
+        if checked and not self.cuda_available:
+            QMessageBox.warning(
+                self,
+                "CUDA not available",
+                "CUDAExecutionProvider is not available in this build of onnxruntime.\n\n"
+                "Install the GPU build (onnxruntime-gpu) and make sure CUDA is installed."
+            )
+            self.chk_sam_gpu.setChecked(False)
+            return
+
+        self.use_sam_gpu = checked and self.cuda_available
+        self.settings.setValue("use_sam_gpu", self.use_sam_gpu)
+
+        # Drop SAM sessions so next SAM use reloads with new provider
+        if hasattr(self, "sam_encoder"):
+            del self.sam_encoder
+        if hasattr(self, "sam_decoder"):
+            del self.sam_decoder
+        self.sam_model_path = None
+        if hasattr(self, "encoder_output"):
+            delattr(self, "encoder_output")
+
+        prov = "CUDAExecutionProvider" if self.use_sam_gpu else "CPUExecutionProvider"
+        self.status_label.setText(f"SAM will run on: {prov} (takes effect next time you use SAM)")
+
+
+    def set_gpu_enabled(self, checked: bool):
+        """Toggle GPU for whole-image models and clear their cached sessions."""
+        if checked and not self.cuda_available:
+            QMessageBox.warning(
+                self,
+                "CUDA not available",
+                "CUDAExecutionProvider is not available in this build of onnxruntime.\n\n"
+                "Install the GPU build (onnxruntime-gpu) and make sure CUDA is installed."
+            )
+            self.chk_gpu.setChecked(False)
+            return
+
+        self.use_gpu = checked and self.cuda_available
+        self.settings.setValue("use_gpu", self.use_gpu)
+
+        # Clear whole-image model sessions so they reload with the new provider
+        for attr in list(self.__dict__.keys()):
+            if attr.endswith("_session"):
+                delattr(self, attr)
+
+        prov = "CUDAExecutionProvider" if (self.use_gpu and self.cuda_available) else "CPUExecutionProvider"
+        self.status_label.setText(f"Whole-image models will use: {prov} (reloads next time you run one)")
+
+
+
+
     def handle_bg_change(self, text):
         if "Blur" in text:
             val, ok = QInputDialog.getInt(self, "Blur Radius", "Set Blur Radius:", 
@@ -1184,23 +1288,56 @@ class BackgroundRemoverGUI(QMainWindow):
         if w <= 0 or h <= 0: return self.original_image, 0, 0
         return self.original_image.crop((x, y, x+w, y+h)), x, y
 
+
+    def _get_providers(self, for_sam: bool = False):
+        """
+        Return a list of execution providers for ONNX Runtime.
+        - for_sam=True  -> use 'use_sam_gpu'
+        - for_sam=False -> use 'use_gpu' (whole-image models)
+        """
+        if not self.cuda_available:
+            return ["CPUExecutionProvider"]
+
+        if for_sam:
+            return ["CUDAExecutionProvider", "CPUExecutionProvider"] if self.use_sam_gpu else ["CPUExecutionProvider"]
+        else:
+            return ["CUDAExecutionProvider", "CPUExecutionProvider"] if self.use_gpu else ["CPUExecutionProvider"]
+
+
+
     def _init_sam(self):
         model_name = self.combo_sam.currentText()
-        if "Select" in model_name or "No Models" in model_name: return False
-        
+        if "Select" in model_name or "No Models" in model_name:
+            return False
+
         model_path = os.path.join(MODEL_ROOT, model_name)
         if self.sam_model_path != model_path:
             try:
                 self.status_label.setText(f"Loading {model_name}...")
                 QApplication.processEvents()
-                self.sam_encoder = ort.InferenceSession(model_path + ".encoder.onnx")
-                self.sam_decoder = ort.InferenceSession(model_path + ".decoder.onnx")
+
+                providers = self._get_providers(for_sam=True)
+                self.sam_encoder = ort.InferenceSession(
+                    model_path + ".encoder.onnx",
+                    providers=providers
+                )
+                self.sam_decoder = ort.InferenceSession(
+                    model_path + ".decoder.onnx",
+                    providers=providers
+                )
+
                 self.sam_model_path = model_path
-                if hasattr(self, "encoder_output"): delattr(self, "encoder_output")
+                if hasattr(self, "encoder_output"):
+                    delattr(self, "encoder_output")
+
+                prov = self.sam_encoder.get_providers()[0]
+                self.status_label.setText(f"{model_name} loaded ({prov})")
             except Exception as e:
                 QMessageBox.critical(self, "Error", f"Could not load model: {e}")
                 return False
         return True
+
+
 
     def handle_sam_point(self, scene_pos, is_positive):
         self.coordinates.append([scene_pos.x(), scene_pos.y()])
@@ -1325,82 +1462,133 @@ class BackgroundRemoverGUI(QMainWindow):
     def run_whole_image_model(self, model_name=None, target_size=1024):
         # TODO read model inputs instead of hardcoding based on filename
 
-        if not model_name: model_name = self.combo_whole.currentText()
-        if "Select" in model_name: return
-        
+        # 1) Figure out which model name to use
+        if not model_name:
+            model_name = self.combo_whole.currentText()
+        if not model_name or "Select" in model_name or "No Models" in model_name:
+            return
+
+        # Find the actual .onnx file
         found_name = None
         for f in os.listdir(MODEL_ROOT):
-            if model_name in f and f.endswith(".onnx"): found_name = f.replace(".onnx",""); break
-        if not found_name: 
-            self.status_label.setText(f"Model {model_name} not found"); return
-        
+            if model_name in f and f.endswith(".onnx"):
+                found_name = f.replace(".onnx", "")
+                break
+        if not found_name:
+            self.status_label.setText(f"Model {model_name} not found")
+            return
+
         model_name = found_name
         crop, x_off, y_off = self.get_viewport_crop()
+        if crop.width == 0 or crop.height == 0:
+            return
 
-        if "BiRefNet_HR" in model_name: target_size=2048
-        
+        if "BiRefNet_HR" in model_name:
+            target_size = 2048
+
         QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
         self.set_loading(True, f"Processing {model_name}...")
         QApplication.processEvents()
-        
+
         final_status = "Idle"
         load_time = 0.0
         inference_time = 0.0
 
-        try:
+        # In GPU mode we do NOT cache sessions; in CPU mode we do.
+        gpu_mode = getattr(self, "use_gpu", False) and getattr(self, "cuda_available", False)
+        cache_attr = None if gpu_mode else f"{model_name}_session"
 
-            if not hasattr(self, f"{model_name}_session"):
+        try:
+            # --- Session creation / retrieval ---
+            sess_options = ort.SessionOptions()
+            # keep this if you had it before
+            sess_options.enable_cpu_mem_arena = False  
+
+            if gpu_mode:
+                # GPU: always new session (no caching -> VRAM can be freed after run)
+                providers = ["CUDAExecutionProvider", "CPUExecutionProvider"]
                 t_start_load = timer()
-                
-                sess_options = ort.SessionOptions()
-                sess_options.enable_cpu_mem_arena = False 
-                session = ort.InferenceSession(os.path.join(MODEL_ROOT, model_name + ".onnx"),sess_options=sess_options)
-                setattr(self, f"{model_name}_session", session)
+                session = ort.InferenceSession(
+                    os.path.join(MODEL_ROOT, model_name + ".onnx"),
+                    sess_options=sess_options,
+                    providers=providers,
+                )
                 load_time = (timer() - t_start_load) * 1000
-                
-            # Retrieve the session (fast)
-            session = getattr(self, f"{model_name}_session")
-            
+            else:
+                # CPU: reuse cached session for speed
+                providers = ["CPUExecutionProvider"]
+                if not hasattr(self, cache_attr):
+                    t_start_load = timer()
+                    session = ort.InferenceSession(
+                        os.path.join(MODEL_ROOT, model_name + ".onnx"),
+                        sess_options=sess_options,
+                        providers=providers,
+                    )
+                    setattr(self, cache_attr, session)
+                    load_time = (timer() - t_start_load) * 1000
+                else:
+                    session = getattr(self, cache_attr)
+                    load_time = 0.0
+
             # --- Preprocessing ---
             img_r = crop.convert("RGB").resize((target_size, target_size), Image.BICUBIC)
-            
-            if "isnet" in model_name or "rmbg" in model_name: mean, std = (0.5, 0.5, 0.5), (1.0, 1.0, 1.0)
-            else: mean, std = (0.485, 0.456, 0.406), (0.229, 0.224, 0.225)
-            
+
+            if "isnet" in model_name or "rmbg" in model_name:
+                mean, std = (0.5, 0.5, 0.5), (1.0, 1.0, 1.0)
+            else:
+                mean, std = (0.485, 0.456, 0.406), (0.229, 0.224, 0.225)
+
             im = np.array(img_r) / 255.0
-            tmp = np.zeros((im.shape[0], im.shape[1], 3))
-            tmp[:,:,0] = (im[:,:,0] - mean[0])/std[0]
-            tmp[:,:,1] = (im[:,:,1] - mean[1])/std[1]
-            tmp[:,:,2] = (im[:,:,2] - mean[2])/std[2]
-            
+            tmp = np.zeros((im.shape[0], im.shape[1], 3), dtype=np.float32)
+            tmp[:, :, 0] = (im[:, :, 0] - mean[0]) / std[0]
+            tmp[:, :, 1] = (im[:, :, 1] - mean[1]) / std[1]
+            tmp[:, :, 2] = (im[:, :, 2] - mean[2]) / std[2]
+
             inp = np.expand_dims(tmp.transpose((2, 0, 1)), 0).astype(np.float32)
-            
-            t_start_inf = timer() 
+
+            # --- Inference ---
+            t_start_inf = timer()
             result = session.run(None, {session.get_inputs()[0].name: inp})[0]
             inference_time = (timer() - t_start_inf) * 1000
 
             # --- Postprocessing ---
             if "BiRefNet" in model_name:
                 pred = 1 / (1 + np.exp(-result[0][0]))
-                mask = (pred - pred.min()) / (pred.max() - pred.min())
+                denom = (pred.max() - pred.min()) or 1.0
+                mask = (pred - pred.min()) / denom
             else:
                 mask = result[0][0]
-                mask = (mask - mask.min()) / (mask.max() - mask.min())
-            
-            res_mask = Image.fromarray((mask * 255).astype("uint8"), "L").resize(crop.size, Image.Resampling.LANCZOS)
+                denom = (mask.max() - mask.min()) or 1.0
+                mask = (mask - mask.min()) / denom
+
+            res_mask = Image.fromarray((mask * 255).astype("uint8"), "L").resize(
+                crop.size, Image.Resampling.LANCZOS
+            )
             self.model_output_mask = Image.new("L", self.original_image.size, 0)
             self.model_output_mask.paste(res_mask, (x_off, y_off))
             self.show_mask_overlay()
-            
+
             load_str = f"{load_time:.0f}ms" if load_time > 0 else "Cached"
-            final_status = f"{model_name}: Load {load_str} | Inf {inference_time:.0f}ms"
-            
-        except Exception as e: 
+            provs = session.get_providers()
+            ep = provs[0] if provs else "UnknownEP"
+            final_status = f"{model_name}: EP {ep} | Load {load_str} | Inf {inference_time:.0f}ms"
+
+        except Exception as e:
             QMessageBox.critical(self, "Error", str(e))
             final_status = "Inference Error"
         finally:
+            # In GPU mode, drop the session so VRAM can be reclaimed
+            if gpu_mode:
+                try:
+                    del session
+                except UnboundLocalError:
+                    pass
+                import gc
+                gc.collect()
+
             QApplication.restoreOverrideCursor()
             self.set_loading(False, final_status)
+
 
     def show_mask_overlay(self):
         if self.model_output_mask:
