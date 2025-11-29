@@ -1,11 +1,13 @@
 # Interactive Image Background Remover
 
-Interactive Background Remover is a user-friendly tool designed to remove backgrounds from images using a combination of interactive models (Segment Anything) and whole-image models (such as u2net, disnet, rmbg, and BiRefNet). This allows you to refine and fine tune your background removal, in a similar way to apps like Photoroom, instead of only running models on the entire image.
+Interactive Background Remover is a user-friendly tool designed to remove backgrounds from images using a combination of interactive models (Segment Anything) and automatic whole-image models (such as u2net, disnet, rmbg, and BiRefNet). This allows you to refine and fine tune your background removal, in a similar way to apps like Photoroom, instead of only running models on the entire image.
+
+![Screenshot of main window](Images/main_image.jpg)
 
 ## Features
 
 - **Interactive Model Support**: Utilise Segment Anything for detailed object selection by clicking or drawing boxes on the image.
-- **Whole-Image Model Support**: Apply models like u2net, disnet, rmbg, and BiRefNet for quick background removal across the entire image, which can be further refined.
+- **Automatic Whole-Image Model Support**: Apply models like u2net, disnet, rmbg, and BiRefNet for quick background removal across the entire image, which can be further refined.
 - **Zoom and Pan**: Zoom in on specific parts of the image and pan around for detailed editing. The models are only run on the viewed area so you can incrementally build up an image from higher resolution patches.
 - **Manual Paintbrush Mode**: Manually refine the background removal with a paintbrush tool for areas not covered by the models.
 - **Mask Refinement**: Smooth edges, filter anomalous areas and soften the mask for a natural look. You can directly edit the mask for high fidelity background removal.
@@ -17,17 +19,16 @@ Interactive Background Remover is a user-friendly tool designed to remove backgr
 - **Clipboard Support**: Load images directly from the clipboard for quick editing.
 - **Windows, Linux and Mac Builds**: In the Github releases. Mac is currently untested, please let me know
 
-![Screenshot of main window](Images/main_image.jpg)
 
 ## Installation
 
 ### Prerequisites
 
 - Python 3.x
-- Required Python packages: `Pillow`, `scipy`, `numpy`, `onnxruntime`, `opencv-python`, `screeninfo`, `PyQt6`
+- Required Python packages: `Pillow`, `numpy`, `onnxruntime`, `opencv-python`, `PyQt6`
 
 ```bash
-pip install pyqt6 Pillow scipy numpy onnxruntime opencv-python screeninfo
+pip install pyqt6 Pillow numpy onnxruntime opencv-python
 ```
 
 Or download prebuilt executables for Windows, Linux and Mac from the [Github releases](https://github.com/pricklygorse/Interactive-Image-Background-Remover/releases) 
@@ -107,7 +108,7 @@ python interactive_background_remover.py image1.jpg image2.png
 3. **Zoom and Pan**: Use the full image or zoom into region of interest (arrow keys or middle mouse to pan, mouse scroll to zoom)
 4. **Generate Background Removal Mask**:
    - **Interactively: Segment Anything**: Left-click to add a positive point, right-click to add a negative (exclusion) point, or drag to draw a box around the object.
-   - **Whole-Image Models**: Click "Run whole-image model" to apply the selected model to the entire image (or zoomed area).
+   - **Automatic: Whole-Image Models**: Click "Run whole-image model" to apply the selected model to the entire image (or zoomed area).
 5. **Refine Background Removal Mask**:
    - Use the "Add mask" and "Subtract mask" buttons to add the model output to the background removal mask.
    - Toggle "Manual Paintbrush" mode to manually edit the mask. Right click to draw a mask, left to erase.
@@ -154,7 +155,7 @@ Click "Edit Image" to open the built-in image editor, where you can crop, rotate
 
 Find this useful and want to support my work? [You can buy me a coffee (or whatever) here.](https://ko-fi.com/pricklygorse) :)
 
-I'm fairly new to python and tkinter so any improvements to the code, features, and suggestions are welcome. There are likely bugs.
+I'm fairly new to python so any improvements to the code, features, and suggestions are welcome. There are likely bugs.
 
 
 # Acknowledgements
