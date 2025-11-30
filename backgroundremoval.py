@@ -730,7 +730,9 @@ class BackgroundRemoverGUI(QMainWindow):
         self.settings = QSettings("PricklyGorse", "InteractiveBackgroundRemover")
 
         # --- Hardware Acceleration ---
-        self.available_providers = ort.get_available_providers()
+        all_providers = ort.get_available_providers()
+        # Hide azure showing in the list if the user has no GPU. Extremely unlikely will be used for such a simple app
+        self.available_providers = [p for p in all_providers if p != 'AzureExecutionProvider']
         self.selected_provider = 'CPUExecutionProvider' # Default
 
         self.original_image = None
