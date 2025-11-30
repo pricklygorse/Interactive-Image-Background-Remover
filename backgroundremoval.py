@@ -12,9 +12,9 @@ from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QH
                              QSlider, QFrame, QSplitter, QDialog, QScrollArea, 
                              QGraphicsRectItem, QGraphicsEllipseItem, QGraphicsPathItem, 
                              QTextEdit, QSizePolicy, QRadioButton, QButtonGroup, QInputDialog, QProgressBar)
-from PyQt6.QtCore import Qt, QTimer, QPointF, QRectF
-from PyQt6.QtGui import (QPixmap, QImage, QColor, QPainter, QPen, QBrush, 
-                         QKeySequence, QShortcut, QCursor)
+from PyQt6.QtCore import Qt, QTimer, QPointF, QRectF, QSettings
+from PyQt6.QtGui import (QPixmap, QImage, QColor, QPainter, QPen, QBrush,
+                         QKeySequence, QShortcut, QCursor, )
 
 from PIL import Image, ImageOps, ImageDraw, ImageEnhance, ImageGrab, ImageFilter, ImageChops
 import onnxruntime as ort
@@ -726,6 +726,13 @@ class BackgroundRemoverGUI(QMainWindow):
         self.image_exif = None
         self.blur_radius = 30
         
+        # --- Settings ---
+        self.settings = QSettings("PricklyGorse", "InteractiveBackgroundRemover")
+
+        # --- Hardware Acceleration ---
+        self.available_providers = ort.get_available_providers()
+        self.selected_provider = 'CPUExecutionProvider' # Default
+
         self.original_image = None
         self.working_image = None
         self.working_mask = None
@@ -783,6 +790,43 @@ class BackgroundRemoverGUI(QMainWindow):
         h_edit_load_buttons.addWidget(btn_ed)
         h_edit_load_buttons.addWidget(btn_lm)
         sl.addLayout(h_edit_load_buttons)
+
+        # --- Hardware Acceleration Dropdown ---
+        sl.addWidget(QLabel("<b>Hardware Acceleration:</b>"))
+        self.combo_provider = QComboBox()
+        self.combo_provider.setToolTip("If only 'CPU' available, you may need to install onnxruntime-gpu (NVIDIA CUDA), onnxruntime-openvino (Intel) or onnxruntime-directml (Windows DirectX)")
+        self.combo_provider.addItems(self.available_providers)
+        
+        # Set initial selection
+        default_provider_preference = ['OpenVINOExecutionProvider', 'CUDAExecutionProvider', 'DmlExecutionProvider', 'CPUExecutionProvider']
+        for provider in default_provider_preference:
+            if provider in self.available_providers:
+                idx = self.combo_provider.findText(provider)
+                if idx >= 0:
+                    self.combo_provider.setCurrentIndex(idx)
+                    self.selected_provider = provider
+                    break
+        self.combo_provider.currentTextChanged.connect(self.on_provider_changed)
+        sl.addWidget(self.combo_provider)
+
+        # Grey out the box if CPU is the only option
+        if len(self.available_providers) == 1 and 'CPUExecutionProvider' in self.available_providers:
+            self.combo_provider.setEnabled(False)
+
+        self.chk_cache = QCheckBox("Cache Optimised Models")
+        self.chk_cache.setToolTip("Saves optimised models to disk for much faster startup on future runs. Recommended for GPU providers.")
+        cache_state = self.settings.value("cache_models", True, type=bool)
+        self.chk_cache.setChecked(cache_state)
+        sl.addWidget(self.chk_cache)
+        self.chk_cache.toggled.connect(lambda checked: self.settings.setValue("cache_models", checked))
+        self.update_acceleration_options(self.selected_provider) # Set initial visibility
+
+        self.chk_unload = QCheckBox("Unload Unused Models")
+        self.chk_unload.setToolTip("Frees RAM and GPU VRAM by unloading other models from memory when you switch to a new one. Some models can take several seconds to load.")
+        unload_state = self.settings.value("unload_models", False, type=bool)
+        self.chk_unload.setChecked(unload_state)
+        sl.addWidget(self.chk_unload)
+        self.chk_unload.toggled.connect(lambda checked: self.settings.setValue("unload_models", checked))
 
         sl.addWidget(QLabel("<b>Models:</b>"))
         # 1. SAM (Interactive) Label & Tooltip
@@ -972,6 +1016,20 @@ class BackgroundRemoverGUI(QMainWindow):
                         event.acceptProposedAction()
                         return
         super().dragEnterEvent(event)
+
+    def update_acceleration_options(self, provider):
+        # Show cache option only for providers that support it
+        show_cache_option = provider in ['OpenVINOExecutionProvider', 'TensorrtExecutionProvider']
+        self.chk_cache.setVisible(show_cache_option)
+
+    def on_provider_changed(self, provider):
+        if not hasattr(self, 'status_label'): return # Still initializing
+        
+        self.selected_provider = provider
+        self.status_label.setText(f"Provider set to {provider}. Models will be reloaded.")
+
+        self._clear_onnx_sessions() # Unload all models
+        self.update_acceleration_options(provider)
 
     def dropEvent(self, event):
         urls = event.mimeData().urls()
@@ -1198,17 +1256,52 @@ class BackgroundRemoverGUI(QMainWindow):
         if w <= 0 or h <= 0: return self.original_image, 0, 0
         return self.original_image.crop((x, y, x+w, y+h)), x, y
 
+    def _clear_onnx_sessions(self, keep_sam=False, keep_model_name=None):
+        
+        if not keep_sam:
+            if hasattr(self, "sam_encoder"): delattr(self, "sam_encoder")
+            if hasattr(self, "sam_decoder"): delattr(self, "sam_decoder")
+            self.sam_model_path = None
+
+        # Clear automatic models
+        sessions_to_clear = [attr for attr in dir(self) if attr.endswith("_session")]
+        for session_attr in sessions_to_clear:
+            # Don't clear the model we are about to load/use
+            if keep_model_name and keep_model_name in session_attr:
+                continue
+            delattr(self, session_attr)
+
     def _init_sam(self):
         model_name = self.combo_sam.currentText()
         if "Select" in model_name or "No Models" in model_name: return False
         
         model_path = os.path.join(MODEL_ROOT, model_name)
+
+        if self.chk_unload.isChecked():
+            self._clear_onnx_sessions(keep_sam=True) # Keep SAM, clear others
+
         if self.sam_model_path != model_path:
             try:
                 self.status_label.setText(f"Loading {model_name}...")
                 QApplication.processEvents()
-                self.sam_encoder = ort.InferenceSession(model_path + ".encoder.onnx")
-                self.sam_decoder = ort.InferenceSession(model_path + ".decoder.onnx")
+
+                provider_options = []
+                if self.chk_cache.isChecked():
+                    if self.selected_provider == 'OpenVINOExecutionProvider':
+                        cache_path = os.path.join(MODEL_ROOT, "cache")
+                        os.makedirs(cache_path, exist_ok=True)
+                        provider_options = [{'device_type': 'GPU', 'cache_dir': cache_path}]
+                    elif self.selected_provider == 'TensorrtExecutionProvider':
+                        cache_path = os.path.join(MODEL_ROOT, "cache")
+                        os.makedirs(cache_path, exist_ok=True)
+                        provider_options = [{'trt_engine_cache_enable': True, 'trt_engine_cache_path': cache_path}]
+
+                self.sam_encoder = ort.InferenceSession(model_path + ".encoder.onnx", 
+                                                      providers=[self.selected_provider],
+                                                      provider_options=provider_options)
+                self.sam_decoder = ort.InferenceSession(model_path + ".decoder.onnx", 
+                                                      providers=[self.selected_provider],
+                                                      provider_options=provider_options)
                 self.sam_model_path = model_path
                 if hasattr(self, "encoder_output"): delattr(self, "encoder_output")
             except Exception as e:
@@ -1351,11 +1444,12 @@ class BackgroundRemoverGUI(QMainWindow):
         model_name = found_name
         crop, x_off, y_off = self.get_viewport_crop()
 
+        if self.chk_unload.isChecked():
+            self._clear_onnx_sessions(keep_model_name=model_name)
+
         if "BiRefNet_HR" in model_name: target_size=2048
         
-        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
-        self.set_loading(True, f"Processing {model_name}...")
-        QApplication.processEvents()
+        self.set_loading(True, f"Loading {model_name}...")
         
         final_status = "Idle"
         load_time = 0.0
@@ -1366,14 +1460,30 @@ class BackgroundRemoverGUI(QMainWindow):
             if not hasattr(self, f"{model_name}_session"):
                 t_start_load = timer()
                 sess_options = ort.SessionOptions()
+                # This frees the ram after inference with very little impact on performance.
+                # Makes keeping multiple models loaded in memory for rapid use possible without OOM issues
+                # (unless using huge models like BiRefNet_HD, which is a different problem)
                 sess_options.enable_cpu_mem_arena = False 
-                session = ort.InferenceSession(os.path.join(MODEL_ROOT, model_name + ".onnx"),sess_options=sess_options)
+
+                provider_options = []
+                if self.chk_cache.isChecked():
+                    if self.selected_provider == 'OpenVINOExecutionProvider':
+                        cache_path = os.path.join(MODEL_ROOT, "cache")
+                        os.makedirs(cache_path, exist_ok=True)
+                        provider_options = [{'device_type': 'GPU', 'cache_dir': cache_path}]
+                    elif self.selected_provider == 'TensorrtExecutionProvider':
+                        cache_path = os.path.join(MODEL_ROOT, "cache")
+                        os.makedirs(cache_path, exist_ok=True)
+                        provider_options = [{'trt_engine_cache_enable': True, 'trt_engine_cache_path': cache_path}]
+
+                session = ort.InferenceSession(os.path.join(MODEL_ROOT, model_name + ".onnx"), sess_options=sess_options, providers=[self.selected_provider], provider_options=provider_options)
                 setattr(self, f"{model_name}_session", session)
                 load_time = (timer() - t_start_load) * 1000
                 
             # Retrieve the session (fast)
             session = getattr(self, f"{model_name}_session")
-            
+
+            self.status_label.setText(f"Running {model_name}...")
             # --- Preprocessing ---
             img_r = crop.convert("RGB").resize((target_size, target_size), Image.BICUBIC)
             
@@ -1412,7 +1522,6 @@ class BackgroundRemoverGUI(QMainWindow):
             QMessageBox.critical(self, "Error", str(e))
             final_status = "Inference Error"
         finally:
-            QApplication.restoreOverrideCursor()
             self.set_loading(False, final_status)
 
     def show_mask_overlay(self):
