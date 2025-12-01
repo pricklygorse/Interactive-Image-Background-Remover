@@ -15,10 +15,11 @@ from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QH
                              QTextEdit, QSizePolicy, QRadioButton, QButtonGroup, QInputDialog, QProgressBar)
 from PyQt6.QtCore import Qt, QTimer, QPointF, QRectF, QSettings
 from PyQt6.QtGui import (QPixmap, QImage, QColor, QPainter, QPen, QBrush, 
-                         QKeySequence, QShortcut, QCursor)
+                         QKeySequence, QShortcut, QCursor, QIcon, QFont)
 
 from PIL import Image, ImageOps, ImageDraw, ImageEnhance, ImageGrab, ImageFilter, ImageChops
 import onnxruntime as ort
+
 
 
 
@@ -814,6 +815,22 @@ class BackgroundRemoverGUI(QMainWindow):
         self.trt_cached_session = None
 
 
+        # --- NEW: Remember which models have built a TensorRT engine (for UI dots) ---
+        sam_cached = self.settings.value("trt_cached_sam_models", "", type=str)
+        if isinstance(sam_cached, str) and sam_cached:
+            self.trt_cached_sam_models = set(x for x in sam_cached.split(";") if x)
+        elif isinstance(sam_cached, (list, tuple)):
+            self.trt_cached_sam_models = set(sam_cached)
+        else:
+            self.trt_cached_sam_models = set()
+
+        whole_cached = self.settings.value("trt_cached_whole_models", "", type=str)
+        if isinstance(whole_cached, str) and whole_cached:
+            self.trt_cached_whole_models = set(x for x in whole_cached.split(";") if x)
+        elif isinstance(whole_cached, (list, tuple)):
+            self.trt_cached_whole_models = set(whole_cached)
+        else:
+            self.trt_cached_whole_models = set()
 
 
         
@@ -878,6 +895,7 @@ class BackgroundRemoverGUI(QMainWindow):
 
         # --- Whole Model Execution Section ---
         lbl_exec_whole = QLabel("<b>Whole Model:</b>")
+        lbl_exec_whole.setContentsMargins(3, 0, 0, 0)
         lbl_exec_whole.setToolTip(
             "Execution settings for whole-image background removal models"
         )
@@ -947,6 +965,7 @@ class BackgroundRemoverGUI(QMainWindow):
 
         # --- SAM Execution Section ---
         lbl_exec_sam = QLabel("<b>SAM:</b>")
+        lbl_exec_sam.setContentsMargins(3, 0, 0, 0)
         lbl_exec_sam.setToolTip(
             "Execution settings for interactive Segment Anything models.\n"
             "These are used when adding points/boxes on the input image."
@@ -982,10 +1001,13 @@ class BackgroundRemoverGUI(QMainWindow):
         sl.addWidget(self.combo_sam_exec)
 
         # --- Models Section (just model selection) ---
-        sl.addWidget(QLabel("<b>Models:</b>"))
+        lbl_models = QLabel("<b>Models:</b>")
+        lbl_models.setContentsMargins(3, 0, 0, 0)
+        sl.addWidget(lbl_models)
 
         # 1. SAM Model
         lbl_sam = QLabel("SAM Model:")
+        lbl_sam.setContentsMargins(3, 0, 0, 0)
         lbl_sam.setToolTip(
             "<b>Segment Anything Models</b><br>"
             "These require you to interact with the image.<br>"
@@ -1000,6 +1022,7 @@ class BackgroundRemoverGUI(QMainWindow):
 
         # 2. Whole-Image Model
         lbl_whole = QLabel("Whole-Image Model:")
+        lbl_whole.setContentsMargins(3, 0, 0, 0)
         lbl_whole.setToolTip(
             "<b>Automatic Models</b><br>"
             "These run automatically on the entire image.<br>"
@@ -1017,7 +1040,9 @@ class BackgroundRemoverGUI(QMainWindow):
         sl.addWidget(btn_whole)
 
 
-        sl.addWidget(QLabel("<b>Actions:</b>"))
+        lbl_actions = QLabel("<b>Actions:</b>")
+        lbl_actions.setContentsMargins(3, 0, 0, 0)
+        sl.addWidget(lbl_actions)
         h_act = QHBoxLayout()
         btn_add = QPushButton("Add Mask"); btn_add.clicked.connect(self.add_mask)
         btn_sub = QPushButton("Sub Mask"); btn_sub.clicked.connect(self.subtract_mask)
@@ -1042,7 +1067,10 @@ class BackgroundRemoverGUI(QMainWindow):
         h_vs.addWidget(btn_cp); h_vs.addWidget(btn_c_vis) 
         sl.addLayout(h_vs)
 
-        sl.addWidget(QLabel("<b>Options:</b>"))
+        lbl_options = QLabel("<b>Options:</b>")
+        lbl_options.setContentsMargins(3, 0, 0, 0)
+        sl.addWidget(lbl_options)
+
         self.combo_bg = QComboBox()
         
         colors = ["Transparent", "White", "Black", "Red", "Blue", 
@@ -1164,6 +1192,11 @@ class BackgroundRemoverGUI(QMainWindow):
         self.statusBar().addPermanentWidget(self.progress_bar) # Add to right side
         self.statusBar().addPermanentWidget(self.zoom_label)
 
+        # NEW: initial icon sync based on persisted modes
+        self.update_sam_model_trt_icons()
+        self.update_whole_model_trt_icons()
+
+
     def dragEnterEvent(self, event):
         if event.mimeData().hasUrls():
             # Check if any of the files are images
@@ -1239,7 +1272,12 @@ class BackgroundRemoverGUI(QMainWindow):
             self.combo_sam.addItems(sorted(list(set(matches))))
             idx = self.combo_sam.findText("mobile_sam", Qt.MatchFlag.MatchContains)
             if idx >= 0: self.combo_sam.setCurrentIndex(idx)
-        else: self.combo_sam.addItem("No Models Found")
+        else:
+            self.combo_sam.addItem("No Models Found")
+
+        # NEW: reflect any existing TRT cache info
+        self.update_sam_model_trt_icons()
+
 
     def populate_whole_models(self):
         whole_models = ["rmbg", "isnet", "u2net", "BiRefNet"]
@@ -1250,8 +1288,14 @@ class BackgroundRemoverGUI(QMainWindow):
                     if partial in filename and ".onnx" in filename:
                         matches.append(filename.replace(".onnx",""))
         self.combo_whole.clear()
-        if matches: self.combo_whole.addItems(sorted(list(set(matches))))
-        else: self.combo_whole.addItem("No Models Found")
+        if matches:
+            self.combo_whole.addItems(sorted(list(set(matches))))
+        else:
+            self.combo_whole.addItem("No Models Found")
+
+        # NEW: reflect any existing TRT cache info
+        self.update_whole_model_trt_icons()
+
 
     def setup_keybindings(self):
         QShortcut(QKeySequence("A"), self).activated.connect(self.add_mask)
@@ -1379,6 +1423,80 @@ class BackgroundRemoverGUI(QMainWindow):
             )
 
 
+    # --- NEW: helper to persist TensorRT-cached model names ---
+    def _save_trt_cached_model_names(self):
+        self.settings.setValue(
+            "trt_cached_sam_models",
+            ";".join(sorted(self.trt_cached_sam_models))
+        )
+        self.settings.setValue(
+            "trt_cached_whole_models",
+            ";".join(sorted(self.trt_cached_whole_models))
+        )
+
+    # --- NEW: helper to create (and cache) a small red dot icon ---
+    def _get_trt_cached_dot_icon(self):
+        if hasattr(self, "_trt_cached_dot_icon"):
+            return self._trt_cached_dot_icon
+
+        size = 4
+        pm = QPixmap(size, size)
+        pm.fill(Qt.GlobalColor.transparent)
+
+        painter = QPainter(pm)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        painter.setBrush(QBrush(QColor(220, 0, 0)))  # red dot
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.drawEllipse(0, 0, size, size)
+        painter.end()
+
+        self._trt_cached_dot_icon = QIcon(pm)
+        return self._trt_cached_dot_icon
+
+    # --- NEW: update red dot icons for SAM models ---
+    def update_sam_model_trt_icons(self):
+        if not hasattr(self, "combo_sam"):
+            return
+
+        show = self.trt_available and getattr(self, "sam_exec_mode", "cpu") == "trt"
+        dot_icon = self._get_trt_cached_dot_icon() if show else None
+
+        from PyQt6.QtGui import QIcon as _QIconAlias
+
+        for i in range(self.combo_sam.count()):
+            name = self.combo_sam.itemText(i)
+            if not name or "No Models" in name:
+                self.combo_sam.setItemIcon(i, _QIconAlias())
+                continue
+
+            if show and name in self.trt_cached_sam_models:
+                self.combo_sam.setItemIcon(i, dot_icon)
+            else:
+                # No dot if not cached or not in TRT mode
+                self.combo_sam.setItemIcon(i, _QIconAlias())
+
+    # --- NEW: update red dot icons for whole-image models ---
+    def update_whole_model_trt_icons(self):
+        if not hasattr(self, "combo_whole"):
+            return
+
+        show = self.trt_available and getattr(self, "exec_mode", "cpu") == "trt"
+        dot_icon = self._get_trt_cached_dot_icon() if show else None
+
+        from PyQt6.QtGui import QIcon as _QIconAlias
+
+        for i in range(self.combo_whole.count()):
+            name = self.combo_whole.itemText(i)
+            if not name or "No Models" in name:
+                self.combo_whole.setItemIcon(i, _QIconAlias())
+                continue
+
+            if show and name in self.trt_cached_whole_models:
+                self.combo_whole.setItemIcon(i, dot_icon)
+            else:
+                self.combo_whole.setItemIcon(i, _QIconAlias())
+
+
 
 
 
@@ -1419,6 +1537,9 @@ class BackgroundRemoverGUI(QMainWindow):
         self.status_label.setText(
             f"SAM will prefer: {ep_name} (takes effect next time you use SAM)"
         )
+
+        # NEW: update red dot icons when SAM EP mode changes
+        self.update_sam_model_trt_icons()
 
 
     def on_exec_combo_changed(self, index: int):
@@ -1542,6 +1663,9 @@ class BackgroundRemoverGUI(QMainWindow):
         self.status_label.setText(
             f"Whole-image models will prefer: {ep} (reloads next time you run one)"
         )
+
+        # NEW: update red dot icons when whole-image EP mode changes
+        self.update_whole_model_trt_icons()
 
 
 
@@ -1789,13 +1913,22 @@ class BackgroundRemoverGUI(QMainWindow):
                     providers=providers
                 )
 
-
                 self.sam_model_path = model_path
                 if hasattr(self, "encoder_output"):
                     delattr(self, "encoder_output")
 
-                prov = self.sam_encoder.get_providers()[0]
+                provs = self.sam_encoder.get_providers()
+                prov = provs[0] if provs else "UnknownEP"
                 self.status_label.setText(f"{model_name} loaded ({prov})")
+
+                # NEW: if this SAM model is running on TensorRT, mark it as cached
+                if any("TensorrtExecutionProvider" in p for p in provs):
+                    if model_name not in self.trt_cached_sam_models:
+                        self.trt_cached_sam_models.add(model_name)
+                        self._save_trt_cached_model_names()
+                        if self.sam_exec_mode == "trt":
+                            self.update_sam_model_trt_icons()
+
             except Exception as e:
                 QMessageBox.critical(self, "Error", f"Could not load model: {e}")
                 return False
@@ -2125,6 +2258,19 @@ class BackgroundRemoverGUI(QMainWindow):
             t_start_inf = timer()
             result = session.run(None, {session.get_inputs()[0].name: inp})[0]
             inference_time = (timer() - t_start_inf) * 1000
+
+            # NEW: if this whole-image model is running on TensorRT, mark it as cached
+            try:
+                provs = session.get_providers()
+            except Exception:
+                provs = []
+            if any("TensorrtExecutionProvider" in p for p in provs):
+                if model_name not in self.trt_cached_whole_models:
+                    self.trt_cached_whole_models.add(model_name)
+                    self._save_trt_cached_model_names()
+                    if getattr(self, "exec_mode", "cpu") == "trt":
+                        self.update_whole_model_trt_icons()
+
 
             # --- Postprocessing ---
             if "BiRefNet" in model_name:
@@ -2604,6 +2750,8 @@ Working mask appears as blue overlay on Input.
 Press 'A' to Add mask to Output, 'S' to Subtract.
 
 Image segmentation models are run on the current view, so you can zoom into details to fine tune your background removal.
+
+Red dots next to models indicate they are cached for TensorRT.
 
 Controls:
 - Left Click: Add Point (SAM) / Start Box
