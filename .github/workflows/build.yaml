@@ -12,12 +12,23 @@ permissions:
 
 jobs:
   build:
-    runs-on: ${{ matrix.os }} 
-    continue-on-error: false
+    runs-on: ${{ matrix.config.os }}
+    continue-on-error: true
 
     strategy:
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest] 
+        config:
+          # Linux Builds
+          - { os: ubuntu-latest, provider: "cpu", ort_package: "onnxruntime", name: "linux-cpu" }
+          - { os: ubuntu-latest, provider: "gpu", ort_package: "onnxruntime-gpu", name: "linux-nvidia" }
+          - { os: ubuntu-latest, provider: "openvino", ort_package: "onnxruntime-openvino", name: "linux-intel-openvino" }
+          # Windows Builds
+          - { os: windows-latest, provider: "cpu", ort_package: "onnxruntime", name: "windows-cpu" }
+          - { os: windows-latest, provider: "gpu", ort_package: "onnxruntime-gpu", name: "windows-nvidia" }
+          - { os: windows-latest, provider: "directml", ort_package: "onnxruntime-directml", name: "windows-DX12-directml" }
+          #- { os: windows-latest, provider: "openvino", ort_package: "onnxruntime-openvino", name: "windows-openvino" }
+          # macOS Build
+          - { os: macos-latest, provider: "cpu", ort_package: "onnxruntime", name: "macos-cpu" }
 
     steps:
       - name: Checkout code
@@ -26,47 +37,54 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
-          python-version: '3.12.3'  
+          python-version: '3.12' 
 
       - name: Install dependencies
         shell: bash
         run: |
           python -m pip install --upgrade pip
-          pip install pyinstaller pyqt6
-          pip install -r requirements.txt
+          pip install pyinstaller pyqt6 ${{ matrix.config.ort_package }}
+          pip install pillow numpy opencv-python
 
-      - name: Build executable
+      - name: Build executable (Linux/Windows)
+        if: runner.os != 'macOS'
         shell: bash
         run: |
-          pyinstaller --onefile --windowed --collect-all PyQt6 --collect-all PIL backgroundremoval.py
-          
-      - name: Rename executables 
-        shell: bash
+          pyinstaller --clean --onedir --windowed --name "Interactive-BG-Remover" \
+            --exclude-module torch \
+            backgroundremoval.py
+          mkdir -p dist/Interactive-BG-Remover/Models
+          mv Models/place_models_here.txt dist/Interactive-BG-Remover/Models/
+
+      - name: Build executable (macOS)
+        if: runner.os == 'macOS'
         run: |
-          if [[ "$RUNNER_OS" == "Linux" ]]; then
-            mv dist/backgroundremoval dist/backgroundremoval-linux
-          elif [[ "$RUNNER_OS" == "Windows" ]]; then
-            mv dist/backgroundremoval.exe dist/backgroundremoval-windows.exe
-          elif [[ "$RUNNER_OS" == "macOS" ]]; then
-            mv dist/backgroundremoval dist/backgroundremoval-UNTESTED-macos
-          fi
+          # mac has issues with --onedir. cpu only build so may as well use onefile
+          pyinstaller --clean --onefile --windowed --name "Interactive-BG-Remover" \
+            --exclude-module torch \
+            backgroundremoval.py
+          mkdir -p dist/mac-bundle/Models
+          mv dist/Interactive-BG-Remover dist/mac-bundle/
+          cp Models/place_models_here.txt dist/mac-bundle/Models/
+          mv dist/mac-bundle dist/Interactive-BG-Remover
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.os }}-executable
-          path: dist/*  
+          name: backgroundremover-${{ matrix.config.name }}
+          path: dist/Interactive-BG-Remover
+
 
   create-release:
     needs: build
+    if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v3
-
       - name: Download all workflow run artifacts
         uses: actions/download-artifact@v4
+        with:
+          path: artifacts
 
       - name: Create Release
         id: create_release
@@ -76,47 +94,24 @@ jobs:
         with:
           tag_name: ${{ github.ref }}
           release_name: Release ${{ github.ref }}
-          draft: false
+          draft: true
           prerelease: false
 
-      - name: Zip Ubuntu artifact
+      - name: Zip Release Assets
         run: |
-          zip -r ubuntu-latest-executable.zip ./ubuntu-latest-executable*
-      - name: Upload Ubuntu zip to release
-        uses: actions/upload-release-asset@v1
+          # Each artifact was downloaded into its own directory.
+          # e.g., artifacts/backgroundremover-linux-cpu/
+          # The contents of that directory are the build files.
+          # We need to cd into each and zip its contents.
+          for dir in artifacts/*; do
+            if [ -d "$dir" ]; then
+              (cd "$dir" && zip -r "../../$(basename "$dir").zip" .)
+            fi
+          done
+
+      - name: Upload Release Assets
+        uses: softprops/action-gh-release@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: ./ubuntu-latest-executable.zip
-          asset_name: ubuntu-latest-executable.zip
-          asset_content_type: application/zip
-
-      - name: Zip Mac artifact
-        run: |
-          zip -r macos-latest-executable.zip ./macos-latest-executable*
-      - name: Upload Mac zip to release
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: ./macos-latest-executable.zip
-          asset_name: macos-latest-executable.zip
-          asset_content_type: application/zip
-
-      - name: Zip Windows artifact
-        run: |
-          zip -r windows-latest-executable.zip ./windows-latest-executable*
-      - name: Upload windows zip to release
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: ./windows-latest-executable.zip
-          asset_name: windows-latest-executable.zip
-          asset_content_type: application/zip
-
-      - name: List files # Debug step to see what was downloaded
-        run: find .
+          files: ./*.zip
