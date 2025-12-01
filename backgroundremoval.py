@@ -20,7 +20,6 @@ from PyQt6.QtGui import (QPixmap, QImage, QColor, QPainter, QPen, QBrush,
 from PIL import Image, ImageOps, ImageDraw, ImageEnhance, ImageGrab, ImageFilter, ImageChops
 import onnxruntime as ort
 
-
 # --- ONNX Runtime / GPU detection ---
 try:
     ORT_AVAILABLE_PROVIDERS = ort.get_available_providers()
@@ -28,6 +27,19 @@ try:
 except Exception:
     ORT_AVAILABLE_PROVIDERS = []
     CUDA_AVAILABLE = False
+
+
+
+# --- ONNX Runtime / GPU detection ---
+try:
+    ORT_AVAILABLE_PROVIDERS = ort.get_available_providers()
+    CUDA_AVAILABLE = "CUDAExecutionProvider" in ORT_AVAILABLE_PROVIDERS
+    TENSORRT_AVAILABLE = "TensorrtExecutionProvider" in ORT_AVAILABLE_PROVIDERS
+except Exception:
+    ORT_AVAILABLE_PROVIDERS = []
+    CUDA_AVAILABLE = False
+    TENSORRT_AVAILABLE = False
+
 
 
 # --- Constants ---
@@ -42,6 +54,12 @@ PAINT_BRUSH_SCREEN_SIZE = 30
 UNDO_STEPS = 20
 SOFTEN_RADIUS = 2 
 MIN_RECT_SIZE = 5
+
+# TensorRT engine cache location
+TENSORRT_CACHE_DIR = os.path.join(SCRIPT_BASE_DIR, "Models/cache")
+os.makedirs(TENSORRT_CACHE_DIR, exist_ok=True)
+
+
 
 print(f"Working directory: {SCRIPT_BASE_DIR}")
 
@@ -741,12 +759,27 @@ class BackgroundRemoverGUI(QMainWindow):
         # persistent settings
         self.settings = QSettings("PricklyGorse", "InteractiveBackgroundRemover")
 
+
         # GPU / CUDA options
         self.cuda_available = CUDA_AVAILABLE
 
         # Remembered preferences (fall back to False)
         self.use_gpu = bool(self.settings.value("use_gpu", False, type=bool)) and self.cuda_available
         self.use_sam_gpu = bool(self.settings.value("use_sam_gpu", False, type=bool)) and self.cuda_available
+
+        # TensorRT options
+        self.trt_available = TENSORRT_AVAILABLE
+
+        # Prefer TensorRT if the build supports it and the user enables it
+        self.use_trt = bool(self.settings.value("use_trt", False, type=bool)) and self.trt_available
+        self.use_sam_trt = bool(self.settings.value("use_sam_trt", False, type=bool)) and self.trt_available
+
+        # --- NEW: single whole-image GPU model cache ---
+        # Only used when CUDA is the primary EP for whole-image models (no TensorRT).
+        self.cache_gpu_whole = bool(self.settings.value("cache_gpu_whole", False, type=bool))
+        self.gpu_cached_model_name = None
+        self.gpu_cached_session = None
+
 
         
         self.original_image = None
@@ -819,6 +852,35 @@ class BackgroundRemoverGUI(QMainWindow):
         self.chk_gpu.toggled.connect(self.set_gpu_enabled)
         sl.addWidget(self.chk_gpu)
 
+        # --- NEW: GPU cache toggle (only relevant for whole-image models on CUDA) ---
+        self.chk_gpu_cache = QCheckBox("Cache one GPU whole-image model")
+        self.chk_gpu_cache.setToolTip(
+            "When enabled, keep the last whole-image model loaded on the GPU so it runs "
+            "faster next time. Only one GPU model is cached at a time."
+        )
+        self.chk_gpu_cache.setChecked(self.cache_gpu_whole)
+        self.chk_gpu_cache.toggled.connect(self.set_gpu_cache_enabled)
+        sl.addWidget(self.chk_gpu_cache)
+
+
+
+        # TensorRT for whole-image models
+        self.chk_trt = QCheckBox("Use TensorRT for whole-image models")
+        if not self.trt_available:
+            self.chk_trt.setEnabled(False)
+            self.chk_trt.setToolTip(
+                "TensorrtExecutionProvider not available in this build of onnxruntime.\n"
+                "You need an ONNX Runtime build with TensorRT EP enabled."
+            )
+        else:
+            self.chk_trt.setChecked(self.use_trt)
+            self.chk_trt.setToolTip(
+                "Prefer TensorRTExecutionProvider for whole-image models.\n"
+                "If enabled, TensorRT is used before CUDA/CPU."
+            )
+        self.chk_trt.toggled.connect(self.set_trt_enabled)
+        sl.addWidget(self.chk_trt)
+
 
 
         sl.addWidget(QLabel("<b>Models:</b>"))
@@ -839,6 +901,42 @@ class BackgroundRemoverGUI(QMainWindow):
             self.chk_sam_gpu.setToolTip("Run SAM encoder/decoder on GPU.")
         self.chk_sam_gpu.toggled.connect(self.set_sam_gpu_enabled)
         sl.addWidget(self.chk_sam_gpu)
+
+
+
+
+        # Initial enable/disable state based on saved settings
+        if self.use_trt and self.trt_available:
+            self.chk_gpu.setEnabled(False)
+
+        if self.use_sam_trt and self.trt_available:
+            self.chk_sam_gpu.setEnabled(False)
+
+        # --- NEW: respect current GPU/TRT state for cache toggle visibility ---
+        self._update_gpu_cache_visibility()
+
+
+
+
+        # SAM TensorRT toggle
+        self.chk_sam_trt = QCheckBox("Use TensorRT for SAM (interactive)")
+        if not self.trt_available:
+            self.chk_sam_trt.setEnabled(False)
+            self.chk_sam_trt.setToolTip(
+                "TensorrtExecutionProvider not available.\n"
+                "You need an ONNX Runtime build with TensorRT EP enabled."
+            )
+        else:
+            self.chk_sam_trt.setChecked(self.use_sam_trt)
+            self.chk_sam_trt.setToolTip(
+                "Prefer TensorRTExecutionProvider for SAM encoder/decoder.\n"
+                "If enabled, TensorRT is used before CUDA/CPU."
+            )
+        self.chk_sam_trt.toggled.connect(self.set_sam_trt_enabled)
+        sl.addWidget(self.chk_sam_trt)
+
+
+
 
 
         # SAM Combo
@@ -1117,14 +1215,71 @@ class BackgroundRemoverGUI(QMainWindow):
         QShortcut(QKeySequence("B"), self).activated.connect(lambda: self.run_automatic_model("BiRefNet"))
 
 
+
+    # --- NEW: GPU cache helpers (whole-image only) ---
+    def _update_gpu_cache_visibility(self):
+        """
+        GPU cache toggle should only be visible when:
+        - CUDA is available
+        - GPU is enabled for whole-image models
+        - TensorRT is NOT the whole-image provider
+        """
+        visible = self.cuda_available and self.use_gpu and not self.use_trt
+        if hasattr(self, "chk_gpu_cache"):
+            self.chk_gpu_cache.setVisible(visible)
+
+    def _clear_gpu_cache(self):
+        """Drop any cached GPU whole-image session."""
+        if hasattr(self, "gpu_cached_session"):
+            try:
+                del self.gpu_cached_session
+            except AttributeError:
+                pass
+        self.gpu_cached_model_name = None
+        gc.collect()
+
+    def _gpu_cache_active(self):
+        """
+        Is the GPU cache feature actually in use right now?
+        (Whole-image models, CUDA primary, no TensorRT)
+        """
+        return (
+            self.cache_gpu_whole
+            and self.cuda_available
+            and self.use_gpu
+            and not self.use_trt
+        )
+
+    def set_gpu_cache_enabled(self, checked: bool):
+        """Toggle single-model GPU cache for whole-image models."""
+        self.cache_gpu_whole = checked
+        self.settings.setValue("cache_gpu_whole", self.cache_gpu_whole)
+
+        if not checked:
+            # Turning it off should also drop any cached session
+            self._clear_gpu_cache()
+            self.status_label.setText(
+                "GPU whole-image model cache disabled and cleared."
+            )
+        else:
+            self.status_label.setText(
+                "GPU whole-image model cache enabled (1 whole-image model at a time)."
+            )
+
+
+
     def set_sam_gpu_enabled(self, checked: bool):
-        """Toggle GPU for SAM and clear SAM sessions so they reload with the new provider."""
+        """Toggle CUDA for SAM.
+
+        If SAM TensorRT is enabled, CUDA is only a fallback and we do NOT clear
+        SAM sessions (so TRT engines remain).
+        """
         if checked and not self.cuda_available:
             QMessageBox.warning(
                 self,
                 "CUDA not available",
                 "CUDAExecutionProvider is not available in this build of onnxruntime.\n\n"
-                "Install the GPU build (onnxruntime-gpu) and make sure CUDA is installed."
+                "Install onnxruntime-gpu and CUDA."
             )
             self.chk_sam_gpu.setChecked(False)
             return
@@ -1132,7 +1287,146 @@ class BackgroundRemoverGUI(QMainWindow):
         self.use_sam_gpu = checked and self.cuda_available
         self.settings.setValue("use_sam_gpu", self.use_sam_gpu)
 
-        # Drop SAM sessions so next SAM use reloads with new provider
+        if getattr(self, "use_sam_trt", False):
+            # TensorRT is primary; leave encoder/decoder as-is.
+            prov = "TensorrtExecutionProvider"
+        else:
+            # No TensorRT for SAM: changing GPU means we need to reload SAM.
+            if hasattr(self, "sam_encoder"):
+                del self.sam_encoder
+            if hasattr(self, "sam_decoder"):
+                del self.sam_decoder
+            self.sam_model_path = None
+            if hasattr(self, "encoder_output"):
+                delattr(self, "encoder_output")
+
+            prov = "CUDAExecutionProvider" if self.use_sam_gpu else "CPUExecutionProvider"
+
+        self.status_label.setText(
+            f"SAM will prefer: {prov} (takes effect next time you use SAM)"
+        )
+
+
+
+    def set_gpu_enabled(self, checked: bool):
+        """Toggle CUDA for whole-image models.
+
+        If TensorRT is enabled, CUDA acts only as a fallback and we DO NOT clear
+        any cached sessions (so TRT engines/memory are preserved).
+        """
+        if checked and not self.cuda_available:
+            QMessageBox.warning(
+                self,
+                "CUDA not available",
+                "CUDAExecutionProvider is not available in this build of onnxruntime.\n\n"
+                "Install onnxruntime-gpu and CUDA."
+            )
+            self.chk_gpu.setChecked(False)
+            return
+
+        self.use_gpu = checked and self.cuda_available
+        self.settings.setValue("use_gpu", self.use_gpu)
+
+        # If TensorRT is enabled, CUDA is just a fallback; do NOT clear sessions.
+        if getattr(self, "use_trt", False):
+            ep = "TensorrtExecutionProvider"
+        else:
+            # No TensorRT: changing GPU means we want sessions reloaded with new EP.
+            for attr in list(self.__dict__.keys()):
+                if attr.endswith("_session"):
+                    delattr(self, attr)
+            ep = "CUDAExecutionProvider" if (self.use_gpu and self.cuda_available) else "CPUExecutionProvider"
+
+        # --- NEW: manage GPU cache when GPU is toggled ---
+        if not self.use_gpu:
+            # GPU turned off: drop any cached GPU whole-image session
+            self._clear_gpu_cache()
+        self._update_gpu_cache_visibility()
+
+        self.status_label.setText(
+            f"Whole-image models will prefer: {ep} (reloads next time you run one)"
+        )
+
+
+
+
+
+    def set_trt_enabled(self, checked: bool):
+        """Toggle TensorRT for whole-image models.
+
+        - When enabling TRT: disable the GPU checkbox and clear old cached sessions
+          so new ones are created with TRT.
+        - When disabling TRT: re-enable the GPU checkbox and clear TRT sessions.
+        """
+        if checked and not self.trt_available:
+            QMessageBox.warning(
+                self,
+                "TensorRT not available",
+                "TensorrtExecutionProvider is not available in this build of onnxruntime.\n\n"
+                "You need an ONNX Runtime build with TensorRT EP."
+            )
+            self.chk_trt.setChecked(False)
+            return
+
+        prev_use_trt = getattr(self, "use_trt", False)
+        self.use_trt = checked and self.trt_available
+        self.settings.setValue("use_trt", self.use_trt)
+
+        # Grey out / re-enable GPU checkbox
+        if self.use_trt:
+            # TRT ON: GPU becomes fallback only, and cannot be toggled in the UI
+            self.chk_gpu.setEnabled(False)
+        else:
+            # TRT OFF: user can control GPU again
+            self.chk_gpu.setEnabled(True)
+
+        # Any time the TRT setting changes, we clear cached whole-image sessions
+        # so new runs use the new EP ordering (CPU/TensorRT/CUDA).
+        for attr in list(self.__dict__.keys()):
+            if attr.endswith("_session"):
+                delattr(self, attr)
+
+        # --- NEW: TRT and GPU cache are mutually exclusive ---
+        if self.use_trt:
+            self._clear_gpu_cache()
+        self._update_gpu_cache_visibility()
+
+        if self.use_trt:
+            ep = "TensorrtExecutionProvider"
+        elif self.use_gpu and self.cuda_available:
+            ep = "CUDAExecutionProvider"
+        else:
+            ep = "CPUExecutionProvider"
+
+        self.status_label.setText(
+            f"Whole-image models will prefer: {ep} (reloads next time you run one)"
+        )
+
+
+
+    def set_sam_trt_enabled(self, checked: bool):
+        """Toggle TensorRT for SAM encoder/decoder."""
+        if checked and not self.trt_available:
+            QMessageBox.warning(
+                self,
+                "TensorRT not available",
+                "TensorrtExecutionProvider is not available in this build of onnxruntime.\n\n"
+                "You need an ONNX Runtime build compiled with TensorRT EP."
+            )
+            self.chk_sam_trt.setChecked(False)
+            return
+
+        prev_use_sam_trt = getattr(self, "use_sam_trt", False)
+        self.use_sam_trt = checked and self.trt_available
+        self.settings.setValue("use_sam_trt", self.use_sam_trt)
+
+        # Grey out / re-enable SAM GPU checkbox
+        if self.use_sam_trt:
+            self.chk_sam_gpu.setEnabled(False)
+        else:
+            self.chk_sam_gpu.setEnabled(True)
+
+        # Whenever TRT usage for SAM changes, drop SAM sessions so they reload.
         if hasattr(self, "sam_encoder"):
             del self.sam_encoder
         if hasattr(self, "sam_decoder"):
@@ -1141,32 +1435,18 @@ class BackgroundRemoverGUI(QMainWindow):
         if hasattr(self, "encoder_output"):
             delattr(self, "encoder_output")
 
-        prov = "CUDAExecutionProvider" if self.use_sam_gpu else "CPUExecutionProvider"
-        self.status_label.setText(f"SAM will run on: {prov} (takes effect next time you use SAM)")
+        if self.use_sam_trt:
+            prov = "TensorrtExecutionProvider"
+        elif self.use_sam_gpu and self.cuda_available:
+            prov = "CUDAExecutionProvider"
+        else:
+            prov = "CPUExecutionProvider"
+
+        self.status_label.setText(
+            f"SAM will prefer: {prov} (takes effect next time you use SAM)"
+        )
 
 
-    def set_gpu_enabled(self, checked: bool):
-        """Toggle GPU for whole-image models and clear their cached sessions."""
-        if checked and not self.cuda_available:
-            QMessageBox.warning(
-                self,
-                "CUDA not available",
-                "CUDAExecutionProvider is not available in this build of onnxruntime.\n\n"
-                "Install the GPU build (onnxruntime-gpu) and make sure CUDA is installed."
-            )
-            self.chk_gpu.setChecked(False)
-            return
-
-        self.use_gpu = checked and self.cuda_available
-        self.settings.setValue("use_gpu", self.use_gpu)
-
-        # Clear whole-image model sessions so they reload with the new provider
-        for attr in list(self.__dict__.keys()):
-            if attr.endswith("_session"):
-                delattr(self, attr)
-
-        prov = "CUDAExecutionProvider" if (self.use_gpu and self.cuda_available) else "CPUExecutionProvider"
-        self.status_label.setText(f"Whole-image models will use: {prov} (reloads next time you run one)")
 
 
 
@@ -1305,17 +1585,62 @@ class BackgroundRemoverGUI(QMainWindow):
 
     def _get_providers(self, for_sam: bool = False):
         """
-        Return a list of execution providers for ONNX Runtime.
-        - for_sam=True  -> use 'use_sam_gpu'
-        - for_sam=False -> use 'use_gpu' (whole-image models)
+        Return a list of execution providers for ONNX Runtime, ordered by preference.
+        - for_sam=True  -> use SAM flags (use_sam_trt / use_sam_gpu)
+        - for_sam=False -> use whole-image flags (use_trt / use_gpu)
+        Preference order: TensorRT -> CUDA -> CPU
         """
-        if not self.cuda_available:
+        if for_sam:
+            if getattr(self, "use_sam_trt", False) and self.trt_available:
+                return ["TensorrtExecutionProvider", "CUDAExecutionProvider", "CPUExecutionProvider"]
+            if getattr(self, "use_sam_gpu", False) and self.cuda_available:
+                return ["CUDAExecutionProvider", "CPUExecutionProvider"]
+            return ["CPUExecutionProvider"]
+        else:
+            if getattr(self, "use_trt", False) and self.trt_available:
+                return ["TensorrtExecutionProvider", "CUDAExecutionProvider", "CPUExecutionProvider"]
+            if getattr(self, "use_gpu", False) and self.cuda_available:
+                return ["CUDAExecutionProvider", "CPUExecutionProvider"]
             return ["CPUExecutionProvider"]
 
-        if for_sam:
-            return ["CUDAExecutionProvider", "CPUExecutionProvider"] if self.use_sam_gpu else ["CPUExecutionProvider"]
-        else:
-            return ["CUDAExecutionProvider", "CPUExecutionProvider"] if self.use_gpu else ["CPUExecutionProvider"]
+
+
+    def _get_provider_config(self, for_sam: bool = False):
+        """
+        Return a providers list suitable for InferenceSession(..., providers=...).
+
+        If TensorRT is first in the list, we attach engine cache options:
+        - trt_engine_cache_enable
+        - trt_engine_cache_path
+        """
+        base_providers = self._get_providers(for_sam=for_sam)
+        if not base_providers:
+            return ["CPUExecutionProvider"]
+
+        first_ep = base_providers[0]
+
+        if first_ep == "TensorrtExecutionProvider":
+            # Attach TensorRT options to enable engine caching
+            trt_entry = (
+                "TensorrtExecutionProvider",
+                {
+                    "trt_engine_cache_enable": True,
+                    "trt_engine_cache_path": TENSORRT_CACHE_DIR,
+                    # Optional extras, uncomment if you want:
+                    # "trt_fp16_enable": True,
+                    # "trt_timing_cache_enable": True,
+                },
+            )
+            providers = [trt_entry]
+            # Append any fallbacks (CUDA / CPU)
+            for ep in base_providers[1:]:
+                providers.append(ep)
+            return providers
+
+        # No TensorRT at the front, just return as-is
+        return base_providers
+
+
 
 
 
@@ -1330,7 +1655,7 @@ class BackgroundRemoverGUI(QMainWindow):
                 self.status_label.setText(f"Loading {model_name}...")
                 QApplication.processEvents()
 
-                providers = self._get_providers(for_sam=True)
+                providers = self._get_provider_config(for_sam=True)
                 self.sam_encoder = ort.InferenceSession(
                     model_path + ".encoder.onnx",
                     providers=providers
@@ -1339,6 +1664,7 @@ class BackgroundRemoverGUI(QMainWindow):
                     model_path + ".decoder.onnx",
                     providers=providers
                 )
+
 
                 self.sam_model_path = model_path
                 if hasattr(self, "encoder_output"):
@@ -1508,33 +1834,63 @@ class BackgroundRemoverGUI(QMainWindow):
         load_time = 0.0
         inference_time = 0.0
 
-        # In GPU mode we do NOT cache sessions; in CPU mode we do.
-        gpu_mode = getattr(self, "use_gpu", False) and getattr(self, "cuda_available", False)
-        cache_attr = None if gpu_mode else f"{model_name}_session"
-
         try:
             # --- Session creation / retrieval ---
             sess_options = ort.SessionOptions()
-            # keep this if you had it before
             sess_options.enable_cpu_mem_arena = False  
 
-            if gpu_mode:
-                # GPU: always new session (no caching -> VRAM can be freed after run)
-                providers = ["CUDAExecutionProvider", "CPUExecutionProvider"]
-                t_start_load = timer()
-                session = ort.InferenceSession(
-                    os.path.join(MODEL_ROOT, model_name + ".onnx"),
-                    sess_options=sess_options,
-                    providers=providers,
-                )
-                load_time = (timer() - t_start_load) * 1000
+            # Get base provider ordering and then expand to config with TensorRT options
+            base_providers = self._get_providers(for_sam=False)
+            first_ep = base_providers[0] if base_providers else "CPUExecutionProvider"
+
+            providers = self._get_provider_config(for_sam=False)
+
+            model_path = os.path.join(MODEL_ROOT, model_name + ".onnx")
+
+            gpu_primary = (first_ep == "CUDAExecutionProvider")
+            gpu_cache_active = self._gpu_cache_active() and gpu_primary
+
+            session = None
+
+            if gpu_primary:
+                # --- CUDA primary EP ---
+                if gpu_cache_active:
+                    # Single cached GPU session for whole-image models
+                    if (
+                        getattr(self, "gpu_cached_model_name", None) == model_name
+                        and hasattr(self, "gpu_cached_session")
+                    ):
+                        # Reuse cached session
+                        session = self.gpu_cached_session
+                        load_time = 0.0
+                    else:
+                        # New model: drop old cached session (if any), cache this one
+                        self._clear_gpu_cache()
+                        t_start_load = timer()
+                        session = ort.InferenceSession(
+                            model_path,
+                            sess_options=sess_options,
+                            providers=providers,
+                        )
+                        self.gpu_cached_session = session
+                        self.gpu_cached_model_name = model_name
+                        load_time = (timer() - t_start_load) * 1000
+                else:
+                    # GPU without caching: always use a fresh session
+                    t_start_load = timer()
+                    session = ort.InferenceSession(
+                        model_path,
+                        sess_options=sess_options,
+                        providers=providers,
+                    )
+                    load_time = (timer() - t_start_load) * 1000
             else:
-                # CPU: reuse cached session for speed
-                providers = ["CPUExecutionProvider"]
+                # --- CPU or TensorRT: reuse one session per model_name ---
+                cache_attr = f"{model_name}_session"
                 if not hasattr(self, cache_attr):
                     t_start_load = timer()
                     session = ort.InferenceSession(
-                        os.path.join(MODEL_ROOT, model_name + ".onnx"),
+                        model_path,
                         sess_options=sess_options,
                         providers=providers,
                     )
@@ -1543,6 +1899,9 @@ class BackgroundRemoverGUI(QMainWindow):
                 else:
                     session = getattr(self, cache_attr)
                     load_time = 0.0
+
+
+
 
             # --- Preprocessing ---
             img_r = crop.convert("RGB").resize((target_size, target_size), Image.BICUBIC)
@@ -1591,14 +1950,24 @@ class BackgroundRemoverGUI(QMainWindow):
             QMessageBox.critical(self, "Error", str(e))
             final_status = "Inference Error"
         finally:
-            # In GPU mode, drop the session so VRAM can be reclaimed
-            if gpu_mode:
+            # For non-cached CUDA sessions we still drop the session to free VRAM.
+            # TensorRT & CPU sessions stay cached so their engines can be reused.
+            try:
+                provs = session.get_providers()
+                first_ep = provs[0] if provs else "CPUExecutionProvider"
+            except Exception:
+                first_ep = "CPUExecutionProvider"
+
+            # Only free CUDA sessions if we are NOT using the single-model GPU cache
+            if first_ep == "CUDAExecutionProvider" and not gpu_cache_active:
                 try:
                     del session
                 except UnboundLocalError:
                     pass
-                import gc
                 gc.collect()
+
+
+
 
             QApplication.restoreOverrideCursor()
             self.set_loading(False, final_status)
