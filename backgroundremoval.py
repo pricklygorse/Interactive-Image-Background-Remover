@@ -2679,6 +2679,7 @@ Shortcuts:
 - Ctrl+S: Save As
 - Ctrl+Shift+S: Quick Save JPG (White BG)
 - Ctrl+Z: Undo
+- Ctrl+Y: Redo
         """)
         l.addWidget(t)
         d.exec()
