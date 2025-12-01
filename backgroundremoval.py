@@ -1546,60 +1546,6 @@ class BackgroundRemoverGUI(QMainWindow):
 
 
 
-    def set_sam_ov_enabled(self, checked: bool):
-        """Toggle OpenVINO EP for SAM.
-
-        Mutually exclusive with SAM GPU; TensorRT still takes precedence if enabled.
-        """
-        if checked and not self.openvino_available:
-            QMessageBox.warning(
-                self,
-                "OpenVINO not available",
-                "OpenVINOExecutionProvider is not available in this build of onnxruntime.\n\n"
-                "Install an onnxruntime build with OpenVINO EP."
-            )
-            self.chk_sam_ov.setChecked(False)
-            return
-
-        # If we enable OpenVINO, disable GPU for SAM (exclusive choice)
-        if checked:
-            self.use_sam_gpu = False
-            self.settings.setValue("use_sam_gpu", False)
-            if hasattr(self, "chk_sam_gpu"):
-                self.chk_sam_gpu.blockSignals(True)
-                self.chk_sam_gpu.setChecked(False)
-                self.chk_sam_gpu.blockSignals(False)
-
-        self.use_sam_ov = checked and self.openvino_available
-        self.settings.setValue("use_sam_ov", self.use_sam_ov)
-
-        if getattr(self, "use_sam_trt", False):
-            # TensorRT is primary; keep encoder/decoder as-is
-            prov = "TensorrtExecutionProvider"
-        else:
-            # No TensorRT for SAM: changing EP means we need to reload SAM.
-            if hasattr(self, "sam_encoder"):
-                del self.sam_encoder
-            if hasattr(self, "sam_decoder"):
-                del self.sam_decoder
-            self.sam_model_path = None
-            if hasattr(self, "encoder_output"):
-                delattr(self, "encoder_output")
-
-            if self.use_sam_ov:
-                prov = "OpenVINOExecutionProvider"
-            elif self.use_sam_gpu and self.cuda_available:
-                prov = "CUDAExecutionProvider"
-            else:
-                prov = "CPUExecutionProvider"
-
-        self.status_label.setText(
-            f"SAM will prefer: {prov} (takes effect next time you use SAM)"
-        )
-
-
-
-
     def handle_bg_change(self, text):
         if "Blur" in text:
             val, ok = QInputDialog.getInt(self, "Blur Radius", "Set Blur Radius:", 
