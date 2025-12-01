@@ -2050,7 +2050,8 @@ class BackgroundRemoverGUI(QMainWindow):
         try:
             # --- Session creation / retrieval ---
             sess_options = ort.SessionOptions()
-            sess_options.enable_cpu_mem_arena = False  
+            sess_options.enable_cpu_mem_arena = False
+            sess_options.enable_mem_pattern = False
 
             # Get base provider ordering and then expand to config with TensorRT options
             base_providers = self._get_providers(for_sam=False)
