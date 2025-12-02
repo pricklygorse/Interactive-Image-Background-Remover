@@ -55,7 +55,8 @@ MIN_RECT_SIZE = 5
 TENSORRT_CACHE_DIR = os.path.join(SCRIPT_BASE_DIR, "Models/cache")
 os.makedirs(TENSORRT_CACHE_DIR, exist_ok=True)
 
-
+# OpenVINO compiled model cache uses the same folder
+OPENVINO_CACHE_DIR = TENSORRT_CACHE_DIR
 
 print(f"Working directory: {SCRIPT_BASE_DIR}")
 
@@ -814,6 +815,13 @@ class BackgroundRemoverGUI(QMainWindow):
         self.trt_cached_model_name = None
         self.trt_cached_session = None
 
+        # --- NEW (OpenVINO single cache): single whole-image OpenVINO model cache ---
+        self.cache_ov_whole = bool(self.settings.value("cache_ov_whole", False, type=bool))
+        self.ov_cached_model_name = None
+        self.ov_cached_session = None
+
+
+
 
         # --- NEW: Remember which models have built a TensorRT engine (for UI dots) ---
         sam_cached = self.settings.value("trt_cached_sam_models", "", type=str)
@@ -935,7 +943,7 @@ class BackgroundRemoverGUI(QMainWindow):
         sl.addWidget(self.combo_exec)
 
         # GPU cache toggle (whole-image models)
-        self.chk_gpu_cache = QCheckBox("Cache one GPU whole-image model")
+        self.chk_gpu_cache = QCheckBox("Cache whole-image model on GPU")
         self.chk_gpu_cache.setToolTip(
             "When enabled, keep the last whole-image model loaded on the GPU so it runs "
             "faster next time. Only one GPU model is cached at a time."
@@ -955,13 +963,21 @@ class BackgroundRemoverGUI(QMainWindow):
         self.chk_trt_cache.toggled.connect(self.set_trt_cache_enabled)
         sl.addWidget(self.chk_trt_cache)
 
-        # Ensure correct visibility on startup (only visible in pure GPU / TRT mode)
+
+        self.chk_cache_ov_whole = QCheckBox("Cache whole-image OpenVINO model")
+        self.chk_cache_ov_whole.setChecked(self.cache_ov_whole)
+        self.chk_cache_ov_whole.toggled.connect(self.on_cache_ov_whole_toggled)
+        sl.addWidget(self.chk_cache_ov_whole)
+
+
+
+
+        # Ensure correct visibility on startup
         self._update_gpu_cache_visibility()
         self._update_trt_cache_visibility()
+        self._update_ov_cache_visibility()
 
 
-        # Ensure correct visibility on startup (only visible in pure GPU mode)
-        self._update_gpu_cache_visibility()
 
         # --- SAM Execution Section ---
         lbl_exec_sam = QLabel("<b>SAM:</b>")
@@ -1423,6 +1439,59 @@ class BackgroundRemoverGUI(QMainWindow):
             )
 
 
+
+
+    # --- NEW: OpenVINO single cache helpers (whole-image only) ---
+    def _update_ov_cache_visibility(self):
+        """
+        OpenVINO cache toggle is only visible when OpenVINO is the whole-image EP.
+        """
+        visible = self.openvino_available and getattr(self, "exec_mode", "cpu") == "ov"
+        if hasattr(self, "chk_cache_ov_whole"):
+            self.chk_cache_ov_whole.setVisible(visible)
+
+    def _clear_ov_cache(self):
+        """Drop any cached OpenVINO whole-image session."""
+        if hasattr(self, "ov_cached_session"):
+            try:
+                del self.ov_cached_session
+            except AttributeError:
+                pass
+        self.ov_cached_model_name = None
+        gc.collect()
+
+    def _ov_cache_active(self):
+        """
+        Is the OpenVINO single-model cache actually in use right now?
+        (Whole-image models, OpenVINO primary EP)
+        """
+        return (
+            self.cache_ov_whole
+            and self.openvino_available
+            and getattr(self, "exec_mode", "cpu") == "ov"
+        )
+
+    def on_cache_ov_whole_toggled(self, checked: bool):
+        """Toggle single-model OpenVINO cache for whole-image models."""
+        self.cache_ov_whole = checked
+        self.settings.setValue("cache_ov_whole", self.cache_ov_whole)
+
+        if not checked:
+            # Turning it off should also drop any cached session
+            self._clear_ov_cache()
+            self.status_label.setText(
+                "OpenVINO whole-image model cache disabled and cleared."
+            )
+        else:
+            self.status_label.setText(
+                "OpenVINO whole-image model cache enabled "
+                "(1 whole-image model at a time)."
+            )
+
+
+    
+
+
     # --- NEW: helper to persist TensorRT-cached model names ---
     def _save_trt_cached_model_names(self):
         self.settings.setValue(
@@ -1616,6 +1685,7 @@ class BackgroundRemoverGUI(QMainWindow):
         # --- CLEAR VRAM & sessions when switching modes ---
         self._clear_gpu_cache()
         self._clear_trt_cache()  # --- NEW (TensorRT single cache) ---
+        self._clear_ov_cache()   # --- NEW (OpenVINO single cache) ---
         for attr in list(self.__dict__.keys()):
             if attr.endswith("_session"):
                 delattr(self, attr)
@@ -1649,6 +1719,7 @@ class BackgroundRemoverGUI(QMainWindow):
         # Cache toggle visibility
         self._update_gpu_cache_visibility()
         self._update_trt_cache_visibility()  # --- NEW (TensorRT single cache) ---
+        self._update_ov_cache_visibility()   # --- NEW (OpenVINO single cache) ---
 
         # Status message
         if self.use_trt and self.trt_available:
@@ -1863,7 +1934,8 @@ class BackgroundRemoverGUI(QMainWindow):
         """
         Return a providers list suitable for InferenceSession(..., providers=...).
 
-        If TensorRT is first in the list, we attach engine cache options.
+        - If TensorRT is first in the list, attach engine cache options.
+        - If OpenVINO is first, attach compiled-model cache options (cache_dir).
         """
         base_providers = self._get_providers(for_sam=for_sam)
         if not base_providers:
@@ -1871,6 +1943,7 @@ class BackgroundRemoverGUI(QMainWindow):
 
         first_ep = base_providers[0]
 
+        # --- TensorRT: enable engine cache on disk ---
         if first_ep == "TensorrtExecutionProvider":
             trt_entry = (
                 "TensorrtExecutionProvider",
@@ -1884,8 +1957,25 @@ class BackgroundRemoverGUI(QMainWindow):
                 providers.append(ep)
             return providers
 
-        # OpenVINO / CUDA / CPU: just pass them through unchanged
+        # --- OpenVINO: enable compiled-model cache on disk ---
+        if first_ep == "OpenVINOExecutionProvider":
+            ov_entry = (
+                "OpenVINOExecutionProvider",
+                {
+                    # Match the first script: compiled model on GPU + cache_dir
+                    # If you prefer CPU, change device_type to "CPU".
+                    "device_type": "GPU",
+                    "cache_dir": OPENVINO_CACHE_DIR,
+                },
+            )
+            providers = [ov_entry]
+            for ep in base_providers[1:]:
+                providers.append(ep)
+            return providers
+
+        # CUDA / CPU (and everything else): just pass through unchanged
         return base_providers
+
 
 
 
@@ -2141,9 +2231,12 @@ class BackgroundRemoverGUI(QMainWindow):
             model_path = os.path.join(MODEL_ROOT, model_name + ".onnx")
 
             gpu_primary = (first_ep == "CUDAExecutionProvider")
-            trt_primary = (first_ep == "TensorrtExecutionProvider")  # --- NEW (TensorRT single cache) ---
+            trt_primary = (first_ep == "TensorrtExecutionProvider")      # --- TensorRT single cache ---
+            ov_primary  = (first_ep == "OpenVINOExecutionProvider")      # --- NEW (OpenVINO single cache) ---
+
             gpu_cache_active = self._gpu_cache_active() and gpu_primary
-            trt_cache_active = self._trt_cache_active() and trt_primary  # --- NEW (TensorRT single cache) ---
+            trt_cache_active = self._trt_cache_active() and trt_primary  # --- TensorRT single cache ---
+            ov_cache_active  = self._ov_cache_active() and ov_primary    # --- NEW (OpenVINO single cache) ---
 
             session = None
 
@@ -2181,7 +2274,7 @@ class BackgroundRemoverGUI(QMainWindow):
                     load_time = (timer() - t_start_load) * 1000
 
             elif trt_primary:
-                # --- NEW (TensorRT single cache): TensorRT primary EP ---
+                # --- TensorRT primary EP ---
                 if trt_cache_active:
                     # Single cached TensorRT session for whole-image models
                     if (
@@ -2218,8 +2311,40 @@ class BackgroundRemoverGUI(QMainWindow):
                         session = getattr(self, cache_attr)
                         load_time = 0.0
 
+            elif ov_primary:
+                # --- NEW: OpenVINO primary EP ---
+                if ov_cache_active:
+                    # Single cached OpenVINO session for whole-image models
+                    if (
+                        getattr(self, "ov_cached_model_name", None) == model_name
+                        and hasattr(self, "ov_cached_session")
+                    ):
+                        session = self.ov_cached_session
+                        load_time = 0.0
+                    else:
+                        # New model: drop old cached OV session (if any), cache this one
+                        self._clear_ov_cache()
+                        t_start_load = timer()
+                        session = ort.InferenceSession(
+                            model_path,
+                            sess_options=sess_options,
+                            providers=providers,
+                        )
+                        self.ov_cached_session = session
+                        self.ov_cached_model_name = model_name
+                        load_time = (timer() - t_start_load) * 1000
+                else:
+                    # OpenVINO without caching: always use a fresh session
+                    t_start_load = timer()
+                    session = ort.InferenceSession(
+                        model_path,
+                        sess_options=sess_options,
+                        providers=providers,
+                    )
+                    load_time = (timer() - t_start_load) * 1000
+
             else:
-                # --- CPU (or other non-CUDA / non-TRT EP): reuse one session per model_name ---
+                # --- CPU (or other non-CUDA / non-TRT / non-OV EP): reuse one session per model_name ---
                 cache_attr = f"{model_name}_session"
                 if not hasattr(self, cache_attr):
                     t_start_load = timer()
@@ -2233,6 +2358,7 @@ class BackgroundRemoverGUI(QMainWindow):
                 else:
                     session = getattr(self, cache_attr)
                     load_time = 0.0
+
 
 
 
@@ -2313,6 +2439,15 @@ class BackgroundRemoverGUI(QMainWindow):
                 except UnboundLocalError:
                     pass
                 gc.collect()
+
+            # Free OpenVINO sessions if not using the single-model OV cache
+            if first_ep == "OpenVINOExecutionProvider" and not self._ov_cache_active():
+                try:
+                    del session
+                except UnboundLocalError:
+                    pass
+                gc.collect()
+
 
 
 
