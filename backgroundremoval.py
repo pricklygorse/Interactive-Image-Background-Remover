@@ -721,12 +721,14 @@ class BackgroundRemoverGUI(QMainWindow):
         self.coordinates = []
         self.labels = []
         self.undo_history = []
+        self.redo_history = []
         self.paint_mode = False
         self.sam_model_path = None
         self.image_exif = None
         self.blur_radius = 30
-        
-        # --- Settings ---
+
+
+        # Persistent settings
         self.settings = QSettings("PricklyGorse", "InteractiveBackgroundRemover")
 
         # --- Hardware Acceleration ---
@@ -1118,6 +1120,7 @@ class BackgroundRemoverGUI(QMainWindow):
         QShortcut(QKeySequence("R"), self).activated.connect(self.reset_all)
         QShortcut(QKeySequence("V"), self).activated.connect(self.clear_visible_area)
         QShortcut(QKeySequence("Ctrl+Z"), self).activated.connect(self.undo)
+        QShortcut(QKeySequence("Ctrl+Y"), self).activated.connect(self.redo)
         QShortcut(QKeySequence("P"), self).activated.connect(self.chk_paint.toggle)
         QShortcut(QKeySequence("Ctrl+S"), self).activated.connect(self.save_image)
         QShortcut(QKeySequence("Ctrl+Shift+S"), self).activated.connect(self.quick_save_jpeg)
@@ -1208,12 +1211,32 @@ class BackgroundRemoverGUI(QMainWindow):
         
         self.btn_next.setEnabled(has_more_images and not is_clipboard)
 
+    def _sanitise_filename_for_windows(self, path: str) -> str:
+        """
+        On Windows, strip invalid filename characters from the basename:
+        \\/:*?"<>|
+        Directory part (e.g. C:\\folder) is left intact.
+        """
+        if os.name != "nt":
+            return path
+
+        directory, basename = os.path.split(path)
+        invalid_chars = r'\/:*?"<>|'
+        cleaned = ''.join(c for c in basename if c not in invalid_chars)
+
+        if not cleaned:
+            cleaned = "output"
+
+        return os.path.join(directory, cleaned)
+
+
     def init_working_buffers(self):
         size = self.original_image.size 
         self.working_image = Image.new("RGBA", size, (0,0,0,0))
         self.working_mask = Image.new("L", size, 0)
         self.model_output_mask = Image.new("L", size, 0)
         self.undo_history = [self.working_mask.copy()]
+        self.redo_history = [] 
         
         if hasattr(self, "encoder_output"): 
             delattr(self, "encoder_output")
@@ -1577,12 +1600,30 @@ class BackgroundRemoverGUI(QMainWindow):
 
     def add_undo_step(self):
         self.undo_history.append(self.working_mask.copy())
-        if len(self.undo_history) > UNDO_STEPS: self.undo_history.pop(0)
+        if len(self.undo_history) > UNDO_STEPS:
+            self.undo_history.pop(0)
+        if hasattr(self, "redo_history"):
+            self.redo_history.clear() 
+
 
     def undo(self):
         if self.undo_history:
+            # current state goes onto redo stack
+            if hasattr(self, "redo_history"):
+                self.redo_history.append(self.working_mask.copy())
             self.working_mask = self.undo_history.pop()
             self.update_output_preview()
+
+    def redo(self):
+        if hasattr(self, "redo_history") and self.redo_history:
+            # current state goes back onto undo stack
+            self.undo_history.append(self.working_mask.copy())
+            if len(self.undo_history) > UNDO_STEPS:
+                self.undo_history.pop(0)
+            self.working_mask = self.redo_history.pop()
+            self.update_output_preview()
+
+
 
     def add_mask(self): self.modify_mask(ImageChops.add)
     def subtract_mask(self): self.modify_mask(ImageChops.subtract)
@@ -1814,20 +1855,27 @@ class BackgroundRemoverGUI(QMainWindow):
         if not self.original_image or not self.image_paths: return
         orig_path = self.image_paths[0] if self.image_paths[0] != "Clipboard" else "clipboard.png"
         path = os.path.splitext(orig_path)[0] + "_nobg.jpg"
-        
+
+        # NEW: sanitize default filename on Windows
+        path = self._sanitise_filename_for_windows(path)
+
         fname, _ = QFileDialog.getSaveFileName(self, "Quick Save", path, "JPG (*.jpg)")
         if fname:
+
+            fname = self._sanitise_filename_for_windows(fname)
+
             if not fname.lower().endswith(".jpg"): fname += ".jpg"
             empty = Image.new("RGBA", self.original_image.size, 0)
             cutout = Image.composite(self.original_image, empty, self.working_mask)
             final = Image.new("RGB", self.original_image.size, "white")
             final.paste(cutout, (0,0), cutout)
-            
+        
             save_params = {'quality': 95}
             if self.image_exif: save_params['exif'] = self.image_exif
-            
+        
             final.save(fname, **save_params)
             self.status_label.setText(f"Quick saved to {fname}")
+
 
     def save_image(self):
         if not self.image_paths: return
@@ -1841,8 +1889,13 @@ class BackgroundRemoverGUI(QMainWindow):
         default_ext = ext_map[fmt]
         
         initial_name = os.path.splitext(self.image_paths[0])[0] + "_nobg." + default_ext
+
+        initial_name = self._sanitise_filename_for_windows(initial_name)
+
         fname, _ = QFileDialog.getSaveFileName(self, "Save Image", initial_name, f"{default_ext.upper()} (*.{default_ext})")
         if not fname: return
+
+        fname = self._sanitise_filename_for_windows(fname)
         
         if not fname.lower().endswith(f".{default_ext}"): fname += f".{default_ext}"
 
@@ -1945,6 +1998,7 @@ Shortcuts:
 - Ctrl+S: Save As
 - Ctrl+Shift+S: Quick Save JPG (White BG)
 - Ctrl+Z: Undo
+- Ctrl+Y: Redo
         """)
         l.addWidget(t)
         d.exec()
