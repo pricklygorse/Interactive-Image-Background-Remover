@@ -2,6 +2,7 @@
 import sys
 import os
 import math
+import gc
 import numpy as np
 import cv2
 from timeit import default_timer as timer
@@ -13,11 +14,29 @@ from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QH
                              QGraphicsRectItem, QGraphicsEllipseItem, QGraphicsPathItem, 
                              QTextEdit, QSizePolicy, QRadioButton, QButtonGroup, QInputDialog, QProgressBar)
 from PyQt6.QtCore import Qt, QTimer, QPointF, QRectF, QSettings
-from PyQt6.QtGui import (QPixmap, QImage, QColor, QPainter, QPen, QBrush,
-                         QKeySequence, QShortcut, QCursor, )
+from PyQt6.QtGui import (QPixmap, QImage, QColor, QPainter, QPen, QBrush, 
+                         QKeySequence, QShortcut, QCursor, QIcon, QFont)
 
 from PIL import Image, ImageOps, ImageDraw, ImageEnhance, ImageGrab, ImageFilter, ImageChops
 import onnxruntime as ort
+
+
+
+
+# --- ONNX Runtime / EP detection ---
+try:
+    ORT_AVAILABLE_PROVIDERS = ort.get_available_providers()
+    CUDA_AVAILABLE = "CUDAExecutionProvider" in ORT_AVAILABLE_PROVIDERS
+    TENSORRT_AVAILABLE = "TensorrtExecutionProvider" in ORT_AVAILABLE_PROVIDERS
+    OPENVINO_AVAILABLE = "OpenVINOExecutionProvider" in ORT_AVAILABLE_PROVIDERS
+except Exception:
+    ORT_AVAILABLE_PROVIDERS = []
+    CUDA_AVAILABLE = False
+    TENSORRT_AVAILABLE = False
+    OPENVINO_AVAILABLE = False
+
+
+
 
 # --- Constants ---
 DEFAULT_ZOOM_FACTOR = 1.15
@@ -31,6 +50,13 @@ PAINT_BRUSH_SCREEN_SIZE = 30
 UNDO_STEPS = 20
 SOFTEN_RADIUS = 2 
 MIN_RECT_SIZE = 5
+
+# TensorRT engine cache location
+TENSORRT_CACHE_DIR = os.path.join(SCRIPT_BASE_DIR, "Models/cache")
+os.makedirs(TENSORRT_CACHE_DIR, exist_ok=True)
+
+# OpenVINO compiled model cache uses the same folder
+OPENVINO_CACHE_DIR = TENSORRT_CACHE_DIR
 
 print(f"Working directory: {SCRIPT_BASE_DIR}")
 
@@ -728,15 +754,94 @@ class BackgroundRemoverGUI(QMainWindow):
         self.blur_radius = 30
 
 
-        # Persistent settings
+
+        # persistent settings
         self.settings = QSettings("PricklyGorse", "InteractiveBackgroundRemover")
 
-        # --- Hardware Acceleration ---
-        all_providers = ort.get_available_providers()
-        # Hide azure showing in the list if the user has no GPU. Extremely unlikely will be used for such a simple app
-        self.available_providers = [p for p in all_providers if p != 'AzureExecutionProvider']
-        self.selected_provider = 'CPUExecutionProvider' # Default
 
+        # GPU / CUDA options
+        self.cuda_available = CUDA_AVAILABLE
+
+        # OpenVINO options
+        self.openvino_available = OPENVINO_AVAILABLE
+
+
+
+        # Remembered preferences (fall back to False)
+        self.use_gpu = bool(self.settings.value("use_gpu", False, type=bool)) and self.cuda_available
+
+        # TensorRT options
+        self.trt_available = TENSORRT_AVAILABLE
+        self.use_trt = bool(self.settings.value("use_trt", False, type=bool)) and self.trt_available
+
+        # OpenVINO options (if you added OpenVINO as in the previous answer)
+        self.openvino_available = OPENVINO_AVAILABLE
+        self.use_ov = bool(self.settings.value("use_ov", False, type=bool)) and self.openvino_available
+
+        # --- SAM execution provider mode: 'cpu', 'gpu', 'trt', 'ov' ---
+        self.sam_exec_mode = self.settings.value("sam_exec_mode", "cpu")
+
+        # Clamp SAM mode to what this build actually supports
+        if self.sam_exec_mode == "gpu" and not self.cuda_available:
+            self.sam_exec_mode = "cpu"
+        if self.sam_exec_mode == "trt" and not self.trt_available:
+            self.sam_exec_mode = "cpu"
+        if self.sam_exec_mode == "ov" and not self.openvino_available:
+            self.sam_exec_mode = "cpu"
+
+
+
+        # --- execution mode for whole-image models ---
+        if self.use_trt and self.trt_available:
+            self.exec_mode = "trt"
+        elif self.use_gpu and self.cuda_available:
+            self.exec_mode = "gpu"
+        elif self.use_ov and self.openvino_available:
+            self.exec_mode = "ov"
+        else:
+            self.exec_mode = "cpu"
+
+
+
+
+        # --- NEW: single whole-image GPU model cache ---
+        # Only used when CUDA is the primary EP for whole-image models (no TensorRT).
+        self.cache_gpu_whole = bool(self.settings.value("cache_gpu_whole", False, type=bool))
+        self.gpu_cached_model_name = None
+        self.gpu_cached_session = None
+
+        # --- NEW (TensorRT single cache): single whole-image TensorRT model cache ---
+        self.cache_trt_whole = bool(self.settings.value("cache_trt_whole", False, type=bool))
+        self.trt_cached_model_name = None
+        self.trt_cached_session = None
+
+        # --- NEW (OpenVINO single cache): single whole-image OpenVINO model cache ---
+        self.cache_ov_whole = bool(self.settings.value("cache_ov_whole", False, type=bool))
+        self.ov_cached_model_name = None
+        self.ov_cached_session = None
+
+
+
+
+        # --- NEW: Remember which models have built a TensorRT engine (for UI dots) ---
+        sam_cached = self.settings.value("trt_cached_sam_models", "", type=str)
+        if isinstance(sam_cached, str) and sam_cached:
+            self.trt_cached_sam_models = set(x for x in sam_cached.split(";") if x)
+        elif isinstance(sam_cached, (list, tuple)):
+            self.trt_cached_sam_models = set(sam_cached)
+        else:
+            self.trt_cached_sam_models = set()
+
+        whole_cached = self.settings.value("trt_cached_whole_models", "", type=str)
+        if isinstance(whole_cached, str) and whole_cached:
+            self.trt_cached_whole_models = set(x for x in whole_cached.split(";") if x)
+        elif isinstance(whole_cached, (list, tuple)):
+            self.trt_cached_whole_models = set(whole_cached)
+        else:
+            self.trt_cached_whole_models = set()
+
+
+        
         self.original_image = None
         self.working_image = None
         self.working_mask = None
@@ -795,74 +900,165 @@ class BackgroundRemoverGUI(QMainWindow):
         h_edit_load_buttons.addWidget(btn_lm)
         sl.addLayout(h_edit_load_buttons)
 
-        # --- Hardware Acceleration Dropdown ---
-        sl.addWidget(QLabel("<b>Hardware Acceleration:</b>"))
-        self.combo_provider = QComboBox()
-        self.combo_provider.setToolTip("If only 'CPU' available, you may need to install onnxruntime-gpu (NVIDIA CUDA), onnxruntime-openvino (Intel) or onnxruntime-directml (Windows DirectX)")
-        self.combo_provider.addItems(self.available_providers)
-        
-        # Set initial selection
-        default_provider_preference = ['OpenVINOExecutionProvider', 'CUDAExecutionProvider', 'DmlExecutionProvider', 'CPUExecutionProvider']
-        for provider in default_provider_preference:
-            if provider in self.available_providers:
-                idx = self.combo_provider.findText(provider)
-                if idx >= 0:
-                    self.combo_provider.setCurrentIndex(idx)
-                    self.selected_provider = provider
-                    break
-        self.combo_provider.currentTextChanged.connect(self.on_provider_changed)
-        sl.addWidget(self.combo_provider)
 
-        # Grey out the box if CPU is the only option
-        if len(self.available_providers) == 1 and 'CPUExecutionProvider' in self.available_providers:
-            self.combo_provider.setEnabled(False)
+        # --- Whole Model Execution Section ---
+        lbl_exec_whole = QLabel("<b>Whole Model:</b>")
+        lbl_exec_whole.setContentsMargins(3, 0, 0, 0)
+        lbl_exec_whole.setToolTip(
+            "Execution settings for whole-image background removal models"
+        )
+        sl.addWidget(lbl_exec_whole)
 
-        self.chk_cache = QCheckBox("Cache Optimised Models")
-        self.chk_cache.setToolTip("Saves optimised models to disk for much faster startup on future runs. Recommended for GPU providers.")
-        cache_state = self.settings.value("cache_models", True, type=bool)
-        self.chk_cache.setChecked(cache_state)
-        sl.addWidget(self.chk_cache)
-        self.chk_cache.toggled.connect(lambda checked: self.settings.setValue("cache_models", checked))
-        self.update_acceleration_options(self.selected_provider) # Set initial visibility
+        # Dropdown for CPU / GPU / TensorRT / OpenVINO (whole-image models)
+        self.combo_exec = QComboBox()
+        self.combo_exec.setToolTip(
+            "Select which execution provider whole-image models should prefer.\n"
+            "GPU and TensorRT options are only available if supported by this build."
+        )
 
-        self.chk_unload = QCheckBox("Unload Unused Models")
-        self.chk_unload.setToolTip("Frees RAM and GPU VRAM by unloading other models from memory when you switch to a new one. Some models can take several seconds to load.")
-        unload_state = self.settings.value("unload_models", False, type=bool)
-        self.chk_unload.setChecked(unload_state)
-        sl.addWidget(self.chk_unload)
-        self.chk_unload.toggled.connect(lambda checked: self.settings.setValue("unload_models", checked))
+        # Always available
+        self.combo_exec.addItem("CPU only", "cpu")
 
-        sl.addWidget(QLabel("<b>Models:</b>"))
-        # 1. SAM (Interactive) Label & Tooltip
-        lbl_sam = QLabel("Interactive (SAM):")
-        lbl_sam.setToolTip("<b>Segment Anything Models</b><br>"
-                           "These require you to interact with the image.<br>"
-                           "<i>Usage: Left-click to add points or drag to draw boxes around the subject.</i>")
+        # Add GPU option only if CUDA is available
+        if self.cuda_available:
+            self.combo_exec.addItem("GPU (CUDA)", "gpu")
+
+        # Add TensorRT option only if TRT is available
+        if self.trt_available:
+            self.combo_exec.addItem("TensorRT (with CUDA fallback)", "trt")
+
+        # Add OpenVINO option only if available
+        if self.openvino_available:
+            self.combo_exec.addItem("OpenVINO", "ov")
+
+        # Select the initial mode based on settings / availability
+        initial_mode = getattr(self, "exec_mode", "cpu")
+        found_idx = 0
+        for i in range(self.combo_exec.count()):
+            if self.combo_exec.itemData(i) == initial_mode:
+                found_idx = i
+                break
+        self.combo_exec.setCurrentIndex(found_idx)
+        self.combo_exec.currentIndexChanged.connect(self.on_exec_combo_changed)
+        sl.addWidget(self.combo_exec)
+
+        # GPU cache toggle (whole-image models)
+        self.chk_gpu_cache = QCheckBox("Cache whole-image model on GPU")
+        self.chk_gpu_cache.setToolTip(
+            "When enabled, keep the last whole-image model loaded on the GPU so it runs "
+            "faster next time. Only one GPU model is cached at a time."
+        )
+        self.chk_gpu_cache.setChecked(self.cache_gpu_whole)
+        self.chk_gpu_cache.toggled.connect(self.set_gpu_cache_enabled)
+        sl.addWidget(self.chk_gpu_cache)
+
+        # --- NEW (TensorRT single cache): TensorRT cache toggle (whole-image models) ---
+        self.chk_trt_cache = QCheckBox("Cache only last TensorRT whole-image model")
+        self.chk_trt_cache.setToolTip(
+            "When enabled in TensorRT mode, only the last-used whole-image model session\n"
+            "stays loaded in GPU memory; older TensorRT sessions are freed.\n"
+            "TensorRT engine files on disk are still cached."
+        )
+        self.chk_trt_cache.setChecked(self.cache_trt_whole)
+        self.chk_trt_cache.toggled.connect(self.set_trt_cache_enabled)
+        sl.addWidget(self.chk_trt_cache)
+
+
+        self.chk_cache_ov_whole = QCheckBox("Cache whole-image OpenVINO model")
+        self.chk_cache_ov_whole.setChecked(self.cache_ov_whole)
+        self.chk_cache_ov_whole.toggled.connect(self.on_cache_ov_whole_toggled)
+        sl.addWidget(self.chk_cache_ov_whole)
+
+
+
+
+        # Ensure correct visibility on startup
+        self._update_gpu_cache_visibility()
+        self._update_trt_cache_visibility()
+        self._update_ov_cache_visibility()
+
+
+
+        # --- SAM Execution Section ---
+        lbl_exec_sam = QLabel("<b>SAM:</b>")
+        lbl_exec_sam.setContentsMargins(3, 0, 0, 0)
+        lbl_exec_sam.setToolTip(
+            "Execution settings for interactive Segment Anything models.\n"
+            "These are used when adding points/boxes on the input image."
+        )
+        sl.addWidget(lbl_exec_sam)
+
+        # SAM execution provider dropdown
+        self.combo_sam_exec = QComboBox()
+        self.combo_sam_exec.setToolTip(
+            "Execution provider for SAM (interactive models).\n"
+            "CPU is always available; GPU / TensorRT / OpenVINO depend on your onnxruntime build."
+        )
+
+        # Always available
+        self.combo_sam_exec.addItem("CPU only", "cpu")
+
+        # Optional EPs depending on build
+        if self.cuda_available:
+            self.combo_sam_exec.addItem("GPU (CUDA)", "gpu")
+        if self.trt_available:
+            self.combo_sam_exec.addItem("TensorRT (with CUDA fallback)", "trt")
+        if self.openvino_available:
+            self.combo_sam_exec.addItem("OpenVINO", "ov")
+
+        # Select the saved mode if supported in this build
+        sam_index = 0
+        for i in range(self.combo_sam_exec.count()):
+            if self.combo_sam_exec.itemData(i) == self.sam_exec_mode:
+                sam_index = i
+                break
+        self.combo_sam_exec.setCurrentIndex(sam_index)
+        self.combo_sam_exec.currentIndexChanged.connect(self.on_sam_exec_combo_changed)
+        sl.addWidget(self.combo_sam_exec)
+
+        # --- Models Section (just model selection) ---
+        lbl_models = QLabel("<b>Models:</b>")
+        lbl_models.setContentsMargins(3, 0, 0, 0)
+        sl.addWidget(lbl_models)
+
+        # 1. SAM Model
+        lbl_sam = QLabel("SAM Model:")
+        lbl_sam.setContentsMargins(3, 0, 0, 0)
+        lbl_sam.setToolTip(
+            "<b>Segment Anything Models</b><br>"
+            "These require you to interact with the image.<br>"
+            "<i>Usage: Left-click to add points or drag to draw boxes around the subject.</i>"
+        )
         sl.addWidget(lbl_sam)
 
-        # SAM Combo
         self.combo_sam = QComboBox()
-        self.combo_sam.setToolTip(lbl_sam.toolTip()) # Reuse the tooltip
+        self.combo_sam.setToolTip(lbl_sam.toolTip())
         self.populate_sam_models()
         sl.addWidget(self.combo_sam)
-        
-        # 2. Automatic Label & Tooltip
-        lbl_whole = QLabel("Automatic (Whole Image):")
-        lbl_whole.setToolTip("<b>Automatic Models</b><br>"
-                             "These run automatically on the entire image.<br>"
-                             "<i>Usage: Select a model and click 'Run Automatic'. No points needed.</i>")
+
+        # 2. Whole-Image Model
+        lbl_whole = QLabel("Whole-Image Model:")
+        lbl_whole.setContentsMargins(3, 0, 0, 0)
+        lbl_whole.setToolTip(
+            "<b>Automatic Models</b><br>"
+            "These run automatically on the entire image.<br>"
+            "<i>Usage: Select a model and click 'Run Automatic'. No points needed.</i>"
+        )
         sl.addWidget(lbl_whole)
 
-        # Whole Image Combo
         self.combo_whole = QComboBox()
-        self.combo_whole.setToolTip(lbl_whole.toolTip()) # Reuse the tooltip
+        self.combo_whole.setToolTip(lbl_whole.toolTip())
         self.populate_whole_models()
         sl.addWidget(self.combo_whole)
-        
-        btn_whole = QPushButton("Run Automatic"); btn_whole.clicked.connect(lambda: self.run_automatic_model(None))
+
+        btn_whole = QPushButton("Run Automatic")
+        btn_whole.clicked.connect(lambda: self.run_automatic_model(None))
         sl.addWidget(btn_whole)
 
-        sl.addWidget(QLabel("<b>Actions:</b>"))
+
+        lbl_actions = QLabel("<b>Actions:</b>")
+        lbl_actions.setContentsMargins(3, 0, 0, 0)
+        sl.addWidget(lbl_actions)
         h_act = QHBoxLayout()
         btn_add = QPushButton("Add Mask"); btn_add.clicked.connect(self.add_mask)
         btn_sub = QPushButton("Sub Mask"); btn_sub.clicked.connect(self.subtract_mask)
@@ -887,7 +1083,10 @@ class BackgroundRemoverGUI(QMainWindow):
         h_vs.addWidget(btn_cp); h_vs.addWidget(btn_c_vis) 
         sl.addLayout(h_vs)
 
-        sl.addWidget(QLabel("<b>Options:</b>"))
+        lbl_options = QLabel("<b>Options:</b>")
+        lbl_options.setContentsMargins(3, 0, 0, 0)
+        sl.addWidget(lbl_options)
+
         self.combo_bg = QComboBox()
         
         colors = ["Transparent", "White", "Black", "Red", "Blue", 
@@ -1009,6 +1208,11 @@ class BackgroundRemoverGUI(QMainWindow):
         self.statusBar().addPermanentWidget(self.progress_bar) # Add to right side
         self.statusBar().addPermanentWidget(self.zoom_label)
 
+        # NEW: initial icon sync based on persisted modes
+        self.update_sam_model_trt_icons()
+        self.update_whole_model_trt_icons()
+
+
     def dragEnterEvent(self, event):
         if event.mimeData().hasUrls():
             # Check if any of the files are images
@@ -1020,20 +1224,6 @@ class BackgroundRemoverGUI(QMainWindow):
                         event.acceptProposedAction()
                         return
         super().dragEnterEvent(event)
-
-    def update_acceleration_options(self, provider):
-        # Show cache option only for providers that support it
-        show_cache_option = provider in ['OpenVINOExecutionProvider', 'TensorrtExecutionProvider']
-        self.chk_cache.setVisible(show_cache_option)
-
-    def on_provider_changed(self, provider):
-        if not hasattr(self, 'status_label'): return # Still initializing
-        
-        self.selected_provider = provider
-        self.status_label.setText(f"Provider set to {provider}. Models will be reloaded.")
-
-        self._clear_onnx_sessions() # Unload all models
-        self.update_acceleration_options(provider)
 
     def dropEvent(self, event):
         urls = event.mimeData().urls()
@@ -1098,7 +1288,12 @@ class BackgroundRemoverGUI(QMainWindow):
             self.combo_sam.addItems(sorted(list(set(matches))))
             idx = self.combo_sam.findText("mobile_sam", Qt.MatchFlag.MatchContains)
             if idx >= 0: self.combo_sam.setCurrentIndex(idx)
-        else: self.combo_sam.addItem("No Models Found")
+        else:
+            self.combo_sam.addItem("No Models Found")
+
+        # NEW: reflect any existing TRT cache info
+        self.update_sam_model_trt_icons()
+
 
     def populate_whole_models(self):
         whole_models = ["rmbg", "isnet", "u2net", "BiRefNet"]
@@ -1109,8 +1304,14 @@ class BackgroundRemoverGUI(QMainWindow):
                     if partial in filename and ".onnx" in filename:
                         matches.append(filename.replace(".onnx",""))
         self.combo_whole.clear()
-        if matches: self.combo_whole.addItems(sorted(list(set(matches))))
-        else: self.combo_whole.addItem("No Models Found")
+        if matches:
+            self.combo_whole.addItems(sorted(list(set(matches))))
+        else:
+            self.combo_whole.addItem("No Models Found")
+
+        # NEW: reflect any existing TRT cache info
+        self.update_whole_model_trt_icons()
+
 
     def setup_keybindings(self):
         QShortcut(QKeySequence("A"), self).activated.connect(self.add_mask)
@@ -1129,6 +1330,416 @@ class BackgroundRemoverGUI(QMainWindow):
         QShortcut(QKeySequence("I"), self).activated.connect(lambda: self.run_automatic_model("isnet"))
         QShortcut(QKeySequence("O"), self).activated.connect(lambda: self.run_automatic_model("rmbg"))
         QShortcut(QKeySequence("B"), self).activated.connect(lambda: self.run_automatic_model("BiRefNet"))
+
+
+
+    # --- NEW: GPU cache helpers (whole-image only) ---
+    def _update_gpu_cache_visibility(self):
+        """
+        GPU cache toggle should only be visible when:
+        - CUDA is available
+        - GPU is enabled for whole-image models
+        - TensorRT is NOT the whole-image provider
+        """
+        visible = self.cuda_available and self.use_gpu and not self.use_trt
+        if hasattr(self, "chk_gpu_cache"):
+            self.chk_gpu_cache.setVisible(visible)
+
+    def _clear_gpu_cache(self):
+        """Drop any cached GPU whole-image session."""
+        if hasattr(self, "gpu_cached_session"):
+            try:
+                del self.gpu_cached_session
+            except AttributeError:
+                pass
+        self.gpu_cached_model_name = None
+        gc.collect()
+
+    def _gpu_cache_active(self):
+        """
+        Is the GPU cache feature actually in use right now?
+        (Whole-image models, CUDA primary, no TensorRT)
+        """
+        return (
+            self.cache_gpu_whole
+            and self.cuda_available
+            and self.use_gpu
+            and not self.use_trt
+        )
+
+    def set_gpu_cache_enabled(self, checked: bool):
+        """Toggle single-model GPU cache for whole-image models."""
+        self.cache_gpu_whole = checked
+        self.settings.setValue("cache_gpu_whole", self.cache_gpu_whole)
+
+        if not checked:
+            # Turning it off should also drop any cached session
+            self._clear_gpu_cache()
+            self.status_label.setText(
+                "GPU whole-image model cache disabled and cleared."
+            )
+        else:
+            self.status_label.setText(
+                "GPU whole-image model cache enabled (1 whole-image model at a time)."
+            )
+
+    # --- NEW (TensorRT single cache): TensorRT cache helpers (whole-image only) ---
+    def _update_trt_cache_visibility(self):
+        """
+        TensorRT cache toggle is only visible when TensorRT is the whole-image EP.
+        """
+        visible = self.trt_available and getattr(self, "exec_mode", "cpu") == "trt"
+        if hasattr(self, "chk_trt_cache"):
+            self.chk_trt_cache.setVisible(visible)
+
+    def _clear_trt_cache(self):
+        """Drop any cached TensorRT whole-image session."""
+        if hasattr(self, "trt_cached_session"):
+            try:
+                del self.trt_cached_session
+            except AttributeError:
+                pass
+        self.trt_cached_model_name = None
+        gc.collect()
+
+    def _trt_cache_active(self):
+        """
+        Is the TensorRT single-model cache actually in use right now?
+        (Whole-image models, TensorRT primary EP)
+        """
+        return (
+            self.cache_trt_whole
+            and self.trt_available
+            and getattr(self, "exec_mode", "cpu") == "trt"
+        )
+
+    def set_trt_cache_enabled(self, checked: bool):
+        """Toggle single-model TensorRT cache for whole-image models."""
+        self.cache_trt_whole = checked
+        self.settings.setValue("cache_trt_whole", self.cache_trt_whole)
+
+        # Always clear any existing TRT cache when the mode changes,
+        # we'll rebuild on the next run_automatic_model call.
+        self._clear_trt_cache()
+
+        if checked:
+            # Also drop per-model *_session caches so we don't keep many TRT sessions alive
+            for attr in list(self.__dict__.keys()):
+                if attr.endswith("_session"):
+                    delattr(self, attr)
+            gc.collect()
+            self.status_label.setText(
+                "TensorRT single-model VRAM cache enabled "
+                "(only last whole-image TRT model stays loaded)."
+            )
+        else:
+            self.status_label.setText(
+                "TensorRT single-model VRAM cache disabled "
+                "(whole-image TRT models may each keep their own session)."
+            )
+
+
+
+
+    # --- NEW: OpenVINO single cache helpers (whole-image only) ---
+    def _update_ov_cache_visibility(self):
+        """
+        OpenVINO cache toggle is only visible when OpenVINO is the whole-image EP.
+        """
+        visible = self.openvino_available and getattr(self, "exec_mode", "cpu") == "ov"
+        if hasattr(self, "chk_cache_ov_whole"):
+            self.chk_cache_ov_whole.setVisible(visible)
+
+    def _clear_ov_cache(self):
+        """Drop any cached OpenVINO whole-image session."""
+        if hasattr(self, "ov_cached_session"):
+            try:
+                del self.ov_cached_session
+            except AttributeError:
+                pass
+        self.ov_cached_model_name = None
+        gc.collect()
+
+    def _ov_cache_active(self):
+        """
+        Is the OpenVINO single-model cache actually in use right now?
+        (Whole-image models, OpenVINO primary EP)
+        """
+        return (
+            self.cache_ov_whole
+            and self.openvino_available
+            and getattr(self, "exec_mode", "cpu") == "ov"
+        )
+
+    def on_cache_ov_whole_toggled(self, checked: bool):
+        """Toggle single-model OpenVINO cache for whole-image models."""
+        self.cache_ov_whole = checked
+        self.settings.setValue("cache_ov_whole", self.cache_ov_whole)
+
+        if not checked:
+            # Turning it off should also drop any cached session
+            self._clear_ov_cache()
+            self.status_label.setText(
+                "OpenVINO whole-image model cache disabled and cleared."
+            )
+        else:
+            self.status_label.setText(
+                "OpenVINO whole-image model cache enabled "
+                "(1 whole-image model at a time)."
+            )
+
+
+    
+
+
+    # --- NEW: helper to persist TensorRT-cached model names ---
+    def _save_trt_cached_model_names(self):
+        self.settings.setValue(
+            "trt_cached_sam_models",
+            ";".join(sorted(self.trt_cached_sam_models))
+        )
+        self.settings.setValue(
+            "trt_cached_whole_models",
+            ";".join(sorted(self.trt_cached_whole_models))
+        )
+
+    # --- NEW: helper to create (and cache) a small red dot icon ---
+    def _get_trt_cached_dot_icon(self):
+        if hasattr(self, "_trt_cached_dot_icon"):
+            return self._trt_cached_dot_icon
+
+        size = 4
+        pm = QPixmap(size, size)
+        pm.fill(Qt.GlobalColor.transparent)
+
+        painter = QPainter(pm)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        painter.setBrush(QBrush(QColor(220, 0, 0)))  # red dot
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.drawEllipse(0, 0, size, size)
+        painter.end()
+
+        self._trt_cached_dot_icon = QIcon(pm)
+        return self._trt_cached_dot_icon
+
+    # --- NEW: update red dot icons for SAM models ---
+    def update_sam_model_trt_icons(self):
+        if not hasattr(self, "combo_sam"):
+            return
+
+        show = self.trt_available and getattr(self, "sam_exec_mode", "cpu") == "trt"
+        dot_icon = self._get_trt_cached_dot_icon() if show else None
+
+        from PyQt6.QtGui import QIcon as _QIconAlias
+
+        for i in range(self.combo_sam.count()):
+            name = self.combo_sam.itemText(i)
+            if not name or "No Models" in name:
+                self.combo_sam.setItemIcon(i, _QIconAlias())
+                continue
+
+            if show and name in self.trt_cached_sam_models:
+                self.combo_sam.setItemIcon(i, dot_icon)
+            else:
+                # No dot if not cached or not in TRT mode
+                self.combo_sam.setItemIcon(i, _QIconAlias())
+
+    # --- NEW: update red dot icons for whole-image models ---
+    def update_whole_model_trt_icons(self):
+        if not hasattr(self, "combo_whole"):
+            return
+
+        show = self.trt_available and getattr(self, "exec_mode", "cpu") == "trt"
+        dot_icon = self._get_trt_cached_dot_icon() if show else None
+
+        from PyQt6.QtGui import QIcon as _QIconAlias
+
+        for i in range(self.combo_whole.count()):
+            name = self.combo_whole.itemText(i)
+            if not name or "No Models" in name:
+                self.combo_whole.setItemIcon(i, _QIconAlias())
+                continue
+
+            if show and name in self.trt_cached_whole_models:
+                self.combo_whole.setItemIcon(i, dot_icon)
+            else:
+                self.combo_whole.setItemIcon(i, _QIconAlias())
+
+
+
+
+
+    def on_sam_exec_combo_changed(self, index: int):
+        """Handle user changing SAM execution provider via dropdown."""
+        mode = self.combo_sam_exec.itemData(index)
+        if mode not in ("cpu", "gpu", "trt", "ov"):
+            return
+
+        # Sanity check in case availability changed
+        if mode == "gpu" and not self.cuda_available:
+            mode = "cpu"
+        if mode == "trt" and not self.trt_available:
+            mode = "cpu"
+        if mode == "ov" and not self.openvino_available:
+            mode = "cpu"
+
+        # Save & remember
+        self.sam_exec_mode = mode
+        self.settings.setValue("sam_exec_mode", self.sam_exec_mode)
+
+        # Drop existing SAM sessions so they reload with the new EP
+        if hasattr(self, "sam_encoder"):
+            del self.sam_encoder
+        if hasattr(self, "sam_decoder"):
+            del self.sam_decoder
+        self.sam_model_path = None
+        if hasattr(self, "encoder_output"):
+            delattr(self, "encoder_output")
+
+        ep_name = {
+            "cpu": "CPUExecutionProvider",
+            "gpu": "CUDAExecutionProvider",
+            "trt": "TensorrtExecutionProvider",
+            "ov":  "OpenVINOExecutionProvider",
+        }[self.sam_exec_mode]
+
+        self.status_label.setText(
+            f"SAM will prefer: {ep_name} (takes effect next time you use SAM)"
+        )
+
+        # NEW: update red dot icons when SAM EP mode changes
+        self.update_sam_model_trt_icons()
+
+
+    def on_exec_combo_changed(self, index: int):
+        """Handle user changing whole-image execution provider via dropdown."""
+        mode = self.combo_exec.itemData(index)
+        if mode not in ("cpu", "gpu", "trt", "ov"):
+            return
+
+
+        # If user somehow picked GPU but CUDA isn't available (shouldn't happen with current UI)
+        if mode == "gpu" and not self.cuda_available:
+            QMessageBox.warning(
+                self,
+                "CUDA not available",
+                "CUDAExecutionProvider is not available in this build of onnxruntime.\n\n"
+                "Install onnxruntime-gpu and CUDA."
+            )
+            # Revert to previous mode
+            prev = getattr(self, "exec_mode", "cpu")
+            # Find index for prev and restore
+            for i in range(self.combo_exec.count()):
+                if self.combo_exec.itemData(i) == prev:
+                    self.combo_exec.blockSignals(True)
+                    self.combo_exec.setCurrentIndex(i)
+                    self.combo_exec.blockSignals(False)
+                    break
+            return
+
+        # If user picked TRT but TRT isn't available (also shouldn't happen with current UI)
+        if mode == "trt" and not self.trt_available:
+            QMessageBox.warning(
+                self,
+                "TensorRT not available",
+                "TensorrtExecutionProvider is not available in this build of onnxruntime.\n\n"
+                "You need an ONNX Runtime build with TensorRT EP."
+            )
+            prev = getattr(self, "exec_mode", "cpu")
+            for i in range(self.combo_exec.count()):
+                if self.combo_exec.itemData(i) == prev:
+                    self.combo_exec.blockSignals(True)
+                    self.combo_exec.setCurrentIndex(i)
+                    self.combo_exec.blockSignals(False)
+                    break
+            return
+
+        # If user picked OpenVINO but it's not available (shouldn't happen with current UI)
+        if mode == "ov" and not self.openvino_available:
+            QMessageBox.warning(
+                self,
+                "OpenVINO not available",
+                "OpenVINOExecutionProvider is not available in this build of onnxruntime.\n\n"
+                "Install an onnxruntime build with OpenVINO EP."
+            )
+            prev = getattr(self, "exec_mode", "cpu")
+            for i in range(self.combo_exec.count()):
+                if self.combo_exec.itemData(i) == prev:
+                    self.combo_exec.blockSignals(True)
+                    self.combo_exec.setCurrentIndex(i)
+                    self.combo_exec.blockSignals(False)
+                    break
+            return
+
+
+        self.set_execution_mode(mode)
+
+    def set_execution_mode(self, mode: str):
+        """
+        Set whole-image execution provider mode: 'cpu', 'gpu', 'trt', or 'ov'.
+        """
+        old_mode = getattr(self, "exec_mode", "cpu")
+        if mode == old_mode:
+            return
+
+        # --- CLEAR VRAM & sessions when switching modes ---
+        self._clear_gpu_cache()
+        self._clear_trt_cache()  # --- NEW (TensorRT single cache) ---
+        self._clear_ov_cache()   # --- NEW (OpenVINO single cache) ---
+        for attr in list(self.__dict__.keys()):
+            if attr.endswith("_session"):
+                delattr(self, attr)
+        gc.collect()
+
+        # --- Update flags based on new mode ---
+        if mode == "trt":
+            self.use_trt = True
+            self.use_gpu = self.cuda_available
+            self.use_ov = False
+        elif mode == "gpu":
+            self.use_trt = False
+            self.use_gpu = self.cuda_available
+            self.use_ov = False
+        elif mode == "ov":
+            self.use_trt = False
+            self.use_gpu = False
+            self.use_ov = self.openvino_available
+        else:  # "cpu"
+            self.use_trt = False
+            self.use_gpu = False
+            self.use_ov = False
+
+        # Persist to settings for next launch
+        self.settings.setValue("use_trt", self.use_trt)
+        self.settings.setValue("use_gpu", self.use_gpu)
+        self.settings.setValue("use_ov", self.use_ov)
+
+        self.exec_mode = mode
+
+        # Cache toggle visibility
+        self._update_gpu_cache_visibility()
+        self._update_trt_cache_visibility()  # --- NEW (TensorRT single cache) ---
+        self._update_ov_cache_visibility()   # --- NEW (OpenVINO single cache) ---
+
+        # Status message
+        if self.use_trt and self.trt_available:
+            ep = "TensorrtExecutionProvider"
+        elif self.use_gpu and self.cuda_available:
+            ep = "CUDAExecutionProvider"
+        elif self.use_ov and self.openvino_available:
+            ep = "OpenVINOExecutionProvider"
+        else:
+            ep = "CPUExecutionProvider"
+
+        self.status_label.setText(
+            f"Whole-image models will prefer: {ep} (reloads next time you run one)"
+        )
+
+        # NEW: update red dot icons when whole-image EP mode changes
+        self.update_whole_model_trt_icons()
+
+
+
 
     def handle_bg_change(self, text):
         if "Blur" in text:
@@ -1211,7 +1822,7 @@ class BackgroundRemoverGUI(QMainWindow):
         
         self.btn_next.setEnabled(has_more_images and not is_clipboard)
 
-    def _sanitise_filename_for_windows(self, path: str) -> str:
+    def _sanitize_filename_for_windows(self, path: str) -> str:
         """
         On Windows, strip invalid filename characters from the basename:
         \\/:*?"<>|
@@ -1224,6 +1835,7 @@ class BackgroundRemoverGUI(QMainWindow):
         invalid_chars = r'\/:*?"<>|'
         cleaned = ''.join(c for c in basename if c not in invalid_chars)
 
+        # Avoid empty filenames
         if not cleaned:
             cleaned = "output"
 
@@ -1236,7 +1848,7 @@ class BackgroundRemoverGUI(QMainWindow):
         self.working_mask = Image.new("L", size, 0)
         self.model_output_mask = Image.new("L", size, 0)
         self.undo_history = [self.working_mask.copy()]
-        self.redo_history = [] 
+        self.redo_history = []  # <--- reset redo whenever we reset buffers
         
         if hasattr(self, "encoder_output"): 
             delattr(self, "encoder_output")
@@ -1281,58 +1893,138 @@ class BackgroundRemoverGUI(QMainWindow):
         if w <= 0 or h <= 0: return self.original_image, 0, 0
         return self.original_image.crop((x, y, x+w, y+h)), x, y
 
-    def _clear_onnx_sessions(self, keep_sam=False, keep_model_name=None):
-        
-        if not keep_sam:
-            if hasattr(self, "sam_encoder"): delattr(self, "sam_encoder")
-            if hasattr(self, "sam_decoder"): delattr(self, "sam_decoder")
-            self.sam_model_path = None
 
-        # Clear automatic models
-        sessions_to_clear = [attr for attr in dir(self) if attr.endswith("_session")]
-        for session_attr in sessions_to_clear:
-            # Don't clear the model we are about to load/use
-            if keep_model_name and keep_model_name in session_attr:
-                continue
-            delattr(self, session_attr)
+    def _get_providers(self, for_sam: bool = False):
+        """
+        Return a list of execution providers for ONNX Runtime, ordered by preference.
+        - for_sam=True  -> use SAM dropdown (sam_exec_mode)
+        - for_sam=False -> use whole-image flags (use_trt / use_gpu / use_ov)
+        """
+        if for_sam:
+            mode = getattr(self, "sam_exec_mode", "cpu")
+            if mode == "trt" and self.trt_available:
+                return [
+                    "TensorrtExecutionProvider",
+                    "CUDAExecutionProvider",
+                    "CPUExecutionProvider",
+                ]
+            if mode == "gpu" and self.cuda_available:
+                return ["CUDAExecutionProvider", "CPUExecutionProvider"]
+            if mode == "ov" and self.openvino_available:
+                return ["OpenVINOExecutionProvider", "CPUExecutionProvider"]
+            return ["CPUExecutionProvider"]
+        else:
+            if getattr(self, "use_trt", False) and self.trt_available:
+                return [
+                    "TensorrtExecutionProvider",
+                    "CUDAExecutionProvider",
+                    "CPUExecutionProvider",
+                ]
+            if getattr(self, "use_gpu", False) and self.cuda_available:
+                return ["CUDAExecutionProvider", "CPUExecutionProvider"]
+            if getattr(self, "use_ov", False) and self.openvino_available:
+                return ["OpenVINOExecutionProvider", "CPUExecutionProvider"]
+            return ["CPUExecutionProvider"]
+
+
+
+
+
+    def _get_provider_config(self, for_sam: bool = False):
+        """
+        Return a providers list suitable for InferenceSession(..., providers=...).
+
+        - If TensorRT is first in the list, attach engine cache options.
+        - If OpenVINO is first, attach compiled-model cache options (cache_dir).
+        """
+        base_providers = self._get_providers(for_sam=for_sam)
+        if not base_providers:
+            return ["CPUExecutionProvider"]
+
+        first_ep = base_providers[0]
+
+        # --- TensorRT: enable engine cache on disk ---
+        if first_ep == "TensorrtExecutionProvider":
+            trt_entry = (
+                "TensorrtExecutionProvider",
+                {
+                    "trt_engine_cache_enable": True,
+                    "trt_engine_cache_path": TENSORRT_CACHE_DIR,
+                },
+            )
+            providers = [trt_entry]
+            for ep in base_providers[1:]:
+                providers.append(ep)
+            return providers
+
+        # --- OpenVINO: enable compiled-model cache on disk ---
+        if first_ep == "OpenVINOExecutionProvider":
+            ov_entry = (
+                "OpenVINOExecutionProvider",
+                {
+                    # Match the first script: compiled model on GPU + cache_dir
+                    # If you prefer CPU, change device_type to "CPU".
+                    "device_type": "GPU",
+                    "cache_dir": OPENVINO_CACHE_DIR,
+                },
+            )
+            providers = [ov_entry]
+            for ep in base_providers[1:]:
+                providers.append(ep)
+            return providers
+
+        # CUDA / CPU (and everything else): just pass through unchanged
+        return base_providers
+
+
+
+
+
+
 
     def _init_sam(self):
         model_name = self.combo_sam.currentText()
-        if "Select" in model_name or "No Models" in model_name: return False
-        
+        if "Select" in model_name or "No Models" in model_name:
+            return False
+
         model_path = os.path.join(MODEL_ROOT, model_name)
-
-        if self.chk_unload.isChecked():
-            self._clear_onnx_sessions(keep_sam=True) # Keep SAM, clear others
-
         if self.sam_model_path != model_path:
             try:
                 self.status_label.setText(f"Loading {model_name}...")
                 QApplication.processEvents()
 
-                provider_options = []
-                if self.chk_cache.isChecked():
-                    if self.selected_provider == 'OpenVINOExecutionProvider':
-                        cache_path = os.path.join(MODEL_ROOT, "cache")
-                        os.makedirs(cache_path, exist_ok=True)
-                        provider_options = [{'device_type': 'GPU', 'cache_dir': cache_path}]
-                    elif self.selected_provider == 'TensorrtExecutionProvider':
-                        cache_path = os.path.join(MODEL_ROOT, "cache")
-                        os.makedirs(cache_path, exist_ok=True)
-                        provider_options = [{'trt_engine_cache_enable': True, 'trt_engine_cache_path': cache_path}]
+                providers = self._get_provider_config(for_sam=True)
+                self.sam_encoder = ort.InferenceSession(
+                    model_path + ".encoder.onnx",
+                    providers=providers
+                )
+                self.sam_decoder = ort.InferenceSession(
+                    model_path + ".decoder.onnx",
+                    providers=providers
+                )
 
-                self.sam_encoder = ort.InferenceSession(model_path + ".encoder.onnx", 
-                                                      providers=[self.selected_provider],
-                                                      provider_options=provider_options)
-                self.sam_decoder = ort.InferenceSession(model_path + ".decoder.onnx", 
-                                                      providers=[self.selected_provider],
-                                                      provider_options=provider_options)
                 self.sam_model_path = model_path
-                if hasattr(self, "encoder_output"): delattr(self, "encoder_output")
+                if hasattr(self, "encoder_output"):
+                    delattr(self, "encoder_output")
+
+                provs = self.sam_encoder.get_providers()
+                prov = provs[0] if provs else "UnknownEP"
+                self.status_label.setText(f"{model_name} loaded ({prov})")
+
+                # NEW: if this SAM model is running on TensorRT, mark it as cached
+                if any("TensorrtExecutionProvider" in p for p in provs):
+                    if model_name not in self.trt_cached_sam_models:
+                        self.trt_cached_sam_models.add(model_name)
+                        self._save_trt_cached_model_names()
+                        if self.sam_exec_mode == "trt":
+                            self.update_sam_model_trt_icons()
+
             except Exception as e:
                 QMessageBox.critical(self, "Error", f"Could not load model: {e}")
                 return False
         return True
+
+
 
     def handle_sam_point(self, scene_pos, is_positive):
         self.coordinates.append([scene_pos.x(), scene_pos.y()])
@@ -1457,97 +2149,277 @@ class BackgroundRemoverGUI(QMainWindow):
     def run_automatic_model(self, model_name=None, target_size=1024):
         # TODO read model inputs instead of hardcoding based on filename
 
-        if not model_name: model_name = self.combo_whole.currentText()
-        if "Select" in model_name: return
-        
+        # 1) Figure out which model name to use
+        if not model_name:
+            model_name = self.combo_whole.currentText()
+        if not model_name or "Select" in model_name or "No Models" in model_name:
+            return
+
+        # Find the actual .onnx file
         found_name = None
         for f in os.listdir(MODEL_ROOT):
-            if model_name in f and f.endswith(".onnx"): found_name = f.replace(".onnx",""); break
-        if not found_name: 
-            self.status_label.setText(f"Model {model_name} not found"); return
-        
+            if model_name in f and f.endswith(".onnx"):
+                found_name = f.replace(".onnx", "")
+                break
+        if not found_name:
+            self.status_label.setText(f"Model {model_name} not found")
+            return
+
         model_name = found_name
         crop, x_off, y_off = self.get_viewport_crop()
+        if crop.width == 0 or crop.height == 0:
+            return
 
-        if self.chk_unload.isChecked():
-            self._clear_onnx_sessions(keep_model_name=model_name)
+        if "BiRefNet_HR" in model_name:
+            target_size = 2048
 
-        if "BiRefNet_HR" in model_name: target_size=2048
-        
-        self.set_loading(True, f"Loading {model_name}...")
-        
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        self.set_loading(True, f"Processing {model_name}...")
+        QApplication.processEvents()
+
         final_status = "Idle"
         load_time = 0.0
         inference_time = 0.0
 
         try:
+            # --- Session creation / retrieval ---
+            sess_options = ort.SessionOptions()
+            sess_options.enable_cpu_mem_arena = False
+            sess_options.enable_mem_pattern = False
 
-            if not hasattr(self, f"{model_name}_session"):
-                t_start_load = timer()
-                sess_options = ort.SessionOptions()
-                # This frees the ram after inference with very little impact on performance.
-                # Makes keeping multiple models loaded in memory for rapid use possible without OOM issues
-                # (unless using huge models like BiRefNet_HD, which is a different problem)
-                sess_options.enable_cpu_mem_arena = False 
+            # Get base provider ordering and then expand to config with TensorRT options
+            base_providers = self._get_providers(for_sam=False)
+            first_ep = base_providers[0] if base_providers else "CPUExecutionProvider"
 
-                provider_options = []
-                if self.chk_cache.isChecked():
-                    if self.selected_provider == 'OpenVINOExecutionProvider':
-                        cache_path = os.path.join(MODEL_ROOT, "cache")
-                        os.makedirs(cache_path, exist_ok=True)
-                        provider_options = [{'device_type': 'GPU', 'cache_dir': cache_path}]
-                    elif self.selected_provider == 'TensorrtExecutionProvider':
-                        cache_path = os.path.join(MODEL_ROOT, "cache")
-                        os.makedirs(cache_path, exist_ok=True)
-                        provider_options = [{'trt_engine_cache_enable': True, 'trt_engine_cache_path': cache_path}]
+            providers = self._get_provider_config(for_sam=False)
 
-                session = ort.InferenceSession(os.path.join(MODEL_ROOT, model_name + ".onnx"), sess_options=sess_options, providers=[self.selected_provider], provider_options=provider_options)
-                setattr(self, f"{model_name}_session", session)
-                load_time = (timer() - t_start_load) * 1000
-                
-            # Retrieve the session (fast)
-            session = getattr(self, f"{model_name}_session")
+            model_path = os.path.join(MODEL_ROOT, model_name + ".onnx")
 
-            self.status_label.setText(f"Running {model_name}...")
+            gpu_primary = (first_ep == "CUDAExecutionProvider")
+            trt_primary = (first_ep == "TensorrtExecutionProvider")      # --- TensorRT single cache ---
+            ov_primary  = (first_ep == "OpenVINOExecutionProvider")      # --- NEW (OpenVINO single cache) ---
+
+            gpu_cache_active = self._gpu_cache_active() and gpu_primary
+            trt_cache_active = self._trt_cache_active() and trt_primary  # --- TensorRT single cache ---
+            ov_cache_active  = self._ov_cache_active() and ov_primary    # --- NEW (OpenVINO single cache) ---
+
+            session = None
+
+            if gpu_primary:
+                # --- CUDA primary EP ---
+                if gpu_cache_active:
+                    # Single cached GPU session for whole-image models
+                    if (
+                        getattr(self, "gpu_cached_model_name", None) == model_name
+                        and hasattr(self, "gpu_cached_session")
+                    ):
+                        # Reuse cached session
+                        session = self.gpu_cached_session
+                        load_time = 0.0
+                    else:
+                        # New model: drop old cached session (if any), cache this one
+                        self._clear_gpu_cache()
+                        t_start_load = timer()
+                        session = ort.InferenceSession(
+                            model_path,
+                            sess_options=sess_options,
+                            providers=providers,
+                        )
+                        self.gpu_cached_session = session
+                        self.gpu_cached_model_name = model_name
+                        load_time = (timer() - t_start_load) * 1000
+                else:
+                    # GPU without caching: always use a fresh session
+                    t_start_load = timer()
+                    session = ort.InferenceSession(
+                        model_path,
+                        sess_options=sess_options,
+                        providers=providers,
+                    )
+                    load_time = (timer() - t_start_load) * 1000
+
+            elif trt_primary:
+                # --- TensorRT primary EP ---
+                if trt_cache_active:
+                    # Single cached TensorRT session for whole-image models
+                    if (
+                        getattr(self, "trt_cached_model_name", None) == model_name
+                        and hasattr(self, "trt_cached_session")
+                    ):
+                        session = self.trt_cached_session
+                        load_time = 0.0
+                    else:
+                        # New model: drop old cached TRT session (if any), cache this one
+                        self._clear_trt_cache()
+                        t_start_load = timer()
+                        session = ort.InferenceSession(
+                            model_path,
+                            sess_options=sess_options,
+                            providers=providers,
+                        )
+                        self.trt_cached_session = session
+                        self.trt_cached_model_name = model_name
+                        load_time = (timer() - t_start_load) * 1000
+                else:
+                    # Legacy behavior: one TensorRT session per model_name
+                    cache_attr = f"{model_name}_session"
+                    if not hasattr(self, cache_attr):
+                        t_start_load = timer()
+                        session = ort.InferenceSession(
+                            model_path,
+                            sess_options=sess_options,
+                            providers=providers,
+                        )
+                        setattr(self, cache_attr, session)
+                        load_time = (timer() - t_start_load) * 1000
+                    else:
+                        session = getattr(self, cache_attr)
+                        load_time = 0.0
+
+            elif ov_primary:
+                # --- NEW: OpenVINO primary EP ---
+                if ov_cache_active:
+                    # Single cached OpenVINO session for whole-image models
+                    if (
+                        getattr(self, "ov_cached_model_name", None) == model_name
+                        and hasattr(self, "ov_cached_session")
+                    ):
+                        session = self.ov_cached_session
+                        load_time = 0.0
+                    else:
+                        # New model: drop old cached OV session (if any), cache this one
+                        self._clear_ov_cache()
+                        t_start_load = timer()
+                        session = ort.InferenceSession(
+                            model_path,
+                            sess_options=sess_options,
+                            providers=providers,
+                        )
+                        self.ov_cached_session = session
+                        self.ov_cached_model_name = model_name
+                        load_time = (timer() - t_start_load) * 1000
+                else:
+                    # OpenVINO without caching: always use a fresh session
+                    t_start_load = timer()
+                    session = ort.InferenceSession(
+                        model_path,
+                        sess_options=sess_options,
+                        providers=providers,
+                    )
+                    load_time = (timer() - t_start_load) * 1000
+
+            else:
+                # --- CPU (or other non-CUDA / non-TRT / non-OV EP): reuse one session per model_name ---
+                cache_attr = f"{model_name}_session"
+                if not hasattr(self, cache_attr):
+                    t_start_load = timer()
+                    session = ort.InferenceSession(
+                        model_path,
+                        sess_options=sess_options,
+                        providers=providers,
+                    )
+                    setattr(self, cache_attr, session)
+                    load_time = (timer() - t_start_load) * 1000
+                else:
+                    session = getattr(self, cache_attr)
+                    load_time = 0.0
+
+
+
+
+
+
             # --- Preprocessing ---
             img_r = crop.convert("RGB").resize((target_size, target_size), Image.BICUBIC)
-            
-            if "isnet" in model_name or "rmbg" in model_name: mean, std = (0.5, 0.5, 0.5), (1.0, 1.0, 1.0)
-            else: mean, std = (0.485, 0.456, 0.406), (0.229, 0.224, 0.225)
-            
+
+            if "isnet" in model_name or "rmbg" in model_name:
+                mean, std = (0.5, 0.5, 0.5), (1.0, 1.0, 1.0)
+            else:
+                mean, std = (0.485, 0.456, 0.406), (0.229, 0.224, 0.225)
+
             im = np.array(img_r) / 255.0
-            tmp = np.zeros((im.shape[0], im.shape[1], 3))
-            tmp[:,:,0] = (im[:,:,0] - mean[0])/std[0]
-            tmp[:,:,1] = (im[:,:,1] - mean[1])/std[1]
-            tmp[:,:,2] = (im[:,:,2] - mean[2])/std[2]
-            
+            tmp = np.zeros((im.shape[0], im.shape[1], 3), dtype=np.float32)
+            tmp[:, :, 0] = (im[:, :, 0] - mean[0]) / std[0]
+            tmp[:, :, 1] = (im[:, :, 1] - mean[1]) / std[1]
+            tmp[:, :, 2] = (im[:, :, 2] - mean[2]) / std[2]
+
             inp = np.expand_dims(tmp.transpose((2, 0, 1)), 0).astype(np.float32)
-            
-            t_start_inf = timer() 
+
+            # --- Inference ---
+            t_start_inf = timer()
             result = session.run(None, {session.get_inputs()[0].name: inp})[0]
             inference_time = (timer() - t_start_inf) * 1000
+
+            # NEW: if this whole-image model is running on TensorRT, mark it as cached
+            try:
+                provs = session.get_providers()
+            except Exception:
+                provs = []
+            if any("TensorrtExecutionProvider" in p for p in provs):
+                if model_name not in self.trt_cached_whole_models:
+                    self.trt_cached_whole_models.add(model_name)
+                    self._save_trt_cached_model_names()
+                    if getattr(self, "exec_mode", "cpu") == "trt":
+                        self.update_whole_model_trt_icons()
+
 
             # --- Postprocessing ---
             if "BiRefNet" in model_name:
                 pred = 1 / (1 + np.exp(-result[0][0]))
-                mask = (pred - pred.min()) / (pred.max() - pred.min())
+                denom = (pred.max() - pred.min()) or 1.0
+                mask = (pred - pred.min()) / denom
             else:
                 mask = result[0][0]
-                mask = (mask - mask.min()) / (mask.max() - mask.min())
-            
-            res_mask = Image.fromarray((mask * 255).astype("uint8"), "L").resize(crop.size, Image.Resampling.LANCZOS)
+                denom = (mask.max() - mask.min()) or 1.0
+                mask = (mask - mask.min()) / denom
+
+            res_mask = Image.fromarray((mask * 255).astype("uint8"), "L").resize(
+                crop.size, Image.Resampling.LANCZOS
+            )
             self.model_output_mask = Image.new("L", self.original_image.size, 0)
             self.model_output_mask.paste(res_mask, (x_off, y_off))
             self.show_mask_overlay()
-            
+
             load_str = f"{load_time:.0f}ms" if load_time > 0 else "Cached"
-            final_status = f"{model_name}: Load {load_str} | Inf {inference_time:.0f}ms"
-            
-        except Exception as e: 
+            provs = session.get_providers()
+            ep = provs[0] if provs else "UnknownEP"
+            final_status = f"{model_name}: EP {ep} | Load {load_str} | Inf {inference_time:.0f}ms"
+
+        except Exception as e:
             QMessageBox.critical(self, "Error", str(e))
             final_status = "Inference Error"
         finally:
+            # For non-cached CUDA sessions we still drop the session to free VRAM.
+            # TensorRT & CPU sessions stay cached so their engines can be reused.
+            try:
+                provs = session.get_providers()
+                first_ep = provs[0] if provs else "CPUExecutionProvider"
+            except Exception:
+                first_ep = "CPUExecutionProvider"
+
+            # Only free CUDA sessions if we are NOT using the single-model GPU cache
+            if first_ep == "CUDAExecutionProvider" and not gpu_cache_active:
+                try:
+                    del session
+                except UnboundLocalError:
+                    pass
+                gc.collect()
+
+            # Free OpenVINO sessions if not using the single-model OV cache
+            if first_ep == "OpenVINOExecutionProvider" and not self._ov_cache_active():
+                try:
+                    del session
+                except UnboundLocalError:
+                    pass
+                gc.collect()
+
+
+
+
+
+            QApplication.restoreOverrideCursor()
             self.set_loading(False, final_status)
+
 
     def show_mask_overlay(self):
         if self.model_output_mask:
@@ -1603,7 +2475,7 @@ class BackgroundRemoverGUI(QMainWindow):
         if len(self.undo_history) > UNDO_STEPS:
             self.undo_history.pop(0)
         if hasattr(self, "redo_history"):
-            self.redo_history.clear() 
+            self.redo_history.clear()  # <--- clear redo on new branch
 
 
     def undo(self):
@@ -1857,12 +2729,12 @@ class BackgroundRemoverGUI(QMainWindow):
         path = os.path.splitext(orig_path)[0] + "_nobg.jpg"
 
         # NEW: sanitize default filename on Windows
-        path = self._sanitise_filename_for_windows(path)
+        path = self._sanitize_filename_for_windows(path)
 
         fname, _ = QFileDialog.getSaveFileName(self, "Quick Save", path, "JPG (*.jpg)")
         if fname:
-
-            fname = self._sanitise_filename_for_windows(fname)
+            # NEW: sanitize user-chosen filename on Windows
+            fname = self._sanitize_filename_for_windows(fname)
 
             if not fname.lower().endswith(".jpg"): fname += ".jpg"
             empty = Image.new("RGBA", self.original_image.size, 0)
@@ -1890,12 +2762,14 @@ class BackgroundRemoverGUI(QMainWindow):
         
         initial_name = os.path.splitext(self.image_paths[0])[0] + "_nobg." + default_ext
 
-        initial_name = self._sanitise_filename_for_windows(initial_name)
+        # NEW: sanitize suggested filename on Windows
+        initial_name = self._sanitize_filename_for_windows(initial_name)
 
         fname, _ = QFileDialog.getSaveFileName(self, "Save Image", initial_name, f"{default_ext.upper()} (*.{default_ext})")
         if not fname: return
 
-        fname = self._sanitise_filename_for_windows(fname)
+        # NEW: sanitize user-chosen filename on Windows
+        fname = self._sanitize_filename_for_windows(fname)
         
         if not fname.lower().endswith(f".{default_ext}"): fname += f".{default_ext}"
 
@@ -1976,6 +2850,8 @@ Working mask appears as blue overlay on Input.
 Press 'A' to Add mask to Output, 'S' to Subtract.
 
 Image segmentation models are run on the current view, so you can zoom into details to fine tune your background removal.
+
+Red dots next to models indicate they are cached for TensorRT.
 
 Controls:
 - Left Click: Add Point (SAM) / Start Box
