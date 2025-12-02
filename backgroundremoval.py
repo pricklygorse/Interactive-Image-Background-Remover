@@ -2110,45 +2110,10 @@ class BackgroundRemoverGUI(QMainWindow):
             t_start = timer()
             
             embedding = self.encoder_output[0]
-
-
-            # === STATIC POINT SHAPE FOR TENSORRT ===
-            MAX_POINTS = 16   # You can change this if desired
-
-            # Convert valid points to numpy
-            coords = np.array(valid_coords, dtype=np.float32)
-            labels = np.array(valid_labels, dtype=np.float32)
-
-            # ---- Truncate if too many clicks ----
-            if coords.shape[0] > MAX_POINTS:
-                coords = coords[:MAX_POINTS]
-                labels = labels[:MAX_POINTS]
-
-            num_pts = coords.shape[0]
-
-            # ---- Allocate fixed padded arrays ----
-            coords_fixed = np.zeros((1, MAX_POINTS + 1, 2), dtype=np.float32)
-            labels_fixed = -np.ones((1, MAX_POINTS + 1), dtype=np.float32)  # -1 = ignore
-
-            # ---- Insert real points ----
-            coords_fixed[0, :num_pts, :] = coords
-            labels_fixed[0, :num_pts]    = labels
-
-            # ---- Sentinel point ----
-            coords_fixed[0, MAX_POINTS, :] = [0.0, 0.0]
-            labels_fixed[0, MAX_POINTS]    = -1.0
-
-            # ---- Apply affine transform (same as original code) ----
-            coords_aug = np.concatenate(
-                [coords_fixed, np.ones((1, MAX_POINTS + 1, 1), dtype=np.float32)],
-                axis=2,
-            )
-
+            onnx_coord = np.concatenate([np.array(valid_coords), np.array([[0.0, 0.0]])], axis=0)[None, :, :]
+            onnx_label = np.concatenate([np.array(valid_labels), np.array([-1])], axis=0)[None, :].astype(np.float32)
+            coords_aug = np.concatenate([onnx_coord, np.ones((1, onnx_coord.shape[1], 1), dtype=np.float32)], axis=2)
             onnx_coord = np.matmul(coords_aug, self.last_transform.T)[:, :, :2].astype(np.float32)
-            onnx_label = labels_fixed.astype(np.float32)
-
-
-
 
             decoder_inputs = {
                 "image_embeddings": embedding,
