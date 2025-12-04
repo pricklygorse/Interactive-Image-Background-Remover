@@ -86,17 +86,6 @@ jobs:
         with:
           path: artifacts
 
-      - name: Create Release
-        id: create_release
-        uses: actions/create-release@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          tag_name: ${{ github.ref }}
-          release_name: Release ${{ github.ref }}
-          draft: true
-          prerelease: false
-
       - name: Zip Release Assets
         run: |
           # Each artifact was downloaded into its own directory.
@@ -109,9 +98,13 @@ jobs:
             fi
           done
 
-      - name: Upload Release Assets
+      - name: Create Draft Release and Upload Assets
         uses: softprops/action-gh-release@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
+          tag_name: ${{ github.ref }}
+          name: Release ${{ github.ref }}
+          draft: true
+          prerelease: false
           files: ./*.zip
