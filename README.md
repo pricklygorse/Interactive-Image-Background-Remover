@@ -33,6 +33,17 @@ pip install pyqt6 Pillow numpy onnxruntime opencv-python
 
 Or download prebuilt executables for Windows, Linux and Mac from the [Github releases](https://github.com/pricklygorse/Interactive-Image-Background-Remover/releases) 
 
+### GPU Support
+
+When running from the script, you will need to install the appropriate onnxruntime package for your hardware. Only install one of these packages, and remove any onnxruntime packages before installing a new one. [Executable releases](https://github.com/pricklygorse/Interactive-Image-Background-Remover/releases) are built with the appropriate runtime.
+
+```bash
+pip install onnxruntime # CPU only
+pip install onnxruntime-gpu # Nvidia CUDA, TensorRT
+pip install onnxruntime-openvino # Intel iGPU and GPU
+pip install onnxruntime-directml # Microsoft Windows general machine learning (Nvidia, AMD, Intel)
+```
+
 
 ## Model Downloads
 
