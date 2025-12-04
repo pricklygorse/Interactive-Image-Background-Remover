@@ -4,17 +4,19 @@ import os
 import math
 import numpy as np
 import cv2
+import gc
 from timeit import default_timer as timer
 
-from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QSizePolicy, 
+from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
                              QPushButton, QLabel, QComboBox, QCheckBox, QFileDialog, 
                              QMessageBox, QGraphicsView, QGraphicsScene, QGraphicsPixmapItem, 
                              QSlider, QFrame, QSplitter, QDialog, QScrollArea, 
                              QGraphicsRectItem, QGraphicsEllipseItem, QGraphicsPathItem, 
-                             QTextEdit, QSizePolicy, QRadioButton, QButtonGroup, QInputDialog, QProgressBar)
-from PyQt6.QtCore import Qt, QTimer, QPointF, QRectF, QSettings
-from PyQt6.QtGui import (QPixmap, QImage, QColor, QPainter, QPen, QBrush,
-                         QKeySequence, QShortcut, QCursor, )
+                             QTextEdit, QSizePolicy, QRadioButton, QButtonGroup, QInputDialog, 
+                             QProgressBar, QStyle)
+from PyQt6.QtCore import Qt, QTimer, QPointF, QRectF, QSettings, QPropertyAnimation, QEasingCurve
+from PyQt6.QtGui import (QPixmap, QImage, QColor, QPainter, QPainterPath, QPen, QBrush,
+                         QKeySequence, QShortcut, QCursor, QIcon)
 
 from PIL import Image, ImageOps, ImageDraw, ImageEnhance, ImageGrab, ImageFilter, ImageChops
 import onnxruntime as ort
@@ -26,13 +28,16 @@ if getattr(sys, 'frozen', False):
 else:
     SCRIPT_BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-MODEL_ROOT = os.path.join(SCRIPT_BASE_DIR, "Models/")
+MODEL_ROOT_DIR = os.path.join(SCRIPT_BASE_DIR, "Models/")
+
+CACHE_ROOT_DIR = os.path.join(SCRIPT_BASE_DIR, "Models", "cache")
+
 PAINT_BRUSH_SCREEN_SIZE = 30 
 UNDO_STEPS = 20
 SOFTEN_RADIUS = 2 
 MIN_RECT_SIZE = 5
 
-print(f"Working directory: {SCRIPT_BASE_DIR}")
+
 
 # --- Helper Functions ---
 
@@ -135,6 +140,83 @@ class SaveOptionsDialog(QDialog):
             "save_mask": self.chk_mask.isChecked(),
             "trim": self.chk_trim.isChecked()
         }
+
+# Animated Collapsable Widget
+class CollapsibleFrame(QFrame):
+    def __init__(self, title="Options", parent=None, animation_duration=250, tooltip=None):
+        super().__init__(parent)
+        self.animation_duration = animation_duration
+        self.setFrameShape(QFrame.Shape.StyledPanel)
+        self.setFrameShadow(QFrame.Shadow.Raised)
+        
+        self.main_layout = QVBoxLayout(self)
+        self.main_layout.setContentsMargins(0, 0, 0, 0) # No margin on the outer frame
+        self.main_layout.setSpacing(0)
+        
+        # 1. Header Button
+        self.toggle_button = QPushButton(title)
+        if tooltip:
+            self.toggle_button.setToolTip(tooltip)
+        self.toggle_button.setStyleSheet("text-align: left; padding: 5px;")
+        self.toggle_button.setFlat(True)
+        self.toggle_button.clicked.connect(self.toggle_content)
+        
+        # 2. Content Frame
+        self.content_frame = QFrame()
+        self.content_layout = QVBoxLayout(self.content_frame)
+        self.content_layout.setContentsMargins(6, 6, 6, 6)
+        self.content_layout.setSpacing(5)
+        
+        # 3. Animation Setup
+        self.animation = QPropertyAnimation(self.content_frame, b"maximumHeight")
+        self.animation.setDuration(self.animation_duration)
+        self.animation.setEasingCurve(QEasingCurve.Type.InOutQuad)
+        
+        # 4. Add to Main Layout
+        self.main_layout.addWidget(self.toggle_button)
+        self.main_layout.addWidget(self.content_frame)
+        
+        # Set initial state to collapsed (but hide/show the contents)
+        self.is_collapsed = True
+        self.content_frame.setVisible(False)
+        self.content_frame.setMaximumHeight(0)
+        self.toggle_button.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_TitleBarUnshadeButton))
+
+    def layout_for_content(self):
+        """Returns the inner layout where the user's widgets should be added."""
+        return self.content_layout
+            
+    def toggle_content(self, checked=None):
+        self.animation.stop()
+
+        if self.is_collapsed:
+            self.is_collapsed = False
+            self.content_frame.setVisible(True) 
+            self.toggle_button.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_TitleBarShadeButton))
+            
+            collapsed_height = self.content_frame.height()
+            self.content_frame.setMaximumHeight(collapsed_height)
+            
+            # Set the end value to a very large number, 
+            # and the layout manager will clamp it to the required size.
+            target_height = 1000 
+            
+            self.animation.setStartValue(collapsed_height)
+            self.animation.setEndValue(target_height)
+            self.animation.start()
+        else:
+            self.is_collapsed = True
+            self.toggle_button.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_TitleBarUnshadeButton))
+            
+            start_height = self.content_frame.height()
+            
+            self.animation.setStartValue(start_height)
+            self.animation.setEndValue(0) # Collapse to 0
+            
+            self.animation.finished.connect(lambda: self.content_frame.setVisible(False), 
+                                           Qt.ConnectionType.SingleShotConnection)
+            
+            self.animation.start()
 
 class SynchronizedGraphicsView(QGraphicsView):
     def __init__(self, scene, name="View", parent=None):
@@ -728,18 +810,14 @@ class BackgroundRemoverGUI(QMainWindow):
         self.blur_radius = 30
 
 
+
         # Persistent settings
         self.settings = QSettings("PricklyGorse", "InteractiveBackgroundRemover")
-
-        # --- Hardware Acceleration ---
-        all_providers = ort.get_available_providers()
-        # Hide azure showing in the list if the user has no GPU. Extremely unlikely will be used for such a simple app
-        self.available_providers = [p for p in all_providers if p != 'AzureExecutionProvider']
-        self.selected_provider = 'CPUExecutionProvider' # Default
 
         self.original_image = None
         self.working_image = None
         self.working_mask = None
+        self.loaded_whole_model = None
         self.model_output_mask = None
 
         self.init_ui()
@@ -756,6 +834,9 @@ class BackgroundRemoverGUI(QMainWindow):
             QTimer.singleShot(30, lambda: self.load_image(self.image_paths[0]))
         else:
             self.load_blank_image()
+        
+        # Delay until UI created
+        QTimer.singleShot(10, self.update_cached_model_icons)
 
     def init_ui(self):
         self.setAcceptDrops(True)
@@ -795,62 +876,83 @@ class BackgroundRemoverGUI(QMainWindow):
         h_edit_load_buttons.addWidget(btn_lm)
         sl.addLayout(h_edit_load_buttons)
 
+
+        self.available_eps = self.get_available_ep_options()
+
         # --- Hardware Acceleration Dropdown ---
-        sl.addWidget(QLabel("<b>Hardware Acceleration:</b>"))
-        self.combo_provider = QComboBox()
-        self.combo_provider.setToolTip("If only 'CPU' available, you may need to install onnxruntime-gpu (NVIDIA CUDA), onnxruntime-openvino (Intel) or onnxruntime-directml (Windows DirectX)")
-        self.combo_provider.addItems(self.available_providers)
+        self.hw_options_frame = CollapsibleFrame("Hardware Acceleration Options", 
+                                                 tooltip="Configure which hardware (CPU/GPU) is used for different model types.\n" 
+                                                         "Optimised compiled TensorRT and OpenVINO models are cached to the HDD.\n"
+                                                         "Caching models in RAM can speed up subsequent runs.")
+        hw_layout = self.hw_options_frame.layout_for_content()
+        sl.addWidget(self.hw_options_frame)
+
+        self.chk_ram_cache = QCheckBox("Keep Last Model in RAM/VRAM")
+        self.chk_ram_cache.setToolTip("If checked, the model stays loaded after running.\n"
+                                    "Speeds up subsequent runs but uses more memory.")
+        self.chk_ram_cache.setChecked(self.settings.value("ram_cache_enabled", False, type=bool))
+        self.chk_ram_cache.toggled.connect(lambda v: self.settings.setValue("ram_cache_enabled", v))
+        hw_layout.addWidget(self.chk_ram_cache)
+
+        # SAM
+        hw_layout.addWidget(QLabel("<b>Interactive SAM Model Provider:</b>"))
+        self.combo_sam_exec = QComboBox()
+        for label, provider_str, opts, short_code in self.available_eps:
+            self.combo_sam_exec.addItem(label, (provider_str, opts, short_code))
+
+        last_sam = self.settings.value("sam_exec_short_code", "cpu")
+        idx = 0
+        for i in range(self.combo_sam_exec.count()):
+            if self.combo_sam_exec.itemData(i)[2] == last_sam:
+                idx = i
+                break
+        self.combo_sam_exec.setCurrentIndex(idx)
+        self.combo_sam_exec.currentIndexChanged.connect(self.on_sam_exec_changed)
+        sl.addWidget(self.combo_sam_exec)
+        hw_layout.addWidget(self.combo_sam_exec)
+
+        # Automatic Models
+        hw_layout.addWidget(QLabel("<b>Automatic Whole-Image Model Provider:</b>"))
+        self.combo_exec = QComboBox()
+        self.combo_exec.setToolTip("Select hardware acceleration for automatic models.")
         
-        # Set initial selection
-        default_provider_preference = ['OpenVINOExecutionProvider', 'CUDAExecutionProvider', 'DmlExecutionProvider', 'CPUExecutionProvider']
-        for provider in default_provider_preference:
-            if provider in self.available_providers:
-                idx = self.combo_provider.findText(provider)
-                if idx >= 0:
-                    self.combo_provider.setCurrentIndex(idx)
-                    self.selected_provider = provider
-                    break
-        self.combo_provider.currentTextChanged.connect(self.on_provider_changed)
-        sl.addWidget(self.combo_provider)
+        for label, provider_str, opts, short_code in self.available_eps:
+            self.combo_exec.addItem(label, (provider_str, opts, short_code))
+        
+        last_exec = self.settings.value("exec_short_code", "cpu")
+        idx = 0
+        for i in range(self.combo_exec.count()):
+            if self.combo_exec.itemData(i)[2] == last_exec:
+                idx = i
+                break
+        self.combo_exec.setCurrentIndex(idx)
+        self.combo_exec.currentIndexChanged.connect(self.on_exec_changed)
+        sl.addWidget(self.combo_exec)
 
-        # Grey out the box if CPU is the only option
-        if len(self.available_providers) == 1 and 'CPUExecutionProvider' in self.available_providers:
-            self.combo_provider.setEnabled(False)
+        hw_layout.addWidget(self.combo_exec)
 
-        self.chk_cache = QCheckBox("Cache Optimised Models")
-        self.chk_cache.setToolTip("Saves optimised models to disk for much faster startup on future runs. Recommended for GPU providers.")
-        cache_state = self.settings.value("cache_models", True, type=bool)
-        self.chk_cache.setChecked(cache_state)
-        sl.addWidget(self.chk_cache)
-        self.chk_cache.toggled.connect(lambda checked: self.settings.setValue("cache_models", checked))
-        self.update_acceleration_options(self.selected_provider) # Set initial visibility
 
-        self.chk_unload = QCheckBox("Unload Unused Models")
-        self.chk_unload.setToolTip("Frees RAM and GPU VRAM by unloading other models from memory when you switch to a new one. Some models can take several seconds to load.")
-        unload_state = self.settings.value("unload_models", False, type=bool)
-        self.chk_unload.setChecked(unload_state)
-        sl.addWidget(self.chk_unload)
-        self.chk_unload.toggled.connect(lambda checked: self.settings.setValue("unload_models", checked))
 
+        # Rest of UI
+        
         sl.addWidget(QLabel("<b>Models:</b>"))
-        # 1. SAM (Interactive) Label & Tooltip
         lbl_sam = QLabel("Interactive (SAM):")
         lbl_sam.setToolTip("<b>Segment Anything Models</b><br>"
                            "These require you to interact with the image.<br>"
-                           "<i>Usage: Left-click to add points or drag to draw boxes around the subject.</i>")
+                           "<i>Usage: Left-click to add points, right-click to add negative (avoid) points, or drag to draw boxes around the subject.</i><br><br>"
+                           "Disc drive icons show models that have saved optimised versions cached.")
         sl.addWidget(lbl_sam)
 
-        # SAM Combo
         self.combo_sam = QComboBox()
-        self.combo_sam.setToolTip(lbl_sam.toolTip()) # Reuse the tooltip
+        self.combo_sam.setToolTip(lbl_sam.toolTip())
         self.populate_sam_models()
         sl.addWidget(self.combo_sam)
         
-        # 2. Automatic Label & Tooltip
         lbl_whole = QLabel("Automatic (Whole Image):")
         lbl_whole.setToolTip("<b>Automatic Models</b><br>"
                              "These run automatically on the entire image.<br>"
-                             "<i>Usage: Select a model and click 'Run Automatic'. No points needed.</i>")
+                             "<i>Usage: Select a model and click 'Run Automatic'. No points needed.</i><br><br>"
+                             "Disc drive icons show models that have saved optimised versions cached.")
         sl.addWidget(lbl_whole)
 
         # Whole Image Combo
@@ -962,7 +1064,7 @@ class BackgroundRemoverGUI(QMainWindow):
         
         w_in = QWidget(); l_in = QVBoxLayout(w_in)
         w_in.setMinimumWidth(150)
-        l_in.addWidget(QLabel("Interactive Input. Models are run on the current viewport"))
+        l_in.addWidget(QLabel("Interactive Input. Models are run on the current viewport. Zoom for greater detail"))
         self.scene_input = QGraphicsScene()
         self.view_input = SynchronizedGraphicsView(self.scene_input, name="Input View") 
         self.view_input.set_controller(self)
@@ -998,6 +1100,7 @@ class BackgroundRemoverGUI(QMainWindow):
         layout.addWidget(self.splitter, 1) # Give splitter stretch factor and add it to the main layout
         
         self.status_label = QLabel("Idle")
+        self.status_label.setFixedWidth(600)
         self.zoom_label = QLabel("Zoom: 100%")
         self.progress_bar = QProgressBar()
         self.progress_bar.setRange(0, 0)  # Sets "Indeterminate" (bouncing) mode
@@ -1008,6 +1111,171 @@ class BackgroundRemoverGUI(QMainWindow):
         self.statusBar().addWidget(self.status_label)
         self.statusBar().addPermanentWidget(self.progress_bar) # Add to right side
         self.statusBar().addPermanentWidget(self.zoom_label)
+
+
+    def get_available_ep_options(self):
+        """
+        Returns list of (Display Name, ProviderStr, OptionsDict, ShortCode)
+        """
+        available = ort.get_available_providers()
+        options = []
+
+        if "TensorrtExecutionProvider" in available:
+            # We will generate specific cache paths at runtime, 
+            # so we pass an empty dict here, or default options.
+            options.append(("TensorRT (GPU)", "TensorrtExecutionProvider", {}, "trt"))
+
+        if "CUDAExecutionProvider" in available:
+            options.append(("CUDA (GPU)", "CUDAExecutionProvider", {}, "cuda"))
+
+        # Windows generic provider
+        if "DmlExecutionProvider" in available:
+            options.append(("DirectML (GPU)", "DmlExecutionProvider", {}, "dml"))
+
+        if "OpenVINOExecutionProvider" in available:
+            try:
+                ov_devices = ort.capi._pybind_state.get_available_openvino_device_ids()
+            except Exception:
+                ov_devices = []
+            
+            # Fallback if query fails but provider exists
+            if not ov_devices: 
+                ov_devices = ['CPU']
+
+            for dev in ov_devices:
+                label = f"OpenVINO-{dev}"
+                opts = {'device_type': dev} 
+                options.append((label, "OpenVINOExecutionProvider", opts, f"ov-{dev.lower()}"))
+
+        # MAC
+        if "CoreMLExecutionProvider" in available:
+            options.append(("CoreML", "CoreMLExecutionProvider", {}, "coreml"))
+
+        # CPU always available
+        options.append(("CPU", "CPUExecutionProvider", {}, "cpu"))
+
+        return options
+    
+    def check_is_cached(self, model_name, provider_short_code):
+        """
+        Checks if a model has cache files on disk. 
+        We rely on the directory naming convention from _create_inference_session.
+        """
+        # We need to reconstruct the folder name logic roughly. 
+        # Since short_code maps to specific provider/device combos, we can filter Models/cache
+        
+        # Simple heuristic: Look for folder containing model_name and provider code
+        # This allows "trt" to match "TensorrtExecutionProvider_u2net"
+        
+        if provider_short_code == 'cpu': return False
+        
+        for folder in os.listdir(CACHE_ROOT_DIR):
+            full_path = os.path.join(CACHE_ROOT_DIR, folder)
+            if not os.path.isdir(full_path): continue
+            
+            # If folder has files and matches criteria
+            if model_name in folder and len(os.listdir(full_path)) > 0:
+                # Distinguish between providers
+                if provider_short_code == 'trt' and 'Tensorrt' in folder: return True
+                if provider_short_code.startswith('ov') and 'OpenVINO' in folder:
+                    # Check specific device match (e.g. ov-gpu)
+                    device = provider_short_code.split('-')[1].upper() # gpu -> GPU
+                    if device in folder: return True
+                if provider_short_code == 'dml' and 'Dml' in folder: return True
+                
+        return False
+    
+    def _get_cached_icon(self):
+        """
+        Returns a standard system icon to indicate a model is cached on disk.
+        Returns a cached QIcon to avoid fetching it every time.
+        """
+        # Check if we've already fetched the icon to avoid doing it repeatedly
+        if hasattr(self, "_cached_drive_icon"):
+            return self._cached_drive_icon
+
+        # Fetch the standard "Hard Drive" icon from the current application style
+        icon = self.style().standardIcon(QStyle.StandardPixmap.SP_DriveHDIcon)
+        
+        # Cache it as an instance variable
+        self._cached_drive_icon = icon
+        return self._cached_drive_icon
+
+    def update_cached_model_icons(self):
+        """Update drive icons based on disk cache."""
+        # Check Whole Image Models
+        current_data = self.combo_exec.currentData() # (ProviderStr, Opts, ShortCode)
+        if current_data:
+            short_code = current_data[2]
+            drive_icon = self._get_cached_icon() # <-- Use the new function
+            
+            for i in range(self.combo_whole.count()):
+                m_name = self.combo_whole.itemText(i)
+                if self.check_is_cached(m_name, short_code):
+                    self.combo_whole.setItemIcon(i, drive_icon)
+                else:
+                    self.combo_whole.setItemIcon(i, QIcon()) # Set blank icon if not cached
+
+        # Check SAM Models (Same logic)
+        current_sam_data = self.combo_sam_exec.currentData()
+        if current_sam_data:
+            sam_code = current_sam_data[2]
+            drive_icon = self._get_cached_icon() # <-- Use the new function
+            
+            for i in range(self.combo_sam.count()):
+                m_name = self.combo_sam.itemText(i)
+                if self.check_is_cached(m_name, sam_code):
+                    self.combo_sam.setItemIcon(i, drive_icon)
+                else:
+                    self.combo_sam.setItemIcon(i, QIcon())
+
+    def on_exec_changed(self, index):
+        """
+        Handle change in automatic image execution provider.
+        """
+        # Retrieve from combobox userdata (ProviderStr, OptionsDict, ShortCode)
+        data = self.combo_exec.itemData(index)
+        if not data: return
+        prov_str, prov_opts, short_code = data
+
+        self.settings.setValue("exec_short_code", short_code)
+
+        # Old session is now invalid and needs removing
+        if hasattr(self, 'loaded_whole_model') and self.loaded_whole_model:
+            del self.loaded_whole_model
+            self.loaded_whole_model = None
+            gc.collect()
+
+        # 4. Refresh the "Red Dot" icons
+        # Different providers have different cache folders on disk.
+        self.update_cached_model_icons()
+
+        self.status_label.setText(f"Whole-image provider switched to: {short_code.upper()}")
+
+
+    def on_sam_exec_changed(self, index):
+        """
+        Handle change in SAM execution provider.
+        """
+        # Retrieve from combobox userdata (ProviderStr, OptionsDict, ShortCode)
+        data = self.combo_sam_exec.itemData(index)
+        if not data: return
+        prov_str, prov_opts, short_code = data
+
+        self.settings.setValue("sam_exec_short_code", short_code)
+
+        # Old session is now invalid and needs removing
+        if hasattr(self, 'sam_encoder'): del self.sam_encoder
+        if hasattr(self, 'sam_decoder'): del self.sam_decoder
+        
+        # Reset tracking variables
+        self.sam_model_path = None 
+        if hasattr(self, "encoder_output"): delattr(self, "encoder_output")
+        gc.collect()
+
+        self.update_cached_model_icons()
+
+        self.status_label.setText(f"SAM provider switched to: {short_code.upper()}")
 
     def dragEnterEvent(self, event):
         if event.mimeData().hasUrls():
@@ -1021,20 +1289,6 @@ class BackgroundRemoverGUI(QMainWindow):
                         return
         super().dragEnterEvent(event)
 
-    def update_acceleration_options(self, provider):
-        # Show cache option only for providers that support it
-        show_cache_option = provider in ['OpenVINOExecutionProvider', 'TensorrtExecutionProvider']
-        self.chk_cache.setVisible(show_cache_option)
-
-    def on_provider_changed(self, provider):
-        if not hasattr(self, 'status_label'): return # Still initializing
-        
-        self.selected_provider = provider
-        self.status_label.setText(f"Provider set to {provider}. Models will be reloaded.")
-
-        self._clear_onnx_sessions() # Unload all models
-        self.update_acceleration_options(provider)
-
     def dropEvent(self, event):
         urls = event.mimeData().urls()
         if urls:
@@ -1047,7 +1301,7 @@ class BackgroundRemoverGUI(QMainWindow):
                 self.load_image(self.image_paths[0])
         super().dropEvent(event)
 
-    def update_window_title(self): # <--- NEW METHOD
+    def update_window_title(self):
         base_title = "Interactive Image Background Remover"
         
         if not self.image_paths:
@@ -1088,14 +1342,15 @@ class BackgroundRemoverGUI(QMainWindow):
     def populate_sam_models(self):
         sam_models = ["mobile_sam", "sam_vit_b", "sam_vit_h", "sam_vit_l"]
         matches = []
-        if os.path.exists(MODEL_ROOT):
-            for filename in os.listdir(MODEL_ROOT):
+        if os.path.exists(MODEL_ROOT_DIR):
+            for filename in os.listdir(MODEL_ROOT_DIR):
                 for partial in sam_models:
                     if partial in filename and ".onnx" in filename:
                         matches.append(filename.replace(".encoder.onnx","").replace(".decoder.onnx",""))
         self.combo_sam.clear()
         if matches:
             self.combo_sam.addItems(sorted(list(set(matches))))
+            # Mobile SAM has near instant results even on CPU, so we set as the default if available
             idx = self.combo_sam.findText("mobile_sam", Qt.MatchFlag.MatchContains)
             if idx >= 0: self.combo_sam.setCurrentIndex(idx)
         else: self.combo_sam.addItem("No Models Found")
@@ -1103,8 +1358,8 @@ class BackgroundRemoverGUI(QMainWindow):
     def populate_whole_models(self):
         whole_models = ["rmbg", "isnet", "u2net", "BiRefNet"]
         matches = []
-        if os.path.exists(MODEL_ROOT):
-            for filename in os.listdir(MODEL_ROOT):
+        if os.path.exists(MODEL_ROOT_DIR):
+            for filename in os.listdir(MODEL_ROOT_DIR):
                 for partial in whole_models:
                     if partial in filename and ".onnx" in filename:
                         matches.append(filename.replace(".onnx",""))
@@ -1281,58 +1536,57 @@ class BackgroundRemoverGUI(QMainWindow):
         if w <= 0 or h <= 0: return self.original_image, 0, 0
         return self.original_image.crop((x, y, x+w, y+h)), x, y
 
-    def _clear_onnx_sessions(self, keep_sam=False, keep_model_name=None):
-        
-        if not keep_sam:
-            if hasattr(self, "sam_encoder"): delattr(self, "sam_encoder")
-            if hasattr(self, "sam_decoder"): delattr(self, "sam_decoder")
-            self.sam_model_path = None
-
-        # Clear automatic models
-        sessions_to_clear = [attr for attr in dir(self) if attr.endswith("_session")]
-        for session_attr in sessions_to_clear:
-            # Don't clear the model we are about to load/use
-            if keep_model_name and keep_model_name in session_attr:
-                continue
-            delattr(self, session_attr)
-
     def _init_sam(self):
         model_name = self.combo_sam.currentText()
-        if "Select" in model_name or "No Models" in model_name: return False
+        if "Select" in model_name or "No Models" in model_name:
+            return False
+
+        model_path = os.path.join(MODEL_ROOT_DIR, model_name)
         
-        model_path = os.path.join(MODEL_ROOT, model_name)
+        # Check if we are already loaded
+        if self.sam_model_path == model_path:
+            return True
 
-        if self.chk_unload.isChecked():
-            self._clear_onnx_sessions(keep_sam=True) # Keep SAM, clear others
+        # Retrieve provider data from the SAM combobox
+        # Data format: (ProviderStr, OptionsDict, ShortCode)
+        data = self.combo_sam_exec.currentData()
+        if not data:
+            # Fallback if something is wrong
+            prov_str, prov_opts, prov_code = ("CPUExecutionProvider", {}, "cpu")
+        else:
+            prov_str, prov_opts, prov_code = data
 
-        if self.sam_model_path != model_path:
-            try:
-                self.status_label.setText(f"Loading {model_name}...")
-                QApplication.processEvents()
+        self.set_loading(True, f"Loading SAM ({model_name}) on {prov_code}...")
 
-                provider_options = []
-                if self.chk_cache.isChecked():
-                    if self.selected_provider == 'OpenVINOExecutionProvider':
-                        cache_path = os.path.join(MODEL_ROOT, "cache")
-                        os.makedirs(cache_path, exist_ok=True)
-                        provider_options = [{'device_type': 'GPU', 'cache_dir': cache_path}]
-                    elif self.selected_provider == 'TensorrtExecutionProvider':
-                        cache_path = os.path.join(MODEL_ROOT, "cache")
-                        os.makedirs(cache_path, exist_ok=True)
-                        provider_options = [{'trt_engine_cache_enable': True, 'trt_engine_cache_path': cache_path}]
+        try:
+            # Pass 'model_name' so they share the same cache folder
+            self.sam_encoder = self._create_inference_session(
+                model_path + ".encoder.onnx", 
+                prov_str, 
+                prov_opts, 
+                model_name # Cache ID
+            )
+            self.sam_decoder = self._create_inference_session(
+                model_path + ".decoder.onnx", 
+                prov_str, 
+                prov_opts, 
+                model_name # Cache ID
+            )
 
-                self.sam_encoder = ort.InferenceSession(model_path + ".encoder.onnx", 
-                                                      providers=[self.selected_provider],
-                                                      provider_options=provider_options)
-                self.sam_decoder = ort.InferenceSession(model_path + ".decoder.onnx", 
-                                                      providers=[self.selected_provider],
-                                                      provider_options=provider_options)
-                self.sam_model_path = model_path
-                if hasattr(self, "encoder_output"): delattr(self, "encoder_output")
-            except Exception as e:
-                QMessageBox.critical(self, "Error", f"Could not load model: {e}")
-                return False
-        return True
+            self.sam_model_path = model_path
+            
+            if hasattr(self, "encoder_output"):
+                delattr(self, "encoder_output")
+
+            self.set_loading(False, f"SAM Ready: {model_name} ({prov_code})")
+
+            self.update_cached_model_icons()
+            return True
+
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Could not load SAM model:\n{e}")
+            self.sam_model_path = None
+            return False
 
     def handle_sam_point(self, scene_pos, is_positive):
         self.coordinates.append([scene_pos.x(), scene_pos.y()])
@@ -1359,6 +1613,66 @@ class BackgroundRemoverGUI(QMainWindow):
         self.coordinates = [[rect.left(), rect.top()], [rect.right(), rect.bottom()]]
         self.labels = [2, 3]
         self.run_sam_inference()
+
+    def _create_inference_session(self, model_path, provider_str, provider_options, model_id_name):
+        """
+        Generic builder for ONNX sessions. 
+        Handles cache directory creation automatically based on provider + model name.
+        """
+
+        # These session options stop VRAM/RAM usage ballooning with subsequent model runs
+        # by disabling automatic memory allocation
+        # Doesn't seem to affect performance
+        sess_options = ort.SessionOptions()
+        sess_options.enable_cpu_mem_arena = False
+        sess_options.enable_mem_pattern = False
+        
+        final_providers = []
+        cache_dir = None
+        
+        if provider_str == "TensorrtExecutionProvider":
+            sub_dir_name = f"{provider_str}_{model_id_name}"
+            if 'device_type' in provider_options:
+                sub_dir_name = f"{provider_str}-{provider_options['device_type']}_{model_id_name}"
+            sub_dir_name = "".join([c for c in sub_dir_name if c.isalnum() or c in "-_"])
+            cache_dir = os.path.join(CACHE_ROOT_DIR, sub_dir_name)
+            os.makedirs(cache_dir, exist_ok=True)
+
+            trt_opts = {
+                "trt_engine_cache_enable": True,
+                "trt_engine_cache_path": cache_dir,
+            }
+            trt_opts.update(provider_options) # Merge any other opts
+            final_providers.append((provider_str, trt_opts))
+
+        elif provider_str == "OpenVINOExecutionProvider":
+
+            sub_dir_name = f"{provider_str}_{model_id_name}"
+            if 'device_type' in provider_options:
+                sub_dir_name = f"{provider_str}-{provider_options['device_type']}_{model_id_name}"
+            sub_dir_name = "".join([c for c in sub_dir_name if c.isalnum() or c in "-_"])
+            cache_dir = os.path.join(CACHE_ROOT_DIR, sub_dir_name)
+            os.makedirs(cache_dir, exist_ok=True)
+
+            # Inject Cache Config
+            ov_opts = {
+                "cache_dir": cache_dir,
+                "num_streams": 1, # Often helps stability
+            }
+            ov_opts.update(provider_options) # Adds 'device_type': 'GPU' etc.
+            final_providers.append((provider_str, ov_opts))
+
+        else:
+
+            final_providers.append((provider_str, provider_options))
+
+        # Always add CPU as fallback
+        if provider_str != "CPUExecutionProvider":
+            final_providers.append("CPUExecutionProvider")
+
+        return ort.InferenceSession(model_path, sess_options=sess_options, providers=final_providers)
+
+
 
     def run_sam_inference(self):
         if not self._init_sam(): return
@@ -1456,98 +1770,130 @@ class BackgroundRemoverGUI(QMainWindow):
 
     def run_automatic_model(self, model_name=None, target_size=1024):
         # TODO read model inputs instead of hardcoding based on filename
-
-        if not model_name: model_name = self.combo_whole.currentText()
-        if "Select" in model_name: return
+        # Models provided by REMBG that I've tested have fixed inputs.
         
+        # Check if run from a hotkey (u,i,o,b) or get name from model list
+        if not model_name: 
+            model_name = self.combo_whole.currentText()
+        if "Select" in model_name or "No Models" in model_name:
+            msg_box = QMessageBox()
+            msg_box.setWindowTitle("No Models Found")
+            msg_box.setText("No models found. Please download models from the project URL in the help box.")
+            msg_box.setIcon(QMessageBox.Icon.Information)
+            msg_box.addButton(QPushButton("OK"), QMessageBox.ButtonRole.AcceptRole)
+            msg_box.exec()
+            return
+
+
         found_name = None
-        for f in os.listdir(MODEL_ROOT):
-            if model_name in f and f.endswith(".onnx"): found_name = f.replace(".onnx",""); break
-        if not found_name: 
-            self.status_label.setText(f"Model {model_name} not found"); return
-        
+        for f in os.listdir(MODEL_ROOT_DIR):
+            if model_name in f and f.endswith(".onnx"):
+                found_name = f.replace(".onnx", "")
+                break
+        if not found_name:
+            self.status_label.setText(f"Model {model_name} not found")
+            return
+
         model_name = found_name
+        model_path = os.path.join(MODEL_ROOT_DIR, model_name + ".onnx")
         crop, x_off, y_off = self.get_viewport_crop()
+        if crop.width == 0 or crop.height == 0:
+            return
 
-        if self.chk_unload.isChecked():
-            self._clear_onnx_sessions(keep_model_name=model_name)
+        # Requires substantial RAM to run
+        if "BiRefNet_HR" in model_name:
+            target_size=2048
 
-        if "BiRefNet_HR" in model_name: target_size=2048
+        prov_str, prov_opts, prov_code = self.combo_exec.currentData()
+
+        session = None
+        load_time = 0.0
+
+        if self.chk_ram_cache.isChecked() and hasattr(self, 'loaded_whole_model') and self.loaded_whole_model:
+            cached_name, cached_code, cached_sess = self.loaded_whole_model
+            if cached_name == model_name and cached_code == prov_code:
+                session = cached_sess
+            else:
+                del self.loaded_whole_model
+                self.loaded_whole_model = None
+                gc.collect()
+
+        if session is None:
+            self.set_loading(True, f"Loading and running {model_name} on {prov_code.upper()}...")
+            t_start = timer()
+            try:
+                session = self._create_inference_session(model_path, prov_str, prov_opts, model_name)
+                load_time = (timer() - t_start) * 1000
+                self.update_cached_model_icons()
+                if self.chk_ram_cache.isChecked():
+                    self.loaded_whole_model = (model_name, prov_code, session)
+            except Exception as e:
+                self.set_loading(False, "Model load failed")
+                QMessageBox.critical(self, "Model Load Error", f"Failed to create ONNX session for {model_name} on {prov_code.upper()}:\n\n{e}")
+                return
         
-        self.set_loading(True, f"Loading {model_name}...")
+        # Only set loading once if the session was already cached
+        # otherwise loading cursor persists after inference 
+        if load_time == 0.0:
+            self.set_loading(True, f"Running {model_name}...")
         
         final_status = "Idle"
-        load_time = 0.0
         inference_time = 0.0
 
         try:
-
-            if not hasattr(self, f"{model_name}_session"):
-                t_start_load = timer()
-                sess_options = ort.SessionOptions()
-                # This frees the ram after inference with very little impact on performance.
-                # Makes keeping multiple models loaded in memory for rapid use possible without OOM issues
-                # (unless using huge models like BiRefNet_HD, which is a different problem)
-                sess_options.enable_cpu_mem_arena = False 
-
-                provider_options = []
-                if self.chk_cache.isChecked():
-                    if self.selected_provider == 'OpenVINOExecutionProvider':
-                        cache_path = os.path.join(MODEL_ROOT, "cache")
-                        os.makedirs(cache_path, exist_ok=True)
-                        provider_options = [{'device_type': 'GPU', 'cache_dir': cache_path}]
-                    elif self.selected_provider == 'TensorrtExecutionProvider':
-                        cache_path = os.path.join(MODEL_ROOT, "cache")
-                        os.makedirs(cache_path, exist_ok=True)
-                        provider_options = [{'trt_engine_cache_enable': True, 'trt_engine_cache_path': cache_path}]
-
-                session = ort.InferenceSession(os.path.join(MODEL_ROOT, model_name + ".onnx"), sess_options=sess_options, providers=[self.selected_provider], provider_options=provider_options)
-                setattr(self, f"{model_name}_session", session)
-                load_time = (timer() - t_start_load) * 1000
-                
-            # Retrieve the session (fast)
-            session = getattr(self, f"{model_name}_session")
-
-            self.status_label.setText(f"Running {model_name}...")
             # --- Preprocessing ---
             img_r = crop.convert("RGB").resize((target_size, target_size), Image.BICUBIC)
-            
-            if "isnet" in model_name or "rmbg" in model_name: mean, std = (0.5, 0.5, 0.5), (1.0, 1.0, 1.0)
-            else: mean, std = (0.485, 0.456, 0.406), (0.229, 0.224, 0.225)
-            
+
+            if "isnet" in model_name or "rmbg" in model_name:
+                mean, std = (0.5, 0.5, 0.5), (1.0, 1.0, 1.0)
+            else:
+                mean, std = (0.485, 0.456, 0.406), (0.229, 0.224, 0.225)
+
             im = np.array(img_r) / 255.0
-            tmp = np.zeros((im.shape[0], im.shape[1], 3))
-            tmp[:,:,0] = (im[:,:,0] - mean[0])/std[0]
-            tmp[:,:,1] = (im[:,:,1] - mean[1])/std[1]
-            tmp[:,:,2] = (im[:,:,2] - mean[2])/std[2]
-            
+            tmp = np.zeros((im.shape[0], im.shape[1], 3), dtype=np.float32)
+            tmp[:, :, 0] = (im[:, :, 0] - mean[0]) / std[0]
+            tmp[:, :, 1] = (im[:, :, 1] - mean[1]) / std[1]
+            tmp[:, :, 2] = (im[:, :, 2] - mean[2]) / std[2]
+
             inp = np.expand_dims(tmp.transpose((2, 0, 1)), 0).astype(np.float32)
-            
-            t_start_inf = timer() 
+
+            # --- Inference ---
+            t_start_inf = timer()
             result = session.run(None, {session.get_inputs()[0].name: inp})[0]
             inference_time = (timer() - t_start_inf) * 1000
 
             # --- Postprocessing ---
-            if "BiRefNet" in model_name:
-                pred = 1 / (1 + np.exp(-result[0][0]))
-                mask = (pred - pred.min()) / (pred.max() - pred.min())
-            else:
-                mask = result[0][0]
-                mask = (mask - mask.min()) / (mask.max() - mask.min())
+            mask = result[0][0]
             
-            res_mask = Image.fromarray((mask * 255).astype("uint8"), "L").resize(crop.size, Image.Resampling.LANCZOS)
+            if "BiRefNet" in model_name:
+                mask = 1 / (1 + np.exp(-mask))
+
+            denom = (mask.max() - mask.min()) or 1.0
+            mask = (mask - mask.min()) / denom
+
+            res_mask = Image.fromarray((mask * 255).astype("uint8"), "L").resize(
+                crop.size, Image.Resampling.LANCZOS
+            )
             self.model_output_mask = Image.new("L", self.original_image.size, 0)
             self.model_output_mask.paste(res_mask, (x_off, y_off))
             self.show_mask_overlay()
-            
+
             load_str = f"{load_time:.0f}ms" if load_time > 0 else "Cached"
-            final_status = f"{model_name}: Load {load_str} | Inf {inference_time:.0f}ms"
-            
+            final_status = f"{model_name} ({prov_code.upper()}): Load {load_str} | Inf {inference_time:.0f}ms"
+
+            if not self.chk_ram_cache.isChecked():
+                del session
+                gc.collect()
         except Exception as e: 
             QMessageBox.critical(self, "Error", str(e))
             final_status = "Inference Error"
         finally:
             self.set_loading(False, final_status)
+            if not self.chk_ram_cache.isChecked():
+                if hasattr(self, 'loaded_whole_model'):
+                    del self.loaded_whole_model
+                    self.loaded_whole_model = None
+                    gc.collect()
 
     def show_mask_overlay(self):
         if self.model_output_mask:
@@ -1738,7 +2084,6 @@ class BackgroundRemoverGUI(QMainWindow):
         self.view_output.update_brush_cursor(scene_pos)
 
     def handle_paint_start(self, pos):
-        from PyQt6.QtGui import QPainterPath # Local import
 
         # If a path is already being drawn, do nothing.
         if hasattr(self, 'current_path'): return
@@ -1856,7 +2201,6 @@ class BackgroundRemoverGUI(QMainWindow):
         orig_path = self.image_paths[0] if self.image_paths[0] != "Clipboard" else "clipboard.png"
         path = os.path.splitext(orig_path)[0] + "_nobg.jpg"
 
-        # NEW: sanitize default filename on Windows
         path = self._sanitise_filename_for_windows(path)
 
         fname, _ = QFileDialog.getSaveFileName(self, "Quick Save", path, "JPG (*.jpg)")
@@ -1970,6 +2314,8 @@ class BackgroundRemoverGUI(QMainWindow):
         t = QTextEdit()
         t.setReadOnly(True)
         t.setText("""Interactive Background Remover by Sean (Prickly Gorse)
+
+https://github.com/pricklygorse/Interactive-Image-Background-Remover
 
 Load an image, then use either a Automatic background removal model (e.g. u2net, isnet, BiRefNet) or Interactive Segment Anything (Left Click/Drag Box).
 Working mask appears as blue overlay on Input.
