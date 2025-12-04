@@ -1098,6 +1098,9 @@ class BackgroundRemoverGUI(QMainWindow):
         sl.addWidget(self.chk_post)
         
         self.chk_soften = QCheckBox("Soften Mask/Paintbrush Edges")
+        soften_checked = self.settings.value("soften_mask", False, type=bool)
+        self.chk_soften.setChecked(soften_checked)
+        self.chk_soften.toggled.connect(lambda checked: self.settings.setValue("soften_mask", checked))
         sl.addWidget(self.chk_soften)
         
         self.chk_shadow = QCheckBox("Drop Shadow")
