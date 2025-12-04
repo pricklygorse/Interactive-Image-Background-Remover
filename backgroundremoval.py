@@ -983,7 +983,11 @@ class BackgroundRemoverGUI(QMainWindow):
             self.combo_sam_exec.addItem(label, (provider_str, opts, short_code))
 
         last_cache_mode = self.settings.value("ram_cache_mode", 1, type=int)
+        # if the user has already chosen cache all, don't show the warning
+        # when loading settings and changing the radio button
+        self.ram_cache_group.blockSignals(True)
         self.ram_cache_group.button(last_cache_mode).setChecked(True)
+        self.ram_cache_group.blockSignals(False)
 
         last_sam = self.settings.value("sam_exec_short_code", "cpu")
         idx = 0
@@ -1234,14 +1238,12 @@ class BackgroundRemoverGUI(QMainWindow):
         Returns a standard system icon to indicate a model is cached on disk.
         Returns a cached QIcon to avoid fetching it every time.
         """
-        # Check if we've already fetched the icon to avoid doing it repeatedly
         if hasattr(self, "_cached_drive_icon"):
             return self._cached_drive_icon
 
         # Fetch the standard "Hard Drive" icon from the current application style
         icon = self.style().standardIcon(QStyle.StandardPixmap.SP_DriveHDIcon)
         
-        # Cache it as an instance variable
         self._cached_drive_icon = icon
         return self._cached_drive_icon
 
@@ -1251,7 +1253,7 @@ class BackgroundRemoverGUI(QMainWindow):
         current_data = self.combo_exec.currentData() # (ProviderStr, Opts, ShortCode)
         if current_data:
             short_code = current_data[2]
-            drive_icon = self._get_cached_icon() # <-- Use the new function
+            drive_icon = self._get_cached_icon() 
             
             for i in range(self.combo_whole.count()):
                 m_name = self.combo_whole.itemText(i)
@@ -1264,7 +1266,7 @@ class BackgroundRemoverGUI(QMainWindow):
         current_sam_data = self.combo_sam_exec.currentData()
         if current_sam_data:
             sam_code = current_sam_data[2]
-            drive_icon = self._get_cached_icon() # <-- Use the new function
+            drive_icon = self._get_cached_icon()
             
             for i in range(self.combo_sam.count()):
                 m_name = self.combo_sam.itemText(i)
@@ -1285,17 +1287,13 @@ class BackgroundRemoverGUI(QMainWindow):
         self.settings.setValue("exec_short_code", short_code)
 
         # Old session is now invalid and needs removing
-        # Clear cache if provider changes, as models are provider-specific
         if self.loaded_whole_models:
             print("Execution provider changed, clearing model cache.")
-            # Properly delete session objects before clearing
             for key, session in self.loaded_whole_models.items():
                 del session
             self.loaded_whole_models.clear()
-            gc.collect() # Force garbage collection
+            gc.collect() 
 
-        # 4. Refresh the "Red Dot" icons
-        # Different providers have different cache folders on disk.
         self.update_cached_model_icons()
 
         self.status_label.setText(f"Whole-image provider switched to: {short_code.upper()}")
@@ -1304,6 +1302,17 @@ class BackgroundRemoverGUI(QMainWindow):
     def on_ram_cache_changed(self, button, checked):
         if checked:
             cache_mode = self.ram_cache_group.id(button)
+
+            if cache_mode == 2:
+                ret = QMessageBox.warning(self, "High VRAM Warning", 
+                    "Keeping multiple used models in memory with GPU acceleration can fill VRAM"
+                    "and cause the application to crash.\n\n"
+                    "Are you sure you want to enable this?",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+                if ret == QMessageBox.StandardButton.No:
+                    self.rb_cache_last.setChecked(True) # Revert
+                    return
+
             self.settings.setValue("ram_cache_mode", cache_mode)
 
     def on_sam_exec_changed(self, index):
@@ -1321,7 +1330,6 @@ class BackgroundRemoverGUI(QMainWindow):
         if hasattr(self, 'sam_encoder'): del self.sam_encoder
         if hasattr(self, 'sam_decoder'): del self.sam_decoder
         
-        # Reset tracking variables
         self.sam_model_path = None 
         if hasattr(self, "encoder_output"): delattr(self, "encoder_output")
         gc.collect()
@@ -1332,7 +1340,6 @@ class BackgroundRemoverGUI(QMainWindow):
 
     def dragEnterEvent(self, event):
         if event.mimeData().hasUrls():
-            # Check if any of the files are images
             supported_exts = ['.png', '.jpg', '.jpeg', '.webp', '.bmp', '.tif', '.tiff']
             for url in event.mimeData().urls():
                 if url.isLocalFile():
