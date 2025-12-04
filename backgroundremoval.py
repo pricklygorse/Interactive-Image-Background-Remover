@@ -35,7 +35,7 @@ CACHE_ROOT_DIR = os.path.join(SCRIPT_BASE_DIR, "Models", "cache")
 PAINT_BRUSH_SCREEN_SIZE = 30 
 UNDO_STEPS = 20
 SOFTEN_RADIUS = 2 
-MIN_RECT_SIZE = 5
+MIN_RECT_SIZE = 10
 
 
 
@@ -450,8 +450,11 @@ class SynchronizedGraphicsView(QGraphicsView):
                 if event.button() == Qt.MouseButton.LeftButton:
                     self.box_start = scene_pos
                     self.temp_box_item = QGraphicsRectItem()
-                    self.temp_box_item.setPen(QPen(Qt.GlobalColor.red, 2))
+                    zoom = self.transform().m11()
+                    pen_width = 2.0 / zoom if zoom != 0 else 2.0
+                    self.temp_box_item.setPen(QPen(Qt.GlobalColor.red, pen_width))
                     self.scene().addItem(self.temp_box_item)
+                    self.temp_box_item.hide()
                     event.accept()
                 elif event.button() == Qt.MouseButton.RightButton:
                     self.controller.handle_sam_point(scene_pos, is_positive=False)
@@ -461,7 +464,6 @@ class SynchronizedGraphicsView(QGraphicsView):
     def mouseMoveEvent(self, event):
         scene_pos = self.mapToScene(event.pos())
         
-        # --- FIX 2: Update Self AND Sibling cursors ---
         self.update_brush_cursor(scene_pos)
         if self.sibling:
             self.sibling.update_brush_cursor(scene_pos)
@@ -485,6 +487,17 @@ class SynchronizedGraphicsView(QGraphicsView):
         if self.box_start and self.temp_box_item:
             rect = QRectF(self.box_start, scene_pos).normalized()
             self.temp_box_item.setRect(rect)
+            zoom = self.transform().m11()
+            if zoom == 0: zoom = 1
+            min_size_in_scene = MIN_RECT_SIZE / zoom
+
+            if rect.width() >= min_size_in_scene or rect.height() >= min_size_in_scene:
+                self.temp_box_item.show()
+                for item in self.scene().items():
+                    if item.data(0) == "sam_point":
+                        self.scene().removeItem(item)
+            else:
+                self.temp_box_item.hide()
             event.accept()
             return
             
@@ -512,8 +525,13 @@ class SynchronizedGraphicsView(QGraphicsView):
                 self.temp_box_item = None
             self.box_start = None
             
+            # Convert MIN_RECT_SIZE from screen pixels to scene pixels
+            zoom = self.transform().m11()
+            if zoom == 0: zoom = 1
+            min_size_in_scene = MIN_RECT_SIZE / zoom
+
             # Logic to distinguish between a Click (Point) and a Drag (Box)
-            if rect.width() < MIN_RECT_SIZE and rect.height() < MIN_RECT_SIZE:
+            if rect.width() < min_size_in_scene and rect.height() < min_size_in_scene:
                 if self.controller: 
                     # If we are in paint mode, clicks are paint dots, not SAM points
                     if not self.controller.paint_mode:
@@ -1613,6 +1631,9 @@ class BackgroundRemoverGUI(QMainWindow):
         self.coordinates = [[rect.left(), rect.top()], [rect.right(), rect.bottom()]]
         self.labels = [2, 3]
         self.run_sam_inference()
+        self.coordinates = []
+        self.labels = []
+
 
     def _create_inference_session(self, model_path, provider_str, provider_options, model_id_name):
         """
