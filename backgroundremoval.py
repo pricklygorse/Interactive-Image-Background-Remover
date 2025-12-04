@@ -887,7 +887,7 @@ class BackgroundRemoverGUI(QMainWindow):
         self.original_image = None
         self.working_image = None
         self.working_mask = None
-        self.loaded_whole_model = None
+        self.loaded_whole_models = {}
         self.model_output_mask = None
 
         self.init_ui()
@@ -952,23 +952,38 @@ class BackgroundRemoverGUI(QMainWindow):
         # --- Hardware Acceleration Dropdown ---
         self.hw_options_frame = CollapsibleFrame("Hardware Acceleration Options", 
                                                  tooltip="Configure which hardware (CPU/GPU) is used for different model types.\n" 
+                                                         "First run on GPU can take take while models compile\n"
                                                          "Optimised compiled TensorRT and OpenVINO models are cached to the HDD.\n"
-                                                         "Caching models in RAM can speed up subsequent runs.")
+                                                         "Caching models in RAM can speed up subsequent runs."
+                                                         )
         hw_layout = self.hw_options_frame.layout_for_content()
         sl.addWidget(self.hw_options_frame)
+        
+        self.ram_cache_group = QButtonGroup(self)
+        self.rb_cache_none = QRadioButton("No RAM/VRAM Caching")
+        self.rb_cache_last = QRadioButton("Keep Last Used Model In Memory")
+        self.rb_cache_all = QRadioButton("Keep All Used Models In Memory")
+        
+        self.ram_cache_group.addButton(self.rb_cache_none, 0)
+        self.ram_cache_group.addButton(self.rb_cache_last, 1)
+        self.ram_cache_group.addButton(self.rb_cache_all, 2)
+        
+        self.rb_cache_last.setToolTip("If checked, the model stays loaded after running. Recommended")
+        self.rb_cache_all.setToolTip("Keeps every used model loaded in memory for the session.\nCan cause issues on low VRAM GPU.")
 
-        self.chk_ram_cache = QCheckBox("Keep Last Model in RAM/VRAM")
-        self.chk_ram_cache.setToolTip("If checked, the model stays loaded after running.\n"
-                                    "Speeds up subsequent runs but uses more memory.")
-        self.chk_ram_cache.setChecked(self.settings.value("ram_cache_enabled", False, type=bool))
-        self.chk_ram_cache.toggled.connect(lambda v: self.settings.setValue("ram_cache_enabled", v))
-        hw_layout.addWidget(self.chk_ram_cache)
+        hw_layout.addWidget(self.rb_cache_none)
+        hw_layout.addWidget(self.rb_cache_last)
+        hw_layout.addWidget(self.rb_cache_all)
+        self.ram_cache_group.buttonToggled.connect(self.on_ram_cache_changed)
 
         # SAM
         hw_layout.addWidget(QLabel("<b>Interactive SAM Model Provider:</b>"))
         self.combo_sam_exec = QComboBox()
         for label, provider_str, opts, short_code in self.available_eps:
             self.combo_sam_exec.addItem(label, (provider_str, opts, short_code))
+
+        last_cache_mode = self.settings.value("ram_cache_mode", 1, type=int)
+        self.ram_cache_group.button(last_cache_mode).setChecked(True)
 
         last_sam = self.settings.value("sam_exec_short_code", "cpu")
         idx = 0
@@ -1270,10 +1285,14 @@ class BackgroundRemoverGUI(QMainWindow):
         self.settings.setValue("exec_short_code", short_code)
 
         # Old session is now invalid and needs removing
-        if hasattr(self, 'loaded_whole_model') and self.loaded_whole_model:
-            del self.loaded_whole_model
-            self.loaded_whole_model = None
-            gc.collect()
+        # Clear cache if provider changes, as models are provider-specific
+        if self.loaded_whole_models:
+            print("Execution provider changed, clearing model cache.")
+            # Properly delete session objects before clearing
+            for key, session in self.loaded_whole_models.items():
+                del session
+            self.loaded_whole_models.clear()
+            gc.collect() # Force garbage collection
 
         # 4. Refresh the "Red Dot" icons
         # Different providers have different cache folders on disk.
@@ -1281,6 +1300,11 @@ class BackgroundRemoverGUI(QMainWindow):
 
         self.status_label.setText(f"Whole-image provider switched to: {short_code.upper()}")
 
+
+    def on_ram_cache_changed(self, button, checked):
+        if checked:
+            cache_mode = self.ram_cache_group.id(button)
+            self.settings.setValue("ram_cache_mode", cache_mode)
 
     def on_sam_exec_changed(self, index):
         """
@@ -1839,16 +1863,12 @@ class BackgroundRemoverGUI(QMainWindow):
         prov_str, prov_opts, prov_code = self.combo_exec.currentData()
 
         session = None
+        cache_key = f"{model_name}_{prov_code}"
         load_time = 0.0
+        cache_mode = self.ram_cache_group.checkedId()
 
-        if self.chk_ram_cache.isChecked() and hasattr(self, 'loaded_whole_model') and self.loaded_whole_model:
-            cached_name, cached_code, cached_sess = self.loaded_whole_model
-            if cached_name == model_name and cached_code == prov_code:
-                session = cached_sess
-            else:
-                del self.loaded_whole_model
-                self.loaded_whole_model = None
-                gc.collect()
+        if cache_mode > 0 and cache_key in self.loaded_whole_models:
+            session = self.loaded_whole_models[cache_key]
 
         if session is None:
             self.set_loading(True, f"Loading and running {model_name} on {prov_code.upper()}...")
@@ -1857,8 +1877,18 @@ class BackgroundRemoverGUI(QMainWindow):
                 session = self._create_inference_session(model_path, prov_str, prov_opts, model_name)
                 load_time = (timer() - t_start) * 1000
                 self.update_cached_model_icons()
-                if self.chk_ram_cache.isChecked():
-                    self.loaded_whole_model = (model_name, prov_code, session)
+
+                if cache_mode == 1: # Cache Last
+                    # Clear previous models before adding the new one
+                    if self.loaded_whole_models:
+                        for key, sess in self.loaded_whole_models.items():
+                            del sess
+                        self.loaded_whole_models.clear()
+                        gc.collect()
+                    self.loaded_whole_models[cache_key] = session
+                elif cache_mode == 2: # Cache All
+                    self.loaded_whole_models[cache_key] = session
+
             except Exception as e:
                 self.set_loading(False, "Model load failed")
                 QMessageBox.critical(self, "Model Load Error", f"Failed to create ONNX session for {model_name} on {prov_code.upper()}:\n\n{e}")
@@ -1913,7 +1943,7 @@ class BackgroundRemoverGUI(QMainWindow):
             load_str = f"{load_time:.0f}ms" if load_time > 0 else "Cached"
             final_status = f"{model_name} ({prov_code.upper()}): Load {load_str} | Inf {inference_time:.0f}ms"
 
-            if not self.chk_ram_cache.isChecked():
+            if cache_mode == 0: # No Caching
                 del session
                 gc.collect()
         except Exception as e: 
@@ -1921,11 +1951,6 @@ class BackgroundRemoverGUI(QMainWindow):
             final_status = "Inference Error"
         finally:
             self.set_loading(False, final_status)
-            if not self.chk_ram_cache.isChecked():
-                if hasattr(self, 'loaded_whole_model'):
-                    del self.loaded_whole_model
-                    self.loaded_whole_model = None
-                    gc.collect()
 
     def show_mask_overlay(self):
         if self.model_output_mask:
