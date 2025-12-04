@@ -41,6 +41,58 @@ MIN_RECT_SIZE = 10
 
 # --- Helper Functions ---
 
+def get_available_ep_options():
+        """
+        Returns list of (Display Name, ProviderStr, OptionsDict, ShortCode)
+        """
+        try:
+            available = ort.get_available_providers()
+            print(available)
+        except:
+            print("No onnxruntime providers")
+            return []
+        options = []
+
+        if "TensorrtExecutionProvider" in available:
+            # We will generate specific cache paths at runtime, 
+            # so we pass an empty dict here, or default options.
+            options.append(("TensorRT (GPU)", "TensorrtExecutionProvider", {}, "trt"))
+
+        if "CUDAExecutionProvider" in available:
+            options.append(("CUDA (GPU)", "CUDAExecutionProvider", {}, "cuda"))
+
+        # Windows generic provider
+        if "DmlExecutionProvider" in available:
+            options.append(("DirectML (GPU)", "DmlExecutionProvider", {}, "dml"))
+
+        if "OpenVINOExecutionProvider" in available:
+            try:
+                ov_devices = ort.capi._pybind_state.get_available_openvino_device_ids()
+            except Exception:
+                ov_devices = []
+            
+            # Fallback if query fails but provider exists
+            if not ov_devices: 
+                ov_devices = ['CPU']
+
+            for dev in ov_devices:
+                label = f"OpenVINO-{dev}"
+                opts = {'device_type': dev} 
+                options.append((label, "OpenVINOExecutionProvider", opts, f"ov-{dev.lower()}"))
+
+        # MAC
+        if "CoreMLExecutionProvider" in available:
+            options.append(("CoreML", "CoreMLExecutionProvider", {}, "coreml"))
+
+        # CPU always available
+        options.append(("CPU", "CPUExecutionProvider", {}, "cpu"))
+
+        return options
+
+
+AVAILABLE_EPS = get_available_ep_options()
+
+
 def pil2pixmap(im):
     if im is None: return QPixmap()
     
@@ -895,7 +947,7 @@ class BackgroundRemoverGUI(QMainWindow):
         sl.addLayout(h_edit_load_buttons)
 
 
-        self.available_eps = self.get_available_ep_options()
+        self.available_eps = AVAILABLE_EPS
 
         # --- Hardware Acceleration Dropdown ---
         self.hw_options_frame = CollapsibleFrame("Hardware Acceleration Options", 
@@ -1131,48 +1183,7 @@ class BackgroundRemoverGUI(QMainWindow):
         self.statusBar().addPermanentWidget(self.zoom_label)
 
 
-    def get_available_ep_options(self):
-        """
-        Returns list of (Display Name, ProviderStr, OptionsDict, ShortCode)
-        """
-        available = ort.get_available_providers()
-        options = []
-
-        if "TensorrtExecutionProvider" in available:
-            # We will generate specific cache paths at runtime, 
-            # so we pass an empty dict here, or default options.
-            options.append(("TensorRT (GPU)", "TensorrtExecutionProvider", {}, "trt"))
-
-        if "CUDAExecutionProvider" in available:
-            options.append(("CUDA (GPU)", "CUDAExecutionProvider", {}, "cuda"))
-
-        # Windows generic provider
-        if "DmlExecutionProvider" in available:
-            options.append(("DirectML (GPU)", "DmlExecutionProvider", {}, "dml"))
-
-        if "OpenVINOExecutionProvider" in available:
-            try:
-                ov_devices = ort.capi._pybind_state.get_available_openvino_device_ids()
-            except Exception:
-                ov_devices = []
-            
-            # Fallback if query fails but provider exists
-            if not ov_devices: 
-                ov_devices = ['CPU']
-
-            for dev in ov_devices:
-                label = f"OpenVINO-{dev}"
-                opts = {'device_type': dev} 
-                options.append((label, "OpenVINOExecutionProvider", opts, f"ov-{dev.lower()}"))
-
-        # MAC
-        if "CoreMLExecutionProvider" in available:
-            options.append(("CoreML", "CoreMLExecutionProvider", {}, "coreml"))
-
-        # CPU always available
-        options.append(("CPU", "CPUExecutionProvider", {}, "cpu"))
-
-        return options
+    
     
     def check_is_cached(self, model_name, provider_short_code):
         """
