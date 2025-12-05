@@ -1243,27 +1243,30 @@ class BackgroundRemoverGUI(QMainWindow):
         Checks if a model has cache files on disk. 
         We rely on the directory naming convention from _create_inference_session.
         """
+        if not os.path.isdir(CACHE_ROOT_DIR):
+            return False
+
+        if provider_short_code == 'cpu': return False
+
         # We need to reconstruct the folder name logic roughly. 
         # Since short_code maps to specific provider/device combos, we can filter Models/cache
-        
+                
         # Simple heuristic: Look for folder containing model_name and provider code
         # This allows "trt" to match "TensorrtExecutionProvider_u2net"
         
-        if provider_short_code == 'cpu': return False
+        sanitised_model_name = "".join([c for c in model_name if c.isalnum() or c in "-_"])
         
         for folder in os.listdir(CACHE_ROOT_DIR):
             full_path = os.path.join(CACHE_ROOT_DIR, folder)
             if not os.path.isdir(full_path): continue
             
-            # If folder has files and matches criteria
-            if model_name in folder and len(os.listdir(full_path)) > 0:
+            if sanitised_model_name in folder and len(os.listdir(full_path)) > 0:
                 # Distinguish between providers
                 if provider_short_code == 'trt' and 'Tensorrt' in folder: return True
                 if provider_short_code.startswith('ov') and 'OpenVINO' in folder:
                     # Check specific device match (e.g. ov-gpu)
-                    device = provider_short_code.split('-')[1].upper() # gpu -> GPU
+                    device = provider_short_code.split('-')[1].upper()
                     if device in folder: return True
-                if provider_short_code == 'dml' and 'Dml' in folder: return True
                 
         return False
     
