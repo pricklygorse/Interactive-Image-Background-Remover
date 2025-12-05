@@ -1172,7 +1172,19 @@ class BackgroundRemoverGUI(QMainWindow):
         
         w_out = QWidget(); l_out = QVBoxLayout(w_out)
         w_out.setMinimumWidth(150)
-        l_out.addWidget(QLabel("Output Composite"))
+
+        # Output header with split orientation change button
+        h_out_header = QHBoxLayout()
+        h_out_header.addWidget(QLabel("Output Composite"))
+        h_out_header.addStretch()
+        self.toggle_split_button = QPushButton()
+        self.toggle_split_button.setFlat(True)
+        self.toggle_split_button.setFixedSize(24, 24)
+        self.toggle_split_button.setToolTip("Toggle between vertical and horizontal split view")
+        self.toggle_split_button.clicked.connect(self.toggle_splitter_orientation)
+        h_out_header.addWidget(self.toggle_split_button)
+        l_out.addLayout(h_out_header)
+
         self.scene_output = QGraphicsScene()
         self.view_output = SynchronizedGraphicsView(self.scene_output, name="Output View")
         self.view_output.set_controller(self) 
@@ -1181,16 +1193,16 @@ class BackgroundRemoverGUI(QMainWindow):
         
         self.output_pixmap_item = QGraphicsPixmapItem()
         self.scene_output.addItem(self.output_pixmap_item)
-        
+
         l_out.addWidget(self.view_output)
         self.splitter.addWidget(w_out)
-        
+
         self.view_input.set_sibling(self.view_output)
         self.view_output.set_sibling(self.view_input)
-        
+
         layout.addWidget(sidebar_container)
         layout.addWidget(self.splitter, 1) # Give splitter stretch factor and add it to the main layout
-        
+
         self.status_label = QLabel("Idle")
         self.status_label.setFixedWidth(600)
         self.zoom_label = QLabel("Zoom: 100%")
@@ -1199,11 +1211,24 @@ class BackgroundRemoverGUI(QMainWindow):
         self.progress_bar.setTextVisible(False)
         self.progress_bar.setFixedWidth(200)
         self.progress_bar.hide()
-        
+
         self.statusBar().addWidget(self.status_label)
         self.statusBar().addPermanentWidget(self.progress_bar) # Add to right side
         self.statusBar().addPermanentWidget(self.zoom_label)
+        
+        self.toggle_splitter_orientation(initial_setup=True)
 
+    def toggle_splitter_orientation(self, initial_setup=False):
+        current_orientation = self.splitter.orientation()
+        
+        if initial_setup:
+            target_orientation = current_orientation
+        else:
+            target_orientation = Qt.Orientation.Vertical if current_orientation == Qt.Orientation.Horizontal else Qt.Orientation.Horizontal
+            self.splitter.setOrientation(target_orientation)
+
+        icon_pixmap = QStyle.StandardPixmap.SP_ToolBarHorizontalExtensionButton if target_orientation == Qt.Orientation.Vertical else QStyle.StandardPixmap.SP_ToolBarVerticalExtensionButton
+        self.toggle_split_button.setIcon(self.style().standardIcon(icon_pixmap))
 
     
     
