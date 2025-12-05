@@ -1024,7 +1024,9 @@ class BackgroundRemoverGUI(QMainWindow):
 
         # Rest of UI
         
-        sl.addWidget(QLabel("<b>Models:</b>"))
+        lbl_models = QLabel("<b>Models:</b>")
+        lbl_models.setContentsMargins(3, 0, 0, 0)
+        sl.addWidget(lbl_models)
         lbl_sam = QLabel("Interactive (SAM):")
         lbl_sam.setToolTip("<b>Segment Anything Models</b><br>"
                            "These require you to interact with the image.<br>"
@@ -1053,7 +1055,9 @@ class BackgroundRemoverGUI(QMainWindow):
         btn_whole = QPushButton("Run Automatic"); btn_whole.clicked.connect(lambda: self.run_automatic_model(None))
         sl.addWidget(btn_whole)
 
-        sl.addWidget(QLabel("<b>Actions:</b>"))
+        lbl_actions = QLabel("<b>Actions:</b>")
+        lbl_actions.setContentsMargins(3, 0, 0, 0)
+        sl.addWidget(lbl_actions)
         h_act = QHBoxLayout()
         btn_add = QPushButton("Add Mask"); btn_add.clicked.connect(self.add_mask)
         btn_sub = QPushButton("Sub Mask"); btn_sub.clicked.connect(self.subtract_mask)
@@ -1078,7 +1082,9 @@ class BackgroundRemoverGUI(QMainWindow):
         h_vs.addWidget(btn_cp); h_vs.addWidget(btn_c_vis) 
         sl.addLayout(h_vs)
 
-        sl.addWidget(QLabel("<b>Options:</b>"))
+        lbl_options = QLabel("<b>Options:</b>")
+        lbl_options.setContentsMargins(3, 0, 0, 0)
+        sl.addWidget(lbl_options)
         self.combo_bg = QComboBox()
         
         colors = ["Transparent", "White", "Black", "Red", "Blue", 
