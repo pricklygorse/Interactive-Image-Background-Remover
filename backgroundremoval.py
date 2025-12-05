@@ -1329,6 +1329,23 @@ class BackgroundRemoverGUI(QMainWindow):
 
     def on_ram_cache_changed(self, button, checked):
         if checked:
+            
+            # Clear loaded models regardless of option chosen
+            # to allow easy unloading and consistent behaviour
+            if self.loaded_whole_models:
+                print("RAM Cache option changed, clearing model cache.")
+                for key, session in self.loaded_whole_models.items():
+                    del session
+                self.loaded_whole_models.clear()
+                gc.collect()
+
+            if hasattr(self, 'sam_encoder'): del self.sam_encoder
+            if hasattr(self, 'sam_decoder'): del self.sam_decoder
+            self.sam_model_path = None
+            if hasattr(self, "encoder_output"): delattr(self, "encoder_output")
+            gc.collect()
+            self.status_label.setText("Model cache cleared.")
+            
             cache_mode = self.ram_cache_group.id(button)
 
             if cache_mode == 2:
@@ -1338,7 +1355,7 @@ class BackgroundRemoverGUI(QMainWindow):
                     "Are you sure you want to enable this?",
                     QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
                 if ret == QMessageBox.StandardButton.No:
-                    self.rb_cache_last.setChecked(True) # Revert
+                    self.rb_cache_last.setChecked(True) # Revert to cache last model used
                     return
 
             self.settings.setValue("ram_cache_mode", cache_mode)
