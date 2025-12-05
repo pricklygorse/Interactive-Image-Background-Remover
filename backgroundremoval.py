@@ -1721,12 +1721,12 @@ class BackgroundRemoverGUI(QMainWindow):
         
         self.view_input.update_point_scales()
 
-        self.run_sam_inference()
+        self.run_sam_inference(self.coordinates, self.labels)
 
     def handle_sam_box(self, rect):
         self.coordinates = [[rect.left(), rect.top()], [rect.right(), rect.bottom()]]
         self.labels = [2, 3]
-        self.run_sam_inference()
+        self.run_sam_inference(self.coordinates, self.labels)
         self.coordinates = []
         self.labels = []
 
@@ -1791,23 +1791,40 @@ class BackgroundRemoverGUI(QMainWindow):
 
 
 
-    def run_sam_inference(self):
+    def run_sam_inference(self, coords, labels):
         if not self._init_sam(): return
         
         crop, x_off, y_off = self.get_viewport_crop()
         if crop.width == 0: return
 
-        # Filter points not in the viewport
         view_rect = QRectF(x_off, y_off, crop.width, crop.height)
         valid_coords = []
         valid_labels = []
-        
-        for (cx, cy), label in zip(self.coordinates, self.labels):
-            if view_rect.contains(cx, cy):
-                valid_coords.append([cx - x_off, cy - y_off])
-                valid_labels.append(label)
 
-        if not valid_coords:
+        is_box = (labels == [2, 3])
+
+        if is_box:
+            box_rect = QRectF(QPointF(coords[0][0], coords[0][1]), QPointF(coords[1][0], coords[1][1])).normalized()
+            
+            # Outside the viewport
+            if not view_rect.intersects(box_rect):
+                valid_coords = []
+            else:
+                # Clip to fit within viewport
+                clipped_rect = box_rect.intersected(view_rect)
+                valid_coords = [
+                    [clipped_rect.left() - x_off, clipped_rect.top() - y_off],
+                    [clipped_rect.right() - x_off, clipped_rect.bottom() - y_off]
+                ]
+                valid_labels = [2, 3]
+        else:
+            # Individual points within viewport
+            for (cx, cy), label in zip(coords, labels):
+                if view_rect.contains(cx, cy):
+                    valid_coords.append([cx - x_off, cy - y_off])
+                    valid_labels.append(label)
+
+        if not valid_coords or not valid_labels:
             self.model_output_mask = Image.new("L", self.original_image.size, 0)
             self.overlay_pixmap_item.setPixmap(QPixmap())
             self.status_label.setText("Idle (No points in view)")
