@@ -983,8 +983,7 @@ class BackgroundRemoverGUI(QMainWindow):
             self.combo_sam_exec.addItem(label, (provider_str, opts, short_code))
 
         last_cache_mode = self.settings.value("ram_cache_mode", 1, type=int)
-        # if the user has already chosen cache all, don't show the warning
-        # when loading settings and changing the radio button
+        # Stop the function firing when opening the program, before UI initialised
         self.ram_cache_group.blockSignals(True)
         self.ram_cache_group.button(last_cache_mode).setChecked(True)
         self.ram_cache_group.blockSignals(False)
@@ -1358,14 +1357,18 @@ class BackgroundRemoverGUI(QMainWindow):
             cache_mode = self.ram_cache_group.id(button)
 
             if cache_mode == 2:
-                ret = QMessageBox.warning(self, "High VRAM Warning", 
-                    "Keeping multiple used models in memory with GPU acceleration can fill VRAM"
-                    "and cause the application to crash.\n\n"
-                    "Are you sure you want to enable this?",
-                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
-                if ret == QMessageBox.StandardButton.No:
-                    self.rb_cache_last.setChecked(True) # Revert to cache last model used
-                    return
+                agreed = self.settings.value("agreed_high_vram_warning", False, type=bool)
+                if not agreed:
+                    ret = QMessageBox.warning(self, "High VRAM Warning",
+                        "Keeping multiple used models in memory with GPU acceleration can fill VRAM "
+                        "and cause the application to crash.\n\n"
+                        "Are you sure you want to enable this?",
+                        QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+                    if ret == QMessageBox.StandardButton.Yes:
+                        self.settings.setValue("agreed_high_vram_warning", True)
+                    else:
+                        self.rb_cache_last.setChecked(True) # Revert to cache last model used
+                        return
 
             self.settings.setValue("ram_cache_mode", cache_mode)
 
