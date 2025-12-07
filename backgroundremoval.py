@@ -1457,7 +1457,7 @@ class BackgroundRemoverGUI(QMainWindow):
         self.splitter.setSizes([w//2, w//2])
 
     def populate_sam_models(self):
-        sam_models = ["mobile_sam", "sam_vit_b", "sam_vit_h", "sam_vit_l"]
+        sam_models = ["mobile_sam", "sam_vit_b", "sam_vit_h", "sam_vit_l", "sam2"]
         matches = []
         if os.path.exists(MODEL_ROOT_DIR):
             for filename in os.listdir(MODEL_ROOT_DIR):
@@ -1792,13 +1792,17 @@ class BackgroundRemoverGUI(QMainWindow):
 
         return ort.InferenceSession(model_path, sess_options=sess_options, providers=final_providers)
 
-
-
-    def run_sam_inference(self, coords, labels):
-        if not self._init_sam(): return
-        
+    def _process_sam_points(self, coords, labels):
+        """
+        Helper to process input points/boxes for SAM inference.
+        - Gets current viewport crop.
+        - Filters points/boxes to be within the viewport.
+        - Translates coordinates to be relative to the crop.
+        - Returns crop, offsets, and valid coordinates, or None if no valid points.
+        """
         crop, x_off, y_off = self.get_viewport_crop()
-        if crop.width == 0: return
+        if crop.width == 0 or crop.height == 0:
+            return None
 
         view_rect = QRectF(x_off, y_off, crop.width, crop.height)
         valid_coords = []
@@ -1808,12 +1812,7 @@ class BackgroundRemoverGUI(QMainWindow):
 
         if is_box:
             box_rect = QRectF(QPointF(coords[0][0], coords[0][1]), QPointF(coords[1][0], coords[1][1])).normalized()
-            
-            # Outside the viewport
-            if not view_rect.intersects(box_rect):
-                valid_coords = []
-            else:
-                # Clip to fit within viewport
+            if view_rect.intersects(box_rect):
                 clipped_rect = box_rect.intersected(view_rect)
                 valid_coords = [
                     [clipped_rect.left() - x_off, clipped_rect.top() - y_off],
@@ -1821,7 +1820,6 @@ class BackgroundRemoverGUI(QMainWindow):
                 ]
                 valid_labels = [2, 3]
         else:
-            # Individual points within viewport
             for (cx, cy), label in zip(coords, labels):
                 if view_rect.contains(cx, cy):
                     valid_coords.append([cx - x_off, cy - y_off])
@@ -1831,12 +1829,124 @@ class BackgroundRemoverGUI(QMainWindow):
             self.model_output_mask = Image.new("L", self.original_image.size, 0)
             self.overlay_pixmap_item.setPixmap(QPixmap())
             self.status_label.setText("Idle (No points in view)")
+            return None
+
+        return crop, x_off, y_off, valid_coords, valid_labels
+
+
+    def run_samv2_inference(self, coords, labels):
+        """
+        Slightly different logic for SAM2
+        Depending on model download source (to save exporting myself), decoders vary. 
+        Vietdev models don't resize the masks to original image size
+        so we have to resize. Ibaigorodo's models include the resizer, so processing has to be ambigious.
+        """
+        if not self._init_sam(): return
+
+        processed = self._process_sam_points(coords, labels)
+        if not processed:
             return
+        crop, x_off, y_off, valid_coords, valid_labels = processed
+        
+        orig_h, orig_w = crop.height, crop.width
+        current_crop_rect = (x_off, y_off, crop.width, crop.height)
+
+        final_status = "Idle"
+
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        try:
+            encoder_time = 0.0
+            decoder_time = 0.0
+
+            # --- 1. Encoder ---
+            if not hasattr(self, "encoder_output") or getattr(self, "last_crop_rect", None) != current_crop_rect:
+                self.status_label.setText("Running SAM Encoder...")
+                QApplication.processEvents()
+                t_start = timer()
+
+                enc_inputs = self.sam_encoder.get_inputs()
+                enc_input_h, enc_input_w = enc_inputs[0].shape[2:]
+
+                image_rgb = np.array(crop.convert("RGB"))
+                input_img = cv2.resize(image_rgb, (enc_input_w, enc_input_h))
+                mean, std = np.array([0.485, 0.456, 0.406]), np.array([0.229, 0.224, 0.225])
+                input_img = (input_img / 255.0 - mean) / std
+                input_tensor = input_img.transpose(2, 0, 1)[np.newaxis, :, :, :].astype(np.float32)
+
+                encoder_inputs = {enc_inputs[0].name: input_tensor}
+                self.encoder_output = self.sam_encoder.run(None, encoder_inputs)
+
+                self.last_crop_rect = current_crop_rect
+                self.last_enc_shape = (enc_input_h, enc_input_w)
+                encoder_time = (timer() - t_start) * 1000
+
+            # --- 2. Decoder ---
+            t_start = timer()
+            high_res_feats_0, high_res_feats_1, image_embed = self.encoder_output
+            enc_input_h, enc_input_w = self.last_enc_shape
+
+            points = np.array(valid_coords, dtype=np.float32)[np.newaxis, ...]
+            labels_np = np.array(valid_labels, dtype=np.float32)[np.newaxis, ...]
+            points[..., 0] = points[..., 0] / orig_w * enc_input_w
+            points[..., 1] = points[..., 1] / orig_h * enc_input_h
+
+            scale_factor = 4
+            mask_input = np.zeros((1, 1, enc_input_h // scale_factor, enc_input_w // scale_factor), dtype=np.float32)
+            has_mask_input = np.array([0], dtype=np.float32)
+            original_size_np = np.array([orig_h, orig_w], dtype=np.int32)
+
+            all_possible_inputs = {
+                'image_embed': image_embed, 'high_res_feats_0': high_res_feats_0, 'high_res_feats_1': high_res_feats_1,
+                'point_coords': points, 'point_labels': labels_np, 'mask_input': mask_input,
+                'has_mask_input': has_mask_input, 'orig_im_size': original_size_np
+            }
+
+            decoder_input_names = [d.name for d in self.sam_decoder.get_inputs()]
+            decoder_inputs = {name: all_possible_inputs[name] for name in decoder_input_names if name in all_possible_inputs}
+
+            dec_outputs = self.sam_decoder.run(None, decoder_inputs)
+            masks, scores = dec_outputs[0], dec_outputs[1]
+            decoder_time = (timer() - t_start) * 1000
+
+            # --- 3. Post-processing ---
+            scores, masks = scores.squeeze(), masks.squeeze()
+            best_mask_idx = 0 if scores.ndim == 0 else np.argmax(scores)
+            best_mask = masks if masks.ndim == 2 else masks[best_mask_idx]
+
+            final_mask = cv2.resize(best_mask, (orig_w, orig_h), interpolation=cv2.INTER_LINEAR)
+            binary_mask = (final_mask > 0.0).astype(np.uint8) * 255
+
+            self.model_output_mask = Image.new("L", self.original_image.size, 0)
+            self.model_output_mask.paste(Image.fromarray(binary_mask, mode="L"), (x_off, y_off))
+            self.show_mask_overlay()
+
+            if encoder_time > 0:
+                final_status = f"SAM: Encoder {encoder_time:.0f}ms | Decoder {decoder_time:.0f}ms"
+            else:
+                final_status = f"SAM: Encoder (Cached) | Decoder {decoder_time:.0f}ms"
+
+        except Exception as e:
+            print(f"SAM Error: {e}")
+            final_status = "SAM Error"
+        finally:
+            QApplication.restoreOverrideCursor()
+            self.set_loading(False, final_status)
+
+    def run_sam_inference(self, coords, labels):
+        
+        if "sam2" in self.combo_sam.currentText():
+            self.run_samv2_inference(coords, labels)
+            return
+        
+        if not self._init_sam(): return
+        
+        processed = self._process_sam_points(coords, labels)
+        if not processed:
+            return
+        crop, x_off, y_off, valid_coords, valid_labels = processed
 
         current_crop_rect = (x_off, y_off, crop.width, crop.height)
-        
         final_status = "Idle"
-        
         QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
         try:
             target_size, input_size = 1024, (684, 1024)
