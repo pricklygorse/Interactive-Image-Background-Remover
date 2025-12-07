@@ -1159,13 +1159,25 @@ class BackgroundRemoverGUI(QMainWindow):
         self.splitter = QSplitter(Qt.Orientation.Horizontal)
         self.splitter.setChildrenCollapsible(False)
         
+        is_light_mode = QApplication.styleHints().colorScheme() != Qt.ColorScheme.Dark
+        hatch_color = QColor(220, 220, 220) if is_light_mode else QColor(60, 60, 60)
+
         w_in = QWidget(); l_in = QVBoxLayout(w_in)
         w_in.setMinimumWidth(150)
-        l_in.addWidget(QLabel("Interactive Input. Models are run on the current viewport. Zoom for greater detail"))
+
+        # Add invisible widget to match the splitter toggle widget to keep layout spacing correct
+        h_in_header = QHBoxLayout()
+        h_in_header.addWidget(QLabel("Interactive Input. Models are run on the current viewport. Zoom for greater detail"))
+        h_in_header.addStretch()
+        header_spacer = QWidget()
+        header_spacer.setFixedSize(24, 24)
+        h_in_header.addWidget(header_spacer)
+        
+        l_in.addLayout(h_in_header)
         self.scene_input = QGraphicsScene()
         self.view_input = SynchronizedGraphicsView(self.scene_input, name="Input View") 
         self.view_input.set_controller(self)
-        self.view_input.setBackgroundBrush(QBrush(QColor(220, 220, 220), Qt.BrushStyle.DiagCrossPattern))
+        self.view_input.setBackgroundBrush(QBrush(hatch_color, Qt.BrushStyle.DiagCrossPattern))
         self.view_input.setAcceptDrops(True)
 
 
@@ -1193,7 +1205,7 @@ class BackgroundRemoverGUI(QMainWindow):
         self.scene_output = QGraphicsScene()
         self.view_output = SynchronizedGraphicsView(self.scene_output, name="Output View")
         self.view_output.set_controller(self) 
-        self.view_output.setBackgroundBrush(QBrush(QColor(220, 220, 220), Qt.BrushStyle.DiagCrossPattern))
+        self.view_output.setBackgroundBrush(QBrush(hatch_color, Qt.BrushStyle.DiagCrossPattern))
         self.view_output.setAcceptDrops(True)
         
         self.output_pixmap_item = QGraphicsPixmapItem()
@@ -1232,8 +1244,22 @@ class BackgroundRemoverGUI(QMainWindow):
             target_orientation = Qt.Orientation.Vertical if current_orientation == Qt.Orientation.Horizontal else Qt.Orientation.Horizontal
             self.splitter.setOrientation(target_orientation)
 
-        icon_pixmap = QStyle.StandardPixmap.SP_ToolBarHorizontalExtensionButton if target_orientation == Qt.Orientation.Vertical else QStyle.StandardPixmap.SP_ToolBarVerticalExtensionButton
-        self.toggle_split_button.setIcon(self.style().standardIcon(icon_pixmap))
+        icon_pixmap_enum = QStyle.StandardPixmap.SP_ToolBarHorizontalExtensionButton if target_orientation == Qt.Orientation.Vertical else QStyle.StandardPixmap.SP_ToolBarVerticalExtensionButton
+        
+        is_dark_mode = QApplication.styleHints().colorScheme() == Qt.ColorScheme.Dark
+
+        if is_dark_mode:
+            icon = self.style().standardIcon(icon_pixmap_enum)
+            pixmap = icon.pixmap(24, 24) 
+
+            img = pixmap.toImage()
+
+            # InvertRgb so we don't invert the alpha channel
+            img.invertPixels(QImage.InvertMode.InvertRgb)
+            
+            self.toggle_split_button.setIcon(QIcon(QPixmap.fromImage(img)))
+        else:
+            self.toggle_split_button.setIcon(self.style().standardIcon(icon_pixmap_enum))
 
     
     
@@ -2599,6 +2625,8 @@ Shortcuts:
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
+    # force set app dark scheme on linux, seems to ignore system scheme
+    # app.styleHints().setColorScheme(Qt.ColorScheme.Dark)
     window = BackgroundRemoverGUI(sys.argv[1:])
     window.showMaximized()
     sys.exit(app.exec())
