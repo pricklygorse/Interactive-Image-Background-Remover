@@ -888,6 +888,7 @@ class BackgroundRemoverGUI(QMainWindow):
         self.working_image = None
         self.working_mask = None
         self.loaded_whole_models = {}
+        self.loaded_sam_models = {} 
         self.model_output_mask = None
 
         self.init_ui()
@@ -1367,17 +1368,20 @@ class BackgroundRemoverGUI(QMainWindow):
             # Clear loaded models regardless of option chosen
             # to allow easy unloading and consistent behaviour
             if self.loaded_whole_models:
-                print("RAM Cache option changed, clearing model cache.")
-                for key, session in self.loaded_whole_models.items():
-                    del session
+                print("RAM Cache option changed, clearing automatic model cache.")
                 self.loaded_whole_models.clear()
-                gc.collect()
+            
+            if self.loaded_sam_models:
+                print("RAM Cache option changed, clearing SAM model cache.")
+                self.loaded_sam_models.clear()
 
             if hasattr(self, 'sam_encoder'): del self.sam_encoder
             if hasattr(self, 'sam_decoder'): del self.sam_decoder
             self.sam_model_path = None
             if hasattr(self, "encoder_output"): delattr(self, "encoder_output")
+
             gc.collect()
+            
             self.status_label.setText("Model cache cleared.")
             
             cache_mode = self.ram_cache_group.id(button)
@@ -1415,6 +1419,10 @@ class BackgroundRemoverGUI(QMainWindow):
         
         self.sam_model_path = None 
         if hasattr(self, "encoder_output"): delattr(self, "encoder_output")
+
+        if self.loaded_sam_models:
+            self.loaded_sam_models.clear()
+
         gc.collect()
 
         self.update_cached_model_icons()
@@ -1686,8 +1694,8 @@ class BackgroundRemoverGUI(QMainWindow):
 
         model_path = os.path.join(MODEL_ROOT_DIR, model_name)
         
-        # Check if we are already loaded
-        if self.sam_model_path == model_path:
+        # Check if the currently active model is already the one we want
+        if self.sam_model_path == model_path and hasattr(self, 'sam_encoder'):
             return True
 
         # Retrieve provider data from the SAM combobox
@@ -1699,30 +1707,51 @@ class BackgroundRemoverGUI(QMainWindow):
         else:
             prov_str, prov_opts, prov_code = data
 
+        cache_key = f"{model_name}_{prov_code}"
+        cache_mode = self.ram_cache_group.checkedId()
+        
+        if cache_mode > 0 and cache_key in self.loaded_sam_models:
+            self.sam_encoder, self.sam_decoder = self.loaded_sam_models[cache_key]
+            self.sam_model_path = model_path
+            if hasattr(self, "encoder_output"): delattr(self, "encoder_output")
+            self.status_label.setText(f"SAM Ready (Cached RAM): {model_name}")
+            return True
+
+        # Not in cache, load
         self.set_loading(True, f"Loading SAM ({model_name}) on {prov_code}...")
 
         try:
-            # Pass 'model_name' so they share the same cache folder
-            self.sam_encoder = self._create_inference_session(
+            # Pass 'model_name' so encoder and decoder share the same disc cache folder (openvino, tensorRT) 
+            encoder_sess = self._create_inference_session(
                 model_path + ".encoder.onnx", 
                 prov_str, 
                 prov_opts, 
                 model_name # Cache ID
             )
-            self.sam_decoder = self._create_inference_session(
+            decoder_sess = self._create_inference_session(
                 model_path + ".decoder.onnx", 
                 prov_str, 
                 prov_opts, 
-                model_name # Cache ID
+                model_name
             )
 
+            if cache_mode == 1: # Keep last
+                self.loaded_sam_models.clear() 
+                gc.collect()
+                self.loaded_sam_models[cache_key] = (encoder_sess, decoder_sess)
+            elif cache_mode == 2: # Keep all
+                self.loaded_sam_models[cache_key] = (encoder_sess, decoder_sess)
+
+            # Set active references
+            self.sam_encoder = encoder_sess
+            self.sam_decoder = decoder_sess
             self.sam_model_path = model_path
             
             if hasattr(self, "encoder_output"):
                 delattr(self, "encoder_output")
 
             self.set_loading(False, f"SAM Ready: {model_name} ({prov_code})")
-
+            
             self.update_cached_model_icons()
             return True
 
