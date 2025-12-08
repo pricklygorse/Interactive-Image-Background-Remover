@@ -21,6 +21,8 @@ from PyQt6.QtGui import (QPixmap, QImage, QColor, QPainter, QPainterPath, QPen, 
 from PIL import Image, ImageOps, ImageDraw, ImageEnhance, ImageGrab, ImageFilter, ImageChops
 import onnxruntime as ort
 
+import download_manager
+
 # --- Constants ---
 DEFAULT_ZOOM_FACTOR = 1.15
 if getattr(sys, 'frozen', False):
@@ -908,6 +910,8 @@ class BackgroundRemoverGUI(QMainWindow):
         
         # Delay until UI created
         QTimer.singleShot(10, self.update_cached_model_icons)
+        # Delay model pre-loading
+        QTimer.singleShot(100, self.preload_startup_models)
 
     def init_ui(self):
         self.setAcceptDrops(True)
@@ -1023,11 +1027,20 @@ class BackgroundRemoverGUI(QMainWindow):
 
 
         # Rest of UI
-        
-        lbl_models = QLabel("<b>Models:</b>")
+        h_models_header = QHBoxLayout()
+        lbl_models = QLabel("<b> Models:</b>")
         lbl_models.setContentsMargins(3, 0, 0, 0)
-        sl.addWidget(lbl_models)
-        lbl_sam = QLabel("Interactive (SAM):")
+        h_models_header.addWidget(lbl_models)
+        h_models_header.addStretch()
+
+        self.btn_download = QPushButton("Download 📥")
+        self.btn_download.setToolTip("Download Models...")
+        self.btn_download.setFixedSize(120, 32)
+        self.btn_download.clicked.connect(self.open_download_manager)
+        h_models_header.addWidget(self.btn_download)
+        sl.addLayout(h_models_header)
+        
+        lbl_sam = QLabel(" Interactive (SAM):")
         lbl_sam.setToolTip("<b>Segment Anything Models</b><br>"
                            "These require you to interact with the image.<br>"
                            "<i>Usage: Left-click to add points, right-click to add negative (avoid) points, or drag to draw boxes around the subject.</i><br><br>"
@@ -1038,8 +1051,7 @@ class BackgroundRemoverGUI(QMainWindow):
         self.combo_sam.setToolTip(lbl_sam.toolTip())
         self.populate_sam_models()
         sl.addWidget(self.combo_sam)
-        
-        lbl_whole = QLabel("Automatic (Whole Image):")
+        lbl_whole = QLabel(" Automatic (Whole Image):")
         lbl_whole.setToolTip("<b>Automatic Models</b><br>"
                              "These run automatically on the entire image.<br>"
                              "<i>Usage: Select a model and click 'Run Automatic'. No points needed.</i><br><br>"
@@ -1055,7 +1067,7 @@ class BackgroundRemoverGUI(QMainWindow):
         btn_whole = QPushButton("Run Automatic"); btn_whole.clicked.connect(lambda: self.run_automatic_model())
         sl.addWidget(btn_whole)
 
-        lbl_actions = QLabel("<b>Actions:</b>")
+        lbl_actions = QLabel("<b> Actions:</b>")
         lbl_actions.setContentsMargins(3, 0, 0, 0)
         sl.addWidget(lbl_actions)
         h_act = QHBoxLayout()
@@ -1478,17 +1490,27 @@ class BackgroundRemoverGUI(QMainWindow):
         if is_loading:
             self.progress_bar.show()
             self.status_label.setText(message if message else "Processing...")
+            self.status_label.setStyleSheet("color: red;")
             QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
             QApplication.processEvents() 
         else:
             self.progress_bar.hide()
             self.status_label.setText(message if message else "Idle")
+            self.status_label.setStyleSheet("")
             QApplication.restoreOverrideCursor()
 
     def showEvent(self, event):
         super().showEvent(event)
         w = self.splitter.width()
         self.splitter.setSizes([w//2, w//2])
+
+    def open_download_manager(self):
+        dlg = download_manager.ModelDownloadDialog(
+            model_root_dir=MODEL_ROOT_DIR, 
+            main_app_instance=self, 
+            parent=self
+        )
+        dlg.exec()
 
     def populate_sam_models(self):
         sam_models = ["mobile_sam", "sam_vit_b", "sam_vit_h", "sam_vit_l", "sam2"]
@@ -1606,6 +1628,57 @@ class BackgroundRemoverGUI(QMainWindow):
             if self.current_image_index < len(self.image_paths) - 1:
                 self.current_image_index += 1
                 self.load_image(self.image_paths[self.current_image_index])
+
+    
+
+    def preload_startup_models(self):
+        """
+        Loads models selected in the download manager on startup.
+        Ideally should be threaded but if user selects small models, its only a second or two to load
+        """
+        sam_model_id = self.settings.value("startup_sam_model", None)
+        auto_model_id = self.settings.value("startup_automatic_general_model", None)
+
+        if sam_model_id:
+            # Find the full model name from the ID
+            idx = self.combo_sam.findText(sam_model_id, Qt.MatchFlag.MatchContains)
+            if idx >= 0:
+                self.combo_sam.setCurrentIndex(idx)
+                
+                self.set_loading(True, f"Pre-loading SAM: {self.combo_sam.currentText()}")
+
+                QApplication.processEvents()
+
+                self._init_sam()
+                
+                self.set_loading(False,f"Pre-loaded SAM: {self.combo_sam.currentText()}")
+
+            else:
+                print(f"Startup SAM model '{sam_model_id}' not found.")
+
+        if auto_model_id:
+            idx = self.combo_whole.findText(auto_model_id, Qt.MatchFlag.MatchContains)
+            if idx >= 0:
+                self.combo_whole.setCurrentIndex(idx)
+                QApplication.processEvents()
+                
+                # This logic is adapted from run_automatic_model to only load the session
+                model_name = self.combo_whole.currentText()
+                model_path = os.path.join(MODEL_ROOT_DIR, model_name + ".onnx")
+                prov_str, prov_opts, prov_code = self.combo_exec.currentData()
+                cache_key = f"{model_name}_{prov_code}"
+
+                if cache_key not in self.loaded_whole_models:
+                    try:
+                        self.set_loading(True,f"Pre-loading automatic model: {model_name}")
+                        #self.status_label.setStyleSheet("color: red;")
+                        QApplication.processEvents()
+                        session = self._create_inference_session(model_path, prov_str, prov_opts, model_name)
+                        self.loaded_whole_models[cache_key] = session
+                        self.set_loading(False,f"Pre-loaded Auto: {model_name}")
+                        #self.status_label.setStyleSheet("")
+                    except Exception as e:
+                        print(f"Failed to pre-load automatic model '{model_name}': {e}")
 
     def update_next_button_state(self):
         if not self.image_paths:
@@ -1908,15 +1981,15 @@ class BackgroundRemoverGUI(QMainWindow):
 
         final_status = "Idle"
 
-        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        self.set_loading(True, "Running SAM Encoder...")
+        QApplication.processEvents()
         try:
             encoder_time = 0.0
             decoder_time = 0.0
 
             # --- 1. Encoder ---
             if not hasattr(self, "encoder_output") or getattr(self, "last_crop_rect", None) != current_crop_rect:
-                self.status_label.setText("Running SAM Encoder...")
-                QApplication.processEvents()
+                
                 t_start = timer()
 
                 enc_inputs = self.sam_encoder.get_inputs()
@@ -2002,7 +2075,8 @@ class BackgroundRemoverGUI(QMainWindow):
 
         current_crop_rect = (x_off, y_off, crop.width, crop.height)
         final_status = "Idle"
-        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        self.set_loading(True,"Running Sam Encoder...")
+        QApplication.processEvents() 
         try:
             target_size, input_size = 1024, (684, 1024)
             img_np = np.array(crop.convert("RGB"))
@@ -2012,8 +2086,8 @@ class BackgroundRemoverGUI(QMainWindow):
             
             # --- Encoder ---
             if not hasattr(self, "encoder_output") or getattr(self, "last_crop_rect", None) != current_crop_rect:
-                self.status_label.setText("Running SAM Encoder...")
-                QApplication.processEvents() 
+                #self.status_label.setText("Running SAM Encoder...")
+                #QApplication.processEvents() 
 
                 t_start = timer()
                 
@@ -2077,7 +2151,7 @@ class BackgroundRemoverGUI(QMainWindow):
         if "Select" in model_name or "No Models" in model_name:
             msg_box = QMessageBox()
             msg_box.setWindowTitle("No Models Found")
-            msg_box.setText("No models found. Please download models from the project URL in the help box.")
+            msg_box.setText("No models found. Please download models using the download manager or from the Github URL in the help box.")
             msg_box.setIcon(QMessageBox.Icon.Information)
             msg_box.addButton(QPushButton("OK"), QMessageBox.ButtonRole.AcceptRole)
             msg_box.exec()
