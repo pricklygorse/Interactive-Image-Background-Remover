@@ -38,6 +38,8 @@ SOFTEN_RADIUS = 2
 MIN_RECT_SIZE = 10
 
 
+SAM_TRT_WARMUP_POINTS = 30  # how many interactive points to pre-compile for TensorRT
+
 
 # --- Helper Functions ---
 
@@ -879,7 +881,8 @@ class BackgroundRemoverGUI(QMainWindow):
         self.image_exif = None
         self.blur_radius = 30
 
-
+        # Track TensorRT warmup per (model, provider) combo
+        self._sam_trt_warmed = set()
 
         # Persistent settings
         self.settings = QSettings("PricklyGorse", "InteractiveBackgroundRemover")
@@ -978,7 +981,9 @@ class BackgroundRemoverGUI(QMainWindow):
         self.ram_cache_group.buttonToggled.connect(self.on_ram_cache_changed)
 
         # SAM
-        hw_layout.addWidget(QLabel("<b>Interactive SAM Model Provider:</b>"))
+        labelS = QLabel("<b>Interactive SAM Model Provider:</b>")
+        labelS.setContentsMargins(3, 0, 0, 0)   # push right by 10px
+        hw_layout.addWidget(labelS)
         self.combo_sam_exec = QComboBox()
         for label, provider_str, opts, short_code in self.available_eps:
             self.combo_sam_exec.addItem(label, (provider_str, opts, short_code))
@@ -1001,7 +1006,9 @@ class BackgroundRemoverGUI(QMainWindow):
         hw_layout.addWidget(self.combo_sam_exec)
 
         # Automatic Models
-        hw_layout.addWidget(QLabel("<b>Automatic Whole-Image Model Provider:</b>"))
+        labelW = QLabel("<b>Automatic Whole-Image Model Provider:</b>")
+        labelW.setContentsMargins(3, 0, 0, 0)   # push right by 10px
+        hw_layout.addWidget(labelW)
         self.combo_exec = QComboBox()
         self.combo_exec.setToolTip("Select hardware acceleration for automatic models.")
         
@@ -1024,10 +1031,10 @@ class BackgroundRemoverGUI(QMainWindow):
 
         # Rest of UI
         
-        lbl_models = QLabel("<b>Models:</b>")
+        lbl_models = QLabel("<b> Models:</b>")
         lbl_models.setContentsMargins(3, 0, 0, 0)
         sl.addWidget(lbl_models)
-        lbl_sam = QLabel("Interactive (SAM):")
+        lbl_sam = QLabel(" Interactive (SAM):")
         lbl_sam.setToolTip("<b>Segment Anything Models</b><br>"
                            "These require you to interact with the image.<br>"
                            "<i>Usage: Left-click to add points, right-click to add negative (avoid) points, or drag to draw boxes around the subject.</i><br><br>"
@@ -1039,7 +1046,7 @@ class BackgroundRemoverGUI(QMainWindow):
         self.populate_sam_models()
         sl.addWidget(self.combo_sam)
         
-        lbl_whole = QLabel("Automatic (Whole Image):")
+        lbl_whole = QLabel(" Automatic (Whole Image):")
         lbl_whole.setToolTip("<b>Automatic Models</b><br>"
                              "These run automatically on the entire image.<br>"
                              "<i>Usage: Select a model and click 'Run Automatic'. No points needed.</i><br><br>"
@@ -1055,7 +1062,7 @@ class BackgroundRemoverGUI(QMainWindow):
         btn_whole = QPushButton("Run Automatic"); btn_whole.clicked.connect(lambda: self.run_automatic_model())
         sl.addWidget(btn_whole)
 
-        lbl_actions = QLabel("<b>Actions:</b>")
+        lbl_actions = QLabel("<b> Actions:</b>")
         lbl_actions.setContentsMargins(3, 0, 0, 0)
         sl.addWidget(lbl_actions)
         h_act = QHBoxLayout()
@@ -1235,6 +1242,152 @@ class BackgroundRemoverGUI(QMainWindow):
         self.statusBar().addPermanentWidget(self.zoom_label)
         
         self.toggle_splitter_orientation(initial_setup=True)
+
+
+
+    def _warmup_sam_trt(self, max_points=SAM_TRT_WARMUP_POINTS):
+        """
+        Warm up the SAM decoder on TensorRT by running it once with `max_points`
+        synthetic points so the engine is compiled for that max shape.
+
+        After that, any run with <= max_points points should reuse this engine.
+        """
+        model_name = self.combo_sam.currentText()
+        if "sam2" in model_name:
+            self._warmup_sam2_trt(max_points)
+        else:
+            self._warmup_sam1_trt(max_points)
+
+    def _warmup_sam1_trt(self, max_points):
+        """
+        Warmup for classic SAM / mobile_sam path used by run_sam_inference().
+
+        Mirrors the real encoder/decoder calling convention:
+        - Encoder takes HWC float32 image (684x1024x3 after warpAffine).
+        - Decoder takes the same input dict keys/shapes as run_sam_inference.
+        Only shapes matter for TensorRT; values are dummy.
+        """
+        if not hasattr(self, "sam_encoder") or not hasattr(self, "sam_decoder"):
+            return
+
+        # Same as in run_sam_inference
+        target_size, input_size = 1024, (684, 1024)
+
+        # Use the current viewport crop (or full image as a fallback)
+        crop, _, _ = self.get_viewport_crop()
+        if crop.width == 0 or crop.height == 0:
+            crop = self.original_image
+
+        img_np = np.array(crop.convert("RGB"))
+
+        # Same resize logic as run_sam_inference()
+        scale = min(input_size[1] / img_np.shape[1],
+                    input_size[0] / img_np.shape[0])
+        transform_matrix = np.array([[scale, 0, 0],
+                                     [0, scale, 0],
+                                     [0, 0, 1]], dtype=np.float32)
+
+        cv_image = cv2.warpAffine(
+            img_np,
+            transform_matrix[:2],
+            (input_size[1], input_size[0]),  # (width, height)
+            flags=cv2.INTER_LINEAR
+        )
+
+        # --- Encoder warmup (HWC float32, just like run_sam_inference) ---
+        enc_input_name = self.sam_encoder.get_inputs()[0].name
+        encoder_inputs = {enc_input_name: cv_image.astype(np.float32)}
+        embedding = self.sam_encoder.run(None, encoder_inputs)[0]
+
+        # --- Decoder warmup: one call with max_points (+1 sentinel) ---
+        n = max_points
+
+        # Final coords passed into decoder are in the transformed space,
+        # but TensorRT only cares about shapes, not actual values.
+        onnx_coord = np.zeros((1, n + 1, 2), dtype=np.float32)
+
+        onnx_label = np.zeros((1, n + 1), dtype=np.float32)
+        onnx_label[0, :n] = 1.0   # pretend all real points are positive
+        onnx_label[0, -1] = -1.0  # sentinel, same as real pipeline
+
+        mask_input = np.zeros((1, 1, 256, 256), dtype=np.float32)
+        has_mask_input = np.zeros((1,), dtype=np.float32)
+        orig_im_size = np.array(input_size, dtype=np.float32)
+
+        candidate_inputs = {
+            "image_embeddings": embedding,
+            "point_coords": onnx_coord,
+            "point_labels": onnx_label,
+            "mask_input": mask_input,
+            "has_mask_input": has_mask_input,
+            "orig_im_size": orig_im_size,
+        }
+
+        decoder_input_names = [d.name for d in self.sam_decoder.get_inputs()]
+        run_inputs = {
+            name: candidate_inputs[name]
+            for name in decoder_input_names
+            if name in candidate_inputs
+        }
+
+        # This single call with max_points builds the TensorRT engine
+        self.sam_decoder.run(None, run_inputs)
+
+
+    def _warmup_sam2_trt(self, max_points):
+        """
+        Warmup for SAM2 path used by run_samv2_inference().
+
+        Same idea: single decoder call with max_points points.
+        """
+        if not hasattr(self, "sam_encoder") or not hasattr(self, "sam_decoder"):
+            return
+
+        enc_inputs = self.sam_encoder.get_inputs()
+        enc_input_h, enc_input_w = enc_inputs[0].shape[2:]
+
+        # --- Encoder warmup: dummy input at encoder resolution ---
+        image_rgb = np.zeros((enc_input_h, enc_input_w, 3), dtype=np.float32)
+        input_tensor = image_rgb.transpose(2, 0, 1)[np.newaxis, :, :, :]
+        encoder_inputs = {enc_inputs[0].name: input_tensor}
+        high_res_feats_0, high_res_feats_1, image_embed = self.sam_encoder.run(None, encoder_inputs)
+
+        orig_h, orig_w = enc_input_h, enc_input_w
+        scale_factor = 4
+        mask_input = np.zeros(
+            (1, 1, enc_input_h // scale_factor, enc_input_w // scale_factor),
+            dtype=np.float32
+        )
+        has_mask_input = np.array([0], dtype=np.float32)
+        original_size_np = np.array([orig_h, orig_w], dtype=np.int32)
+
+        all_base_inputs = {
+            'image_embed': image_embed,
+            'high_res_feats_0': high_res_feats_0,
+            'high_res_feats_1': high_res_feats_1,
+            'mask_input': mask_input,
+            'has_mask_input': has_mask_input,
+            'orig_im_size': original_size_np
+        }
+
+        decoder_input_names = [d.name for d in self.sam_decoder.get_inputs()]
+
+        n = max_points
+        points = np.zeros((1, n, 2), dtype=np.float32)
+        labels = np.ones((1, n), dtype=np.float32)  # all positive
+
+        candidate_inputs = dict(all_base_inputs)
+        candidate_inputs["point_coords"] = points
+        candidate_inputs["point_labels"] = labels
+
+        run_inputs = {
+            name: candidate_inputs[name]
+            for name in decoder_input_names
+            if name in candidate_inputs
+        }
+
+        self.sam_decoder.run(None, run_inputs)
+
 
     def toggle_splitter_orientation(self, initial_setup=False):
         current_orientation = self.splitter.orientation()
@@ -1750,6 +1903,25 @@ class BackgroundRemoverGUI(QMainWindow):
             if hasattr(self, "encoder_output"):
                 delattr(self, "encoder_output")
 
+
+            # --- TensorRT warmup: pre-build engine for up to N points ---
+            if prov_str == "TensorrtExecutionProvider":
+                warm_key = f"{model_name}_{prov_code}"
+                if warm_key not in self._sam_trt_warmed:
+                    self.status_label.setText(
+                        f"Warming up SAM TensorRT engine ({model_name}) "
+                        f"for up to {SAM_TRT_WARMUP_POINTS} points..."
+                    )
+                    QApplication.processEvents()
+                    try:
+                        self._warmup_sam_trt(max_points=SAM_TRT_WARMUP_POINTS)
+                    except Exception as e:
+                        print(f"SAM TensorRT warmup failed: {e}")
+                    else:
+                        self._sam_trt_warmed.add(warm_key)
+
+
+
             self.set_loading(False, f"SAM Ready: {model_name} ({prov_code})")
             
             self.update_cached_model_icons()
@@ -2143,10 +2315,30 @@ class BackgroundRemoverGUI(QMainWindow):
             input_shape = session.get_inputs()[0].shape
             # Assume shape is [batch, channels, height, width]
             target_h, target_w = input_shape[2], input_shape[3]
+
+            # Bria RMBG 2.0 uses dynamic symbolic dims in ONNX, but
+            # it actually expects a fixed 1024x1024 input.
+            model_lower = model_name.lower()
+            is_bria2 = "rmbg" in model_lower and "2" in model_lower  # adjust if your filename differs
+
+            if is_bria2:
+                target_h = 1024
+                target_w = 1024
+            else:
+                # Generic fallback: if dims are symbolic/None, use crop size
+                if not isinstance(target_h, int) or not isinstance(target_w, int):
+                    cw, ch = crop.size
+                    target_w, target_h = cw, ch
+
         except Exception as e:
             self.set_loading(False, "Error reading model input.")
-            QMessageBox.critical(self, "Model Error", f"Could not read input shape from the model:\n{e}")
+            QMessageBox.critical(
+                self,
+                "Model Error",
+                f"Could not read valid H/W from the model input shape ({session.get_inputs()[0].shape}):\n{e}"
+            )
             return
+
 
         final_status = "Idle"
         inference_time = 0.0
