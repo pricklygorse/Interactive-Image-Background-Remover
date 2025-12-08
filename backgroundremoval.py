@@ -2143,6 +2143,12 @@ class BackgroundRemoverGUI(QMainWindow):
             input_shape = session.get_inputs()[0].shape
             # Assume shape is [batch, channels, height, width]
             target_h, target_w = input_shape[2], input_shape[3]
+
+            if "rmbg" in model_name.lower() and "2" in model_name.lower():
+                # rmbg2 needs specifying manually
+                target_h = 1024
+                target_w = 1024
+
         except Exception as e:
             self.set_loading(False, "Error reading model input.")
             QMessageBox.critical(self, "Model Error", f"Could not read input shape from the model:\n{e}")
