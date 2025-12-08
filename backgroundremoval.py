@@ -1052,7 +1052,7 @@ class BackgroundRemoverGUI(QMainWindow):
         self.populate_whole_models()
         sl.addWidget(self.combo_whole)
         
-        btn_whole = QPushButton("Run Automatic"); btn_whole.clicked.connect(lambda: self.run_automatic_model(None))
+        btn_whole = QPushButton("Run Automatic"); btn_whole.clicked.connect(lambda: self.run_automatic_model())
         sl.addWidget(btn_whole)
 
         lbl_actions = QLabel("<b>Actions:</b>")
@@ -1531,7 +1531,7 @@ class BackgroundRemoverGUI(QMainWindow):
         QShortcut(QKeySequence("Ctrl+S"), self).activated.connect(self.save_image)
         QShortcut(QKeySequence("Ctrl+Shift+S"), self).activated.connect(self.quick_save_jpeg)
         
-        QShortcut(QKeySequence("U"), self).activated.connect(lambda: self.run_automatic_model("u2net", 320))
+        QShortcut(QKeySequence("U"), self).activated.connect(lambda: self.run_automatic_model("u2net"))
         QShortcut(QKeySequence("I"), self).activated.connect(lambda: self.run_automatic_model("isnet"))
         QShortcut(QKeySequence("O"), self).activated.connect(lambda: self.run_automatic_model("rmbg"))
         QShortcut(QKeySequence("B"), self).activated.connect(lambda: self.run_automatic_model("BiRefNet"))
@@ -2070,10 +2070,7 @@ class BackgroundRemoverGUI(QMainWindow):
             QApplication.restoreOverrideCursor()
             self.set_loading(False, final_status)
 
-    def run_automatic_model(self, model_name=None, target_size=1024):
-        # TODO read model inputs instead of hardcoding based on filename
-        # Models provided by REMBG that I've tested have fixed inputs.
-        
+    def run_automatic_model(self, model_name=None):
         # Check if run from a hotkey (u,i,o,b) or get name from model list
         if not model_name: 
             model_name = self.combo_whole.currentText()
@@ -2101,10 +2098,6 @@ class BackgroundRemoverGUI(QMainWindow):
         crop, x_off, y_off = self.get_viewport_crop()
         if crop.width == 0 or crop.height == 0:
             return
-
-        # Requires substantial RAM to run
-        if "BiRefNet_HR" in model_name:
-            target_size=2048
 
         prov_str, prov_opts, prov_code = self.combo_exec.currentData()
 
@@ -2145,12 +2138,21 @@ class BackgroundRemoverGUI(QMainWindow):
         if load_time == 0.0:
             self.set_loading(True, f"Running {model_name}...")
         
+        # Get model input size from the session
+        try:
+            input_shape = session.get_inputs()[0].shape
+            # Assume shape is [batch, channels, height, width]
+            target_h, target_w = input_shape[2], input_shape[3]
+        except Exception as e:
+            self.set_loading(False, "Error reading model input.")
+            QMessageBox.critical(self, "Model Error", f"Could not read input shape from the model:\n{e}")
+            return
+
         final_status = "Idle"
         inference_time = 0.0
-
         try:
             # --- Preprocessing ---
-            img_r = crop.convert("RGB").resize((target_size, target_size), Image.BICUBIC)
+            img_r = crop.convert("RGB").resize((target_w, target_h), Image.BICUBIC)
 
             if "isnet" in model_name or "rmbg" in model_name:
                 mean, std = (0.5, 0.5, 0.5), (1.0, 1.0, 1.0)
