@@ -1258,61 +1258,45 @@ class BackgroundRemoverGUI(QMainWindow):
         else:
             self._warmup_sam1_trt(max_points)
 
+
     def _warmup_sam1_trt(self, max_points):
         """
         Warmup for classic SAM / mobile_sam path used by run_sam_inference().
 
-        Mirrors the real encoder/decoder calling convention:
-        - Encoder takes HWC float32 image (684x1024x3 after warpAffine).
-        - Decoder takes the same input dict keys/shapes as run_sam_inference.
-        Only shapes matter for TensorRT; values are dummy.
+        We don't need a real image here; TensorRT only cares about shapes.
+        So we feed dummy zeros with the same shapes as the real pipeline.
         """
         if not hasattr(self, "sam_encoder") or not hasattr(self, "sam_decoder"):
             return
 
-        # Same as in run_sam_inference
-        target_size, input_size = 1024, (684, 1024)
+        # Same logical input_size you use in run_sam_inference:
+        #   target_size, input_size = 1024, (684, 1024)
+        # Only shapes matter, not the values.
+        input_size = (684, 1024)  # (H, W)
+        h, w = input_size
 
-        # Use the current viewport crop (or full image as a fallback)
-        crop, _, _ = self.get_viewport_crop()
-        if crop.width == 0 or crop.height == 0:
-            crop = self.original_image
-
-        img_np = np.array(crop.convert("RGB"))
-
-        # Same resize logic as run_sam_inference()
-        scale = min(input_size[1] / img_np.shape[1],
-                    input_size[0] / img_np.shape[0])
-        transform_matrix = np.array([[scale, 0, 0],
-                                     [0, scale, 0],
-                                     [0, 0, 1]], dtype=np.float32)
-
-        cv_image = cv2.warpAffine(
-            img_np,
-            transform_matrix[:2],
-            (input_size[1], input_size[0]),  # (width, height)
-            flags=cv2.INTER_LINEAR
-        )
-
-        # --- Encoder warmup (HWC float32, just like run_sam_inference) ---
+        # --- Encoder warmup: one dummy run to get an embedding ---
+        # Your encoder expects HWC float32 from cv2.warpAffine, so we match that.
         enc_input_name = self.sam_encoder.get_inputs()[0].name
-        encoder_inputs = {enc_input_name: cv_image.astype(np.float32)}
+        dummy_img = np.zeros((h, w, 3), dtype=np.float32)
+
+        encoder_inputs = {enc_input_name: dummy_img}
         embedding = self.sam_encoder.run(None, encoder_inputs)[0]
 
-        # --- Decoder warmup: one call with max_points (+1 sentinel) ---
+        # --- Decoder warmup: single call with max_points (+1 sentinel) ---
         n = max_points
 
-        # Final coords passed into decoder are in the transformed space,
-        # but TensorRT only cares about shapes, not actual values.
+        # Shape matches what you build in run_sam_inference after transform:
+        #   onnx_coord: (1, N+1, 2)
+        #   onnx_label: (1, N+1)
         onnx_coord = np.zeros((1, n + 1, 2), dtype=np.float32)
-
         onnx_label = np.zeros((1, n + 1), dtype=np.float32)
-        onnx_label[0, :n] = 1.0   # pretend all real points are positive
+        onnx_label[0, :n] = 1.0   # pretend all points are positive
         onnx_label[0, -1] = -1.0  # sentinel, same as real pipeline
 
         mask_input = np.zeros((1, 1, 256, 256), dtype=np.float32)
         has_mask_input = np.zeros((1,), dtype=np.float32)
-        orig_im_size = np.array(input_size, dtype=np.float32)
+        orig_im_size = np.array(input_size, dtype=np.float32)  # shape (2,)
 
         candidate_inputs = {
             "image_embeddings": embedding,
@@ -1330,8 +1314,9 @@ class BackgroundRemoverGUI(QMainWindow):
             if name in candidate_inputs
         }
 
-        # This single call with max_points builds the TensorRT engine
+        # One shot at max_points – this should build the TensorRT engine
         self.sam_decoder.run(None, run_inputs)
+
 
 
     def _warmup_sam2_trt(self, max_points):
@@ -1966,6 +1951,10 @@ class BackgroundRemoverGUI(QMainWindow):
         Generic builder for ONNX sessions. 
         Handles cache directory creation automatically based on provider + model name.
         """
+
+        # Make path absolute so ONNX external data is resolved from the model's folder,
+        # not from the process working directory.
+        model_path = os.path.abspath(model_path)
 
         # These session options stop VRAM/RAM usage ballooning with subsequent model runs
         # by disabling automatic memory allocation
