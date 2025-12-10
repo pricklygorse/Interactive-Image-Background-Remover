@@ -1281,14 +1281,10 @@ class BackgroundRemoverGUI(QMainWindow):
         if not hasattr(self, "sam_encoder") or not hasattr(self, "sam_decoder"):
             return
 
-        # Same logical input_size you use in run_sam_inference:
-        #   target_size, input_size = 1024, (684, 1024)
-        # Only shapes matter, not the values.
         input_size = (684, 1024)  # (H, W)
         h, w = input_size
 
-        # --- Encoder warmup: one dummy run to get an embedding ---
-        # Your encoder expects HWC float32 from cv2.warpAffine, so we match that.
+        # Encoder
         enc_input_name = self.sam_encoder.get_inputs()[0].name
         dummy_img = np.zeros((h, w, 3), dtype=np.float32)
 
@@ -1298,13 +1294,10 @@ class BackgroundRemoverGUI(QMainWindow):
         # --- Decoder warmup: single call with max_points (+1 sentinel) ---
         n = max_points
 
-        # Shape matches what you build in run_sam_inference after transform:
-        #   onnx_coord: (1, N+1, 2)
-        #   onnx_label: (1, N+1)
         onnx_coord = np.zeros((1, n + 1, 2), dtype=np.float32)
         onnx_label = np.zeros((1, n + 1), dtype=np.float32)
-        onnx_label[0, :n] = 1.0   # pretend all points are positive
-        onnx_label[0, -1] = -1.0  # sentinel, same as real pipeline
+        onnx_label[0, :n] = 1.0 
+        onnx_label[0, -1] = -1.0  # sentinel
 
         mask_input = np.zeros((1, 1, 256, 256), dtype=np.float32)
         has_mask_input = np.zeros((1,), dtype=np.float32)
@@ -1334,8 +1327,6 @@ class BackgroundRemoverGUI(QMainWindow):
     def _warmup_sam2_trt(self, max_points):
         """
         Warmup for SAM2 path used by run_samv2_inference().
-
-        Same idea: single decoder call with max_points points.
         """
         if not hasattr(self, "sam_encoder") or not hasattr(self, "sam_decoder"):
             return
@@ -1343,12 +1334,13 @@ class BackgroundRemoverGUI(QMainWindow):
         enc_inputs = self.sam_encoder.get_inputs()
         enc_input_h, enc_input_w = enc_inputs[0].shape[2:]
 
-        # --- Encoder warmup: dummy input at encoder resolution ---
+        # Encoder
         image_rgb = np.zeros((enc_input_h, enc_input_w, 3), dtype=np.float32)
         input_tensor = image_rgb.transpose(2, 0, 1)[np.newaxis, :, :, :]
         encoder_inputs = {enc_inputs[0].name: input_tensor}
         high_res_feats_0, high_res_feats_1, image_embed = self.sam_encoder.run(None, encoder_inputs)
 
+        # Decoder. Collect inputs to accomodate Vietdev or Ibaigorodo exported models
         orig_h, orig_w = enc_input_h, enc_input_w
         scale_factor = 4
         mask_input = np.zeros(
