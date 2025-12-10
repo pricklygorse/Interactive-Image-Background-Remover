@@ -56,7 +56,10 @@ def get_available_ep_options():
             print("No onnxruntime providers")
             return []
         options = []
-
+        
+        # DEBUG override to show all providers
+        #available = ["CUDAExecutionProvider", "CPUExecutionProvider", "TensorrtExecutionProvider", "OpenVINOExecutionProvider", "CoreMLExecutionProvider"] # DEBUG
+        
         if "TensorrtExecutionProvider" in available:
             # We will generate specific cache paths at runtime, 
             # so we pass an empty dict here, or default options.
@@ -965,73 +968,88 @@ class BackgroundRemoverGUI(QMainWindow):
                                                          "Caching models in RAM can speed up subsequent runs."
                                                          )
         hw_layout = self.hw_options_frame.layout_for_content()
-        sl.addWidget(self.hw_options_frame)
         
-        self.ram_cache_group = QButtonGroup(self)
-        self.rb_cache_none = QRadioButton("No RAM/VRAM Caching")
-        self.rb_cache_last = QRadioButton("Keep Last Used Model In Memory")
-        self.rb_cache_all = QRadioButton("Keep All Used Models In Memory")
-        
-        self.ram_cache_group.addButton(self.rb_cache_none, 0)
-        self.ram_cache_group.addButton(self.rb_cache_last, 1)
-        self.ram_cache_group.addButton(self.rb_cache_all, 2)
-        
-        self.rb_cache_last.setToolTip("If checked, the model stays loaded after running. Recommended")
-        self.rb_cache_all.setToolTip("Keeps every used model loaded in memory for the session.\nCan cause issues on low VRAM GPU.")
-
-        hw_layout.addWidget(self.rb_cache_none)
-        hw_layout.addWidget(self.rb_cache_last)
-        hw_layout.addWidget(self.rb_cache_all)
-        self.ram_cache_group.buttonToggled.connect(self.on_ram_cache_changed)
-
-        # SAM
+        # SAM EP Combo
         labelS = QLabel("<b>Interactive SAM Model Provider:</b>")
         labelS.setContentsMargins(3, 0, 0, 0)   # push right by 10px
         hw_layout.addWidget(labelS)
-        self.combo_sam_exec = QComboBox()
+        self.combo_sam_model_EP = QComboBox()
         for label, provider_str, opts, short_code in self.available_eps:
-            self.combo_sam_exec.addItem(label, (provider_str, opts, short_code))
-
-        last_cache_mode = self.settings.value("ram_cache_mode", 1, type=int)
-        # Stop the function firing when opening the program, before UI initialised
-        self.ram_cache_group.blockSignals(True)
-        self.ram_cache_group.button(last_cache_mode).setChecked(True)
-        self.ram_cache_group.blockSignals(False)
+            self.combo_sam_model_EP.addItem(label, (provider_str, opts, short_code))
 
         last_sam = self.settings.value("sam_exec_short_code", "cpu")
-        idx = 0
-        for i in range(self.combo_sam_exec.count()):
-            if self.combo_sam_exec.itemData(i)[2] == last_sam:
+        idx = 0 # Default to first item
+        for i in range(self.combo_sam_model_EP.count()):
+            if self.combo_sam_model_EP.itemData(i)[2] == last_sam:
                 idx = i
                 break
-        self.combo_sam_exec.setCurrentIndex(idx)
-        self.combo_sam_exec.currentIndexChanged.connect(self.on_sam_exec_changed)
-        sl.addWidget(self.combo_sam_exec)
-        hw_layout.addWidget(self.combo_sam_exec)
+        self.combo_sam_model_EP.setCurrentIndex(idx)
+        self.combo_sam_model_EP.currentIndexChanged.connect(self.on_sam_EP_changed)
+        hw_layout.addWidget(self.combo_sam_model_EP)
+
+
+        #  SAM Caching 
+        self.sam_cache_group = QButtonGroup(self)
+        self.rb_sam_cache_last = QRadioButton("Keep Last Used In Memory")
+        self.rb_sam_cache_all = QRadioButton("Keep All In Memory")
+        self.sam_cache_group.addButton(self.rb_sam_cache_last, 1)
+        self.sam_cache_group.addButton(self.rb_sam_cache_all, 2)
+        self.rb_sam_cache_last.setToolTip("Recommended for good balance between efficiency and memory usage.")
+        self.rb_sam_cache_all.setToolTip("Keeps every used SAM model loaded in memory for the session.\nCan cause issues on low VRAM GPUs.")
+        hw_layout.addWidget(self.rb_sam_cache_last)
+        hw_layout.addWidget(self.rb_sam_cache_all)
+        self.sam_cache_group.buttonToggled.connect(self.on_sam_cache_changed)
+
+        last_sam_cache_mode = self.settings.value("sam_ram_cache_mode", 1, type=int)
+        self.sam_cache_group.blockSignals(True)
+        self.sam_cache_group.button(last_sam_cache_mode).setChecked(True)
+        self.sam_cache_group.blockSignals(False)
+
 
         # Automatic Models
-        labelW = QLabel("<b>Automatic Whole-Image Model Provider:</b>")
+        labelW = QLabel("<b>Automatic Model Provider:</b>")
         labelW.setContentsMargins(3, 0, 0, 0)   # push right by 10px
         hw_layout.addWidget(labelW)
-        self.combo_exec = QComboBox()
-        self.combo_exec.setToolTip("Select hardware acceleration for automatic models.")
+
+        self.combo_auto_model_EP = QComboBox()
+        self.combo_auto_model_EP.setToolTip("Select hardware acceleration for automatic background detection models.")
         
         for label, provider_str, opts, short_code in self.available_eps:
-            self.combo_exec.addItem(label, (provider_str, opts, short_code))
+            self.combo_auto_model_EP.addItem(label, (provider_str, opts, short_code))
         
         last_exec = self.settings.value("exec_short_code", "cpu")
-        idx = 0
-        for i in range(self.combo_exec.count()):
-            if self.combo_exec.itemData(i)[2] == last_exec:
+        idx = 0 # Default to first item
+        for i in range(self.combo_auto_model_EP.count()):
+            if self.combo_auto_model_EP.itemData(i)[2] == last_exec:
                 idx = i
                 break
-        self.combo_exec.setCurrentIndex(idx)
-        self.combo_exec.currentIndexChanged.connect(self.on_exec_changed)
-        sl.addWidget(self.combo_exec)
+        self.combo_auto_model_EP.setCurrentIndex(idx)
+        self.combo_auto_model_EP.currentIndexChanged.connect(self.on_auto_EP_changed)
+        hw_layout.addWidget(self.combo_auto_model_EP)
+        
+        # Auto Model Caching
+        self.auto_cache_group = QButtonGroup(self)
+        self.rb_auto_cache_none = QRadioButton("Unload after use")
+        self.rb_auto_cache_last = QRadioButton("Keep Last Used in Memory")
+        self.rb_auto_cache_all = QRadioButton("Keep All In Memory")
+        self.auto_cache_group.addButton(self.rb_auto_cache_none, 0)
+        self.auto_cache_group.addButton(self.rb_auto_cache_last, 1)
+        self.auto_cache_group.addButton(self.rb_auto_cache_all, 2)
+        self.rb_auto_cache_none.setToolTip("Only select if memory constrained.")
+        self.rb_auto_cache_last.setToolTip("Recommended for good balance between efficiency and memory usage.")
+        self.rb_auto_cache_all.setToolTip("Keeps every used automatic model loaded in memory for the session.\nCan cause issues on low VRAM GPUs.")
+        hw_layout.addWidget(self.rb_auto_cache_none)
+        hw_layout.addWidget(self.rb_auto_cache_last)
+        hw_layout.addWidget(self.rb_auto_cache_all)
+        self.auto_cache_group.buttonToggled.connect(self.on_auto_cache_changed)
 
-        hw_layout.addWidget(self.combo_exec)
-
-
+        # Add all to layout
+        sl.addWidget(self.hw_options_frame)
+        last_auto_cache_mode = self.settings.value("auto_ram_cache_mode", 1, type=int)
+        self.auto_cache_group.blockSignals(True)
+        self.auto_cache_group.button(last_auto_cache_mode).setChecked(True)
+        self.auto_cache_group.blockSignals(False)
+        self.trt_cache_option_visibility() # Initial check for TensorRT
 
         # Rest of UI
         h_models_header = QHBoxLayout()
@@ -1455,7 +1473,7 @@ class BackgroundRemoverGUI(QMainWindow):
     def update_cached_model_icons(self):
         """Update drive icons based on disk cache."""
         # Check Whole Image Models
-        current_data = self.combo_exec.currentData() # (ProviderStr, Opts, ShortCode)
+        current_data = self.combo_auto_model_EP.currentData() # (ProviderStr, Opts, ShortCode)
         if current_data:
             short_code = current_data[2]
             drive_icon = self._get_cached_icon() 
@@ -1468,7 +1486,7 @@ class BackgroundRemoverGUI(QMainWindow):
                     self.combo_whole.setItemIcon(i, QIcon()) # Set blank icon if not cached
 
         # Check SAM Models (Same logic)
-        current_sam_data = self.combo_sam_exec.currentData()
+        current_sam_data = self.combo_sam_model_EP.currentData()
         if current_sam_data:
             sam_code = current_sam_data[2]
             drive_icon = self._get_cached_icon()
@@ -1480,12 +1498,12 @@ class BackgroundRemoverGUI(QMainWindow):
                 else:
                     self.combo_sam.setItemIcon(i, QIcon())
 
-    def on_exec_changed(self, index):
+    def on_auto_EP_changed(self, index):
         """
         Handle change in automatic image execution provider.
         """
         # Retrieve from combobox userdata (ProviderStr, OptionsDict, ShortCode)
-        data = self.combo_exec.itemData(index)
+        data = self.combo_auto_model_EP.itemData(index)
         if not data: return
         prov_str, prov_opts, short_code = data
 
@@ -1501,34 +1519,40 @@ class BackgroundRemoverGUI(QMainWindow):
 
         self.update_cached_model_icons()
 
-        self.status_label.setText(f"Whole-image provider switched to: {short_code.upper()}")
+        self.status_label.setText(f"Automatic model provider switched to: {short_code.upper()}")
+        self.trt_cache_option_visibility()
+
+    def trt_cache_option_visibility(self):
+        """
+        Disables 'No Caching' if TensorRT is selected for auto models.
+        Unsure if this should be also used for OpenVINO, but for now allow unloading
+        """
+        data = self.combo_auto_model_EP.currentData()
+        if not data: return
+        prov_str, _, _ = data
+
+        is_trt = (prov_str == "TensorrtExecutionProvider")
+        self.rb_auto_cache_none.setEnabled(not is_trt)
+        self.rb_auto_cache_none.setVisible(not is_trt)
+
+        # If TRT is selected and "No Cache" was active, switch to "Keep Last"
+        if is_trt and self.rb_auto_cache_none.isChecked():
+            self.rb_auto_cache_last.setChecked(True)
 
 
-    def on_ram_cache_changed(self, button, checked):
+    def on_auto_cache_changed(self, button, checked):
         if checked:
-            
             # Clear loaded models regardless of option chosen
             # to allow easy unloading and consistent behaviour
             if self.loaded_whole_models:
-                print("RAM Cache option changed, clearing automatic model cache.")
+                print("Auto model memory cache option changed, clearing cache.")
                 self.loaded_whole_models.clear()
-            
-            if self.loaded_sam_models:
-                print("RAM Cache option changed, clearing SAM model cache.")
-                self.loaded_sam_models.clear()
+                gc.collect()
+                self.status_label.setText("Automatic model cache cleared.")
 
-            if hasattr(self, 'sam_encoder'): del self.sam_encoder
-            if hasattr(self, 'sam_decoder'): del self.sam_decoder
-            self.sam_model_path = None
-            if hasattr(self, "encoder_output"): delattr(self, "encoder_output")
+            cache_mode = self.auto_cache_group.id(button)
 
-            gc.collect()
-            
-            self.status_label.setText("Model cache cleared.")
-            
-            cache_mode = self.ram_cache_group.id(button)
-
-            if cache_mode == 2:
+            if cache_mode == 2: # Keep all
                 agreed = self.settings.value("agreed_high_vram_warning", False, type=bool)
                 if not agreed:
                     ret = QMessageBox.warning(self, "High VRAM Warning",
@@ -1539,17 +1563,52 @@ class BackgroundRemoverGUI(QMainWindow):
                     if ret == QMessageBox.StandardButton.Yes:
                         self.settings.setValue("agreed_high_vram_warning", True)
                     else:
-                        self.rb_cache_last.setChecked(True) # Revert to cache last model used
+                        # Revert to "Keep Last"
+                        self.rb_auto_cache_last.setChecked(True)
                         return
 
-            self.settings.setValue("ram_cache_mode", cache_mode)
+            self.settings.setValue("auto_ram_cache_mode", cache_mode)
 
-    def on_sam_exec_changed(self, index):
+    def on_sam_cache_changed(self, button, checked):
+        if checked:
+            # Clear loaded models regardless of option chosen
+            # to allow easy unloading and consistent behaviour
+            if self.loaded_sam_models:
+                print("SAM RAM Cache option changed, clearing cache.")
+                self.loaded_sam_models.clear()
+
+            if hasattr(self, 'sam_encoder'): del self.sam_encoder
+            if hasattr(self, 'sam_decoder'): del self.sam_decoder
+            self.sam_model_path = None
+            if hasattr(self, "encoder_output"): delattr(self, "encoder_output")
+            gc.collect()
+            self.status_label.setText("SAM model cache cleared.")
+
+            cache_mode = self.sam_cache_group.id(button)
+
+            if cache_mode == 2: # Keep all
+                agreed = self.settings.value("agreed_high_vram_warning", False, type=bool)
+                if not agreed:
+                    ret = QMessageBox.warning(self, "High VRAM Warning",
+                        "Keeping multiple used models in memory with GPU acceleration can fill VRAM "
+                        "and cause the application to crash.\n\n"
+                        "Are you sure you want to enable this?",
+                        QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+                    if ret == QMessageBox.StandardButton.Yes:
+                        self.settings.setValue("agreed_high_vram_warning", True)
+                    else:
+                        # Revert to "Keep Last"
+                        self.rb_sam_cache_last.setChecked(True)
+                        return
+
+            self.settings.setValue("sam_ram_cache_mode", self.sam_cache_group.id(button))
+
+    def on_sam_EP_changed(self, index):
         """
         Handle change in SAM execution provider.
         """
         # Retrieve from combobox userdata (ProviderStr, OptionsDict, ShortCode)
-        data = self.combo_sam_exec.itemData(index)
+        data = self.combo_sam_model_EP.itemData(index)
         if not data: return
         prov_str, prov_opts, short_code = data
 
@@ -1795,7 +1854,7 @@ class BackgroundRemoverGUI(QMainWindow):
                 # This logic is adapted from run_automatic_model to only load the session
                 model_name = self.combo_whole.currentText()
                 model_path = os.path.join(MODEL_ROOT_DIR, model_name + ".onnx")
-                prov_str, prov_opts, prov_code = self.combo_exec.currentData()
+                prov_str, prov_opts, prov_code = self.combo_auto_model_EP.currentData()
                 cache_key = f"{model_name}_{prov_code}"
 
                 if cache_key not in self.loaded_whole_models:
@@ -1903,7 +1962,7 @@ class BackgroundRemoverGUI(QMainWindow):
 
         # Retrieve provider data from the SAM combobox
         # Data format: (ProviderStr, OptionsDict, ShortCode)
-        data = self.combo_sam_exec.currentData()
+        data = self.combo_sam_model_EP.currentData()
         if not data:
             # Fallback if something is wrong
             prov_str, prov_opts, prov_code = ("CPUExecutionProvider", {}, "cpu")
@@ -1911,7 +1970,7 @@ class BackgroundRemoverGUI(QMainWindow):
             prov_str, prov_opts, prov_code = data
 
         cache_key = f"{model_name}_{prov_code}"
-        cache_mode = self.ram_cache_group.checkedId()
+        cache_mode = self.sam_cache_group.checkedId()
         
         if cache_mode > 0 and cache_key in self.loaded_sam_models:
             self.sam_encoder, self.sam_decoder = self.loaded_sam_models[cache_key]
@@ -2326,12 +2385,12 @@ class BackgroundRemoverGUI(QMainWindow):
         if crop.width == 0 or crop.height == 0:
             return
 
-        prov_str, prov_opts, prov_code = self.combo_exec.currentData()
+        prov_str, prov_opts, prov_code = self.combo_auto_model_EP.currentData()
 
         session = None
         cache_key = f"{model_name}_{prov_code}"
-        load_time = 0.0
-        cache_mode = self.ram_cache_group.checkedId()
+        load_time = 0.0 
+        cache_mode = self.auto_cache_group.checkedId()
 
         if cache_mode > 0 and cache_key in self.loaded_whole_models:
             session = self.loaded_whole_models[cache_key]
