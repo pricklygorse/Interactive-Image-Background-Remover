@@ -16,7 +16,7 @@ from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QH
                              QProgressBar, QStyle)
 from PyQt6.QtCore import Qt, QTimer, QPointF, QRectF, QSettings, QPropertyAnimation, QEasingCurve
 from PyQt6.QtGui import (QPixmap, QImage, QColor, QPainter, QPainterPath, QPen, QBrush,
-                         QKeySequence, QShortcut, QCursor, QIcon)
+                         QKeySequence, QShortcut, QCursor, QIcon, QPalette)
 
 from PIL import Image, ImageOps, ImageDraw, ImageEnhance, ImageGrab, ImageFilter, ImageChops
 import onnxruntime as ort
@@ -216,7 +216,8 @@ class CollapsibleFrame(QFrame):
         self.toggle_button = QPushButton(title)
         if tooltip:
             self.toggle_button.setToolTip(tooltip)
-        self.toggle_button.setStyleSheet("text-align: left; padding: 5px;")
+        # setting this style overrides dark mode palette
+        #self.toggle_button.setStyleSheet("text-align: left; padding: 5px;")
         self.toggle_button.setFlat(True)
         self.toggle_button.clicked.connect(self.toggle_content)
         
@@ -239,6 +240,7 @@ class CollapsibleFrame(QFrame):
         self.is_collapsed = True
         self.content_frame.setVisible(False)
         self.content_frame.setMaximumHeight(0)
+        
         self.toggle_button.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_TitleBarUnshadeButton))
 
     def layout_for_content(self):
@@ -276,6 +278,41 @@ class CollapsibleFrame(QFrame):
                                            Qt.ConnectionType.SingleShotConnection)
             
             self.animation.start()
+
+        self.collapsible_set_light_dark()
+
+
+    def collapsible_set_light_dark(self):
+        """Updates the expand/collapse icon, inverting it for dark mode."""
+
+        pixmap_enum = (
+            QStyle.StandardPixmap.SP_TitleBarUnshadeButton
+            if self.is_collapsed
+            else QStyle.StandardPixmap.SP_TitleBarShadeButton
+        )
+        
+        icon = self.style().standardIcon(pixmap_enum)
+
+        is_dark_mode = app.palette().color(QPalette.ColorRole.Window).lightness() < 128
+
+        if is_dark_mode:
+            pixmap = icon.pixmap(self.toggle_button.iconSize())
+            if not pixmap.isNull():
+                img = pixmap.toImage()
+                img.invertPixels(QImage.InvertMode.InvertRgb)
+                icon = QIcon(QPixmap.fromImage(img))
+            # lighten the border
+            self.setStyleSheet("""
+                CollapsibleFrame {
+                    border: 1px solid #707070; /* Visible gray border */
+                    border-radius: 3px;
+                }
+            """)
+        else:
+            self.setStyleSheet("")
+
+
+        self.toggle_button.setIcon(icon)
 
 class SynchronizedGraphicsView(QGraphicsView):
     def __init__(self, scene, name="View", parent=None):
@@ -918,6 +955,10 @@ class BackgroundRemoverGUI(QMainWindow):
         QTimer.singleShot(10, self.update_cached_model_icons)
         # Delay model pre-loading
         QTimer.singleShot(100, self.preload_startup_models)
+        
+        saved_theme = self.settings.value("theme", "light")
+        self.set_theme(saved_theme)
+
 
     def init_ui(self):
         self.setAcceptDrops(True)
@@ -941,20 +982,29 @@ class BackgroundRemoverGUI(QMainWindow):
         scroll_widget.setFixedWidth(sidebar_container.width()) # Constrain content width
         scroll_area.setWidget(scroll_widget)
         sidebar_layout.addWidget(scroll_area)
+
         nav = QHBoxLayout()
-        btn_o = QPushButton("Open"); btn_o.clicked.connect(self.load_image_dialog)
-        btn_c = QPushButton("Clipboard"); btn_c.clicked.connect(self.load_clipboard)
-        self.btn_next = QPushButton("Next >")
-        self.btn_next.clicked.connect(self.load_next_image)
-        nav.addWidget(btn_o); nav.addWidget(btn_c); nav.addWidget(self.btn_next)
+        btn_open_file = QPushButton("Open"); btn_open_file.clicked.connect(self.load_image_dialog)
+        btn_open_clipboard = QPushButton("Clipboard"); btn_open_clipboard.clicked.connect(self.load_clipboard)
+        self.btn_prev_image = QPushButton("<<")
+        self.btn_prev_image.setMaximumWidth(40)
+        self.btn_prev_image.setToolTip("Load Previous Image (Left Arrow Key)")
+        self.btn_prev_image.clicked.connect(self.load_previous_image)
+        self.btn_next_image = QPushButton(">>")
+        self.btn_next_image.setMaximumWidth(40)
+        self.btn_next_image.setToolTip("Load Next Image (Right Arrow Key)")
+        self.btn_next_image.clicked.connect(self.load_next_image)
+        nav.addWidget(btn_open_file); nav.addWidget(btn_open_clipboard); nav.addWidget(self.btn_prev_image); nav.addWidget(self.btn_next_image)
         sl.addLayout(nav)
+
+        self.update_prev_next_button_state()
         
-        btn_ed = QPushButton("Edit Image"); btn_ed.clicked.connect(self.open_image_editor)
-        btn_lm = QPushButton("Load Mask"); btn_lm.clicked.connect(self.load_mask_dialog)
+        btn_edit_image = QPushButton("Edit Image"); btn_edit_image.clicked.connect(self.open_image_editor)
+        btn_load_mask = QPushButton("Load Mask"); btn_load_mask.clicked.connect(self.load_mask_dialog)
 
         h_edit_load_buttons = QHBoxLayout()
-        h_edit_load_buttons.addWidget(btn_ed)
-        h_edit_load_buttons.addWidget(btn_lm)
+        h_edit_load_buttons.addWidget(btn_edit_image)
+        h_edit_load_buttons.addWidget(btn_load_mask)
         sl.addLayout(h_edit_load_buttons)
 
 
@@ -971,7 +1021,7 @@ class BackgroundRemoverGUI(QMainWindow):
         
         # SAM EP Combo
         labelS = QLabel("<b>Interactive SAM Model Provider:</b>")
-        labelS.setContentsMargins(3, 0, 0, 0)   # push right by 10px
+        labelS.setContentsMargins(3, 0, 0, 0)   
         hw_layout.addWidget(labelS)
         self.combo_sam_model_EP = QComboBox()
         for label, provider_str, opts, short_code in self.available_eps:
@@ -1122,15 +1172,20 @@ class BackgroundRemoverGUI(QMainWindow):
         lbl_options = QLabel("<b>Options:</b>")
         lbl_options.setContentsMargins(3, 0, 0, 0)
         sl.addWidget(lbl_options)
-        self.combo_bg = QComboBox()
-        
+
+        bg_layout = QHBoxLayout()
+        bg_label = QLabel("Background:")
+        bg_label.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Preferred)
+        bg_layout.addWidget(bg_label)
+        self.combo_bg_color = QComboBox()
         colors = ["Transparent", "White", "Black", "Red", "Blue", 
                   "Orange", "Yellow", "Green", "Grey", 
                   "Lightgrey", "Brown", "Blurred (Slow)"]
-        self.combo_bg.addItems(colors)
-        self.combo_bg.currentTextChanged.connect(self.handle_bg_change)
-        sl.addWidget(self.combo_bg)
-        
+        self.combo_bg_color.addItems(colors)
+        self.combo_bg_color.currentTextChanged.connect(self.handle_bg_change)
+        bg_layout.addWidget(self.combo_bg_color)
+        sl.addLayout(bg_layout)
+
         self.chk_paint = QCheckBox("Paintbrush (P)"); self.chk_paint.toggled.connect(self.toggle_paint_mode)
         sl.addWidget(self.chk_paint)
         
@@ -1191,8 +1246,18 @@ class BackgroundRemoverGUI(QMainWindow):
         sl.addWidget(btn_save)
         btn_qsave = QPushButton("Quick Save JPG"); btn_qsave.clicked.connect(self.quick_save_jpeg)
         sl.addWidget(btn_qsave)
+
+        bottom_buttons_layout = QHBoxLayout()
+
         btn_help = QPushButton("Help / About"); btn_help.clicked.connect(self.show_help)
-        sl.addWidget(btn_help)
+        bottom_buttons_layout.addWidget(btn_help)
+
+        self.btn_theme_toggle = QPushButton("🔆")
+        self.btn_theme_toggle.setToolTip("Toggle Dark/Light Mode")
+        self.btn_theme_toggle.clicked.connect(self.toggle_light_dark_mode)
+        self.btn_theme_toggle.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Preferred)
+        bottom_buttons_layout.addWidget(self.btn_theme_toggle)
+        sl.addLayout(bottom_buttons_layout)
 
         self.splitter = QSplitter(Qt.Orientation.Horizontal)
         self.splitter.setChildrenCollapsible(False)
@@ -1274,6 +1339,73 @@ class BackgroundRemoverGUI(QMainWindow):
         self.toggle_splitter_orientation(initial_setup=True)
 
 
+    def set_theme(self, mode):
+        """Applies light or dark mode and saves the preference.
+        Unfortunately QApplication.StyleHints.setStylesheet(Qt.Color.Dark)
+        doesn't change the theme after widgets are drawn (outside of if name==main)
+        So manual theming is required
+        """
+        app = QApplication.instance()
+        if not app: return
+
+        if mode == 'dark':
+            app.setStyle("Fusion")
+            dark_palette = QPalette()
+            dark_color = QColor(45, 45, 45)
+            disabled_color = QColor(127, 127, 127)
+            dark_palette.setColor(QPalette.ColorRole.Window, dark_color)
+            dark_palette.setColor(QPalette.ColorRole.WindowText, Qt.GlobalColor.white)
+            dark_palette.setColor(QPalette.ColorRole.Base, QColor(25, 25, 25))
+            dark_palette.setColor(QPalette.ColorRole.AlternateBase, dark_color)
+            dark_palette.setColor(QPalette.ColorRole.ToolTipBase, Qt.GlobalColor.white)
+            dark_palette.setColor(QPalette.ColorRole.ToolTipText, Qt.GlobalColor.white)
+            dark_palette.setColor(QPalette.ColorRole.Text, Qt.GlobalColor.white)
+            dark_palette.setColor(QPalette.ColorRole.Button, dark_color)
+            dark_palette.setColor(QPalette.ColorRole.ButtonText, Qt.GlobalColor.white)
+            dark_palette.setColor(QPalette.ColorRole.BrightText, Qt.GlobalColor.red)
+            dark_palette.setColor(QPalette.ColorRole.Link, QColor(42, 130, 218))
+            dark_palette.setColor(QPalette.ColorRole.Highlight, QColor(42, 130, 218))
+            dark_palette.setColor(QPalette.ColorRole.HighlightedText, Qt.GlobalColor.black)
+            dark_palette.setColor(QPalette.ColorGroup.Disabled, QPalette.ColorRole.WindowText, disabled_color)
+            dark_palette.setColor(QPalette.ColorGroup.Disabled, QPalette.ColorRole.Text, disabled_color)
+            dark_palette.setColor(QPalette.ColorGroup.Disabled, QPalette.ColorRole.ButtonText, disabled_color)
+            dark_palette.setColor(QPalette.ColorGroup.Disabled, QPalette.ColorRole.Highlight, QColor(80, 80, 80))
+            dark_palette.setColor(QPalette.ColorGroup.Disabled, QPalette.ColorRole.HighlightedText, disabled_color)
+            app.setPalette(dark_palette)
+
+            hatch_color = QColor(60, 60, 60)
+            self.view_input.setBackgroundBrush(QBrush(hatch_color, Qt.BrushStyle.DiagCrossPattern))
+            self.view_output.setBackgroundBrush(QBrush(hatch_color, Qt.BrushStyle.DiagCrossPattern))
+
+            self.btn_theme_toggle.setText("🌙")
+            self.btn_theme_toggle.setToolTip("Switch to Light Mode")
+            self.settings.setValue("theme", "dark")
+        else: # light mode
+            app.setStyle("Fusion")
+            app.setPalette(QApplication.style().standardPalette())
+            
+            hatch_color = QColor(220, 220, 220)
+            self.view_input.setBackgroundBrush(QBrush(hatch_color, Qt.BrushStyle.DiagCrossPattern))
+            self.view_output.setBackgroundBrush(QBrush(hatch_color, Qt.BrushStyle.DiagCrossPattern))
+            
+            self.btn_theme_toggle.setText("🔆")
+            self.btn_theme_toggle.setToolTip("Switch to Dark Mode")
+            self.settings.setValue("theme", "light")
+
+        # Tweaks for collapsible menu and splitter toggle button
+        self.hw_options_frame.collapsible_set_light_dark()
+        self.toggle_splitter_orientation(initial_setup=True)
+
+    def toggle_light_dark_mode(self):
+        """Switches from the current theme to the other."""
+        app = QApplication.instance()
+        if not app: return
+
+        current_bg = app.palette().color(QPalette.ColorRole.Window)
+        if current_bg.lightness() < 128:
+            self.set_theme('light')
+        else:
+            self.set_theme('dark')
 
     def _warmup_sam_trt(self, max_points=SAM_TRT_WARMUP_POINTS):
         """
@@ -1407,7 +1539,7 @@ class BackgroundRemoverGUI(QMainWindow):
 
         icon_pixmap_enum = QStyle.StandardPixmap.SP_ToolBarHorizontalExtensionButton if target_orientation == Qt.Orientation.Vertical else QStyle.StandardPixmap.SP_ToolBarVerticalExtensionButton
         
-        is_dark_mode = QApplication.styleHints().colorScheme() == Qt.ColorScheme.Dark
+        is_dark_mode = app.palette().color(QPalette.ColorRole.Window).lightness() < 128
 
         if is_dark_mode:
             icon = self.style().standardIcon(icon_pixmap_enum)
@@ -1740,7 +1872,9 @@ class BackgroundRemoverGUI(QMainWindow):
         QShortcut(QKeySequence("Ctrl+Y"), self).activated.connect(self.redo)
         QShortcut(QKeySequence("P"), self).activated.connect(self.chk_paint.toggle)
         QShortcut(QKeySequence("Ctrl+S"), self).activated.connect(self.save_image)
-        QShortcut(QKeySequence("Ctrl+Shift+S"), self).activated.connect(self.quick_save_jpeg)
+        QShortcut(QKeySequence("Ctrl+Shift+S"), self).activated.connect(self.quick_save_jpeg) # Quick Save JPG
+        QShortcut(QKeySequence(Qt.Key.Key_Left), self).activated.connect(self.load_previous_image) # Previous Image
+        QShortcut(QKeySequence(Qt.Key.Key_Right), self).activated.connect(self.load_next_image) # Next Image
         
         QShortcut(QKeySequence("U"), self).activated.connect(lambda: self.run_automatic_model("u2net"))
         QShortcut(QKeySequence("I"), self).activated.connect(lambda: self.run_automatic_model("isnet"))
@@ -1765,8 +1899,8 @@ class BackgroundRemoverGUI(QMainWindow):
             self.init_working_buffers()
             self.update_input_view()
             self.update_output_preview()
-            self.status_label.setText(f"Loaded: {os.path.basename(path)}")
-            self.update_next_button_state()
+            self.status_label.setText(f"Loaded: {os.path.basename(path)} [{self.current_image_index + 1}/{len(self.image_paths)}]")
+            self.update_prev_next_button_state()
             self.update_window_title()
         except Exception as e: QMessageBox.critical(self, "Error", str(e))
 
@@ -1784,10 +1918,10 @@ class BackgroundRemoverGUI(QMainWindow):
             self.init_working_buffers()
             self.update_input_view()
             self.update_output_preview()
-            self.status_label.setText("Loaded from Clipboard")
+            self.status_label.setText("Loaded from Clipboard [1/1]")
             self.update_window_title()
             if hasattr(self, 'update_next_button_state'):
-                self.update_next_button_state()
+                self.update_prev_next_button_state()
             return
 
         QMessageBox.information(self, "Clipboard Empty", 
@@ -1801,7 +1935,7 @@ class BackgroundRemoverGUI(QMainWindow):
             self.current_image_index = 0
             self.load_image(fnames[0])
             if hasattr(self, 'update_next_button_state'):
-                self.update_next_button_state()
+                self.update_prev_next_button_state()
 
     def load_mask_dialog(self):
         fname, _ = QFileDialog.getOpenFileName(self, "Open Mask", "", "Images (*.png)")
@@ -1816,6 +1950,12 @@ class BackgroundRemoverGUI(QMainWindow):
         if self.image_paths and self.image_paths[0] != "Clipboard" and len(self.image_paths) > 1:
             if self.current_image_index < len(self.image_paths) - 1:
                 self.current_image_index += 1
+                self.load_image(self.image_paths[self.current_image_index])
+
+    def load_previous_image(self):
+        if self.image_paths and self.image_paths[0] != "Clipboard" and len(self.image_paths) > 1:
+            if self.current_image_index > 0:
+                self.current_image_index -= 1
                 self.load_image(self.image_paths[self.current_image_index])
 
     
@@ -1869,17 +2009,20 @@ class BackgroundRemoverGUI(QMainWindow):
                     except Exception as e:
                         print(f"Failed to pre-load automatic model '{model_name}': {e}")
 
-    def update_next_button_state(self):
+    def update_prev_next_button_state(self):
         if not self.image_paths:
-            self.btn_next.setEnabled(False)
+            self.btn_next_image.setEnabled(False)
+            self.btn_prev_image.setEnabled(False)
             return
 
         is_clipboard = (self.image_paths[0] == "Clipboard")
-        has_more_images = (self.current_image_index < len(self.image_paths) - 1)
         
-        self.btn_next.setEnabled(has_more_images and not is_clipboard)
+        self.btn_next_image.setEnabled(self.current_image_index < len(self.image_paths) - 1 and not is_clipboard)
+        self.btn_prev_image.setEnabled(self.current_image_index > 0 and not is_clipboard)
 
+        
     def _sanitise_filename_for_windows(self, path: str) -> str:
+
         """
         On Windows, strip invalid filename characters from the basename:
         \\/:*?"<>|
@@ -2628,7 +2771,7 @@ class BackgroundRemoverGUI(QMainWindow):
             bg_layer.paste(sl, (off_x, off_y), sl)
             cutout = Image.alpha_composite(bg_layer, cutout)
 
-        bg_txt = self.combo_bg.currentText()
+        bg_txt = self.combo_bg_color.currentText()
         if bg_txt == "Transparent": 
             final = cutout
         elif "Blur" in bg_txt:
@@ -2952,8 +3095,8 @@ Shortcuts:
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
-    # force set app dark scheme on linux, seems to ignore system scheme
-    # app.styleHints().setColorScheme(Qt.ColorScheme.Dark)
+    # Set fusion for consistency across OS. The theme will be loaded from settings.
+    app.setStyle("Fusion")
     window = BackgroundRemoverGUI(sys.argv[1:])
     window.showMaximized()
     sys.exit(app.exec())

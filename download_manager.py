@@ -184,13 +184,6 @@ MODEL_DOWNLOAD_GROUPS = [
                     {"file": "u2net_human_seg.onnx", "url": REMBG_BASE_URL + "u2net_human_seg.onnx", "size_mb": 168.0}
                 ]
             },
-            {   "id": "u2net-portrait-matting",
-                "name": "U2Net-Portrait-Matting",
-                "description": "A U2Net model optimised for human portraits with a focus on high-quality matting, especially for hair separation.",
-                "files": [
-                    {"file": "u2net-portrait-matting.onnx", "url": REMBG_BASE_URL + "u2net-portrait-matting.onnx", "size_mb": 168.0}
-                ]
-            },
             {   "id": "isnet-anime",
                 "name": "ISNet-Anime",
                 "description": "A high-accuracy segmentation model specifically for anime characters.",
