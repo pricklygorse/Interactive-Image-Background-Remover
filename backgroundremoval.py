@@ -2565,10 +2565,6 @@ class BackgroundRemoverGUI(QMainWindow):
             self.set_loading(True, f"Loading and running {model_name} on {prov_code.upper()}...")
             t_start = timer()
             try:
-                session = self._create_inference_session(model_path, prov_str, prov_opts, model_name)
-                load_time = (timer() - t_start) * 1000
-                self.update_cached_model_icons()
-
                 if cache_mode == 1: # Cache Last
                     # Clear previous models before adding the new one
                     if self.loaded_whole_models:
@@ -2576,9 +2572,12 @@ class BackgroundRemoverGUI(QMainWindow):
                             del sess
                         self.loaded_whole_models.clear()
                         gc.collect()
-                    self.loaded_whole_models[cache_key] = session
-                elif cache_mode == 2: # Cache All
-                    self.loaded_whole_models[cache_key] = session
+                
+                session = self._create_inference_session(model_path, prov_str, prov_opts, model_name)
+                load_time = (timer() - t_start) * 1000
+                self.update_cached_model_icons()
+
+                self.loaded_whole_models[cache_key] = session
 
             except Exception as e:
                 self.set_loading(False, "Model load failed")
