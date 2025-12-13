@@ -44,7 +44,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install pyinstaller pyqt6 ${{ matrix.config.ort_package }}
-          pip install pillow numpy opencv-python
+          pip install pillow numpy opencv-python requests
 
       - name: Build executable (Linux/Windows)
         if: runner.os != 'macOS'

@@ -4,3 +4,4 @@ numpy==1.26.4
 onnxruntime==1.18.1
 opencv-python==4.10.0.84
 pyqt6
+requests
