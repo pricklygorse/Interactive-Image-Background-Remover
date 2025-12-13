@@ -1,2 +1,7 @@
 Models/*.onnx
 Models/cache/*
+/*.jpg
+/*.JPG
+/*.png
+testing/*
+*__pycache__*
