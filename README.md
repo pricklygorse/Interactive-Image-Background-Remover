@@ -1,6 +1,6 @@
 # Interactive Image Background Remover
 
-Interactive Background Remover is a user-friendly tool designed to remove backgrounds from images using a combination of interactive models (Segment Anything) and automatic whole-image models (such as u2net, disnet, rmbg, and BiRefNet). This allows you to refine and fine tune your background removal, in a similar way to apps like Photoroom, instead of only running models on the entire image.
+Interactive Background Remover is a user-friendly tool designed to remove backgrounds from images using a combination of interactive models (Segment Anything) and automatic whole-image models (such as u2net, disnet, rmbg, and BiRefNet). This allows you to refine and fine tune your background removal, similarly to apps like Photoroom, instead of only running models on the entire image.
 
 ![Screenshot of main window](Images/main_image.jpg)
 
@@ -11,6 +11,7 @@ Interactive Background Remover is a user-friendly tool designed to remove backgr
 - **Zoom and Pan**: Zoom in on specific parts of the image and pan around for detailed editing. The models are only run on the viewed area so you can incrementally build up an image from higher resolution patches.
 - **Manual Paintbrush Mode**: Manually refine the background removal with a paintbrush tool for areas not covered by the models.
 - **Mask Refinement**: Smooth edges, filter anomalous areas and soften the mask for a natural look. You can directly edit the mask for high fidelity background removal.
+- **Alpha Matting and Trimap Editor**: Refine mask edges for improved accuracy with hair and similar features. You can use different matting models and also edit the trimap for higher quality results.
 - **Drop Shadow**: Basic drop shadow effect for the cutout object.
 - **Background Options**: Choose from various background colors or apply a blurred background effect.
 - **Image Editing**: Includes a built-in image editor and cropper to preprocess images before background removal.
@@ -18,6 +19,7 @@ Interactive Background Remover is a user-friendly tool designed to remove backgr
 - **Save Options**: Save the processed image in various formats (PNG, JPEG, WebP) with customisable quality settings and auto-trim.
 - **Clipboard Support**: Load images directly from the clipboard for quick editing.
 - **Windows, Linux and Mac Builds**: In the Github releases. Mac is currently untested, please let me know
+- **Model Downloader**: Easily download compatible models.
 
 
 ## Installation
@@ -48,53 +50,30 @@ pip install onnxruntime-directml # Microsoft Windows general machine learning (N
 
 ## Model Downloads
 
-This application requires pre-trained background removal/segmentation models in onnx format to function correctly. Please download the necessary models and place them in the Models/ directory. The script checks for models at each start up. 
+This application requires pre-trained background removal/segmentation models in onnx format to function correctly.
+
+The application now includes a model downloader to make getting started very easy.
 
 **Interactive Models**
-- Segment Anything + mobile-sam: [https://huggingface.co/vietanhdev/segment-anything-onnx-models/tree/main](https://huggingface.co/vietanhdev/segment-anything-onnx-models/tree/main)
+- Segment Anything + mobile-sam:
 
-   In the mobile_sam download, rename sam_vit_h_4b8939.decoder.onnx to mobile_sam.decoder.onnx, so there is a matching .encoder and .decoder. 
+I recommend using mobile-sam as it has near instant inference results, and you can zoom into the image for higher resolution masks. I haven't found much benefit to using the larger models.
 
-I recommend just using mobile-sam as it has near instant inference results, and you can zoom into the image for higher resolution masks. I haven't found much benefit to using the larger models.
-
-If using quantised Segment Anything models, these require the .quant suffix before .encoder in the filename, which is the opposite of how they are named when downloaded from the links above.
 
 **Whole Image Models**
-- rembg: [https://huggingface.co/briaai/RMBG-1.4/tree/main/onnx](https://huggingface.co/briaai/RMBG-1.4/tree/main/onnx)
-
-   - Please rename model.onnx to rmbg1_4.onnx
-
-- u2net, disnet, BiRefNet, Segment Anything, and more: [https://github.com/danielgatis/rembg/releases/tag/v0.0.0](https://github.com/danielgatis/rembg/releases/tag/v0.0.0)
-- rmbg2: [https://huggingface.co/briaai/RMBG-2.0/tree/main/onnx](https://huggingface.co/briaai/RMBG-2.0/tree/main/onnx)
-   - Please rename model.onnx to rmbg2.onnx, or the quantised versions to rmbg2_q4.onnx etc
-
-```python
-# partial string match so will also match quantised versions e.g. rmbg2_quant_q4
-sam_models = [
-            "mobile_sam",
-            "sam_vit_b_01ec64", 
-            "sam_vit_h_4b8939",
-            "sam_vit_l_0b3195",
-            ]
-
-whole_models = [
-        "rmbg1_4",
-        "rmbg2",
-        "isnet-general-use",
-        "isnet-anime",
-        "u2net",
-        "u2net_human_seg",
-        "BiRefNet", # matches all birefnet variations
-]
+- rembg 1.4 and 2: [https://huggingface.co/briaai/RMBG-1.4/tree/main/onnx](https://huggingface.co/briaai/RMBG-1.4/tree/main/onnx)
+- u2net
+- disnet
+- BiRefNet 
 ```
 
 ## Usage
 
 ### Launching the Application
 
-Run the rebuilt executables: [Github releases](https://github.com/pricklygorse/Interactive-Image-Background-Remover/releases) 
+Run the prebuilt executables: [Github releases](https://github.com/pricklygorse/Interactive-Image-Background-Remover/releases) 
 
-Run the script from the command line:
+Or run the script from the command line:
 
 ```bash
 python interactive_background_remover.py
@@ -160,8 +139,8 @@ Click "Edit Image" to open the built-in image editor, where you can crop, rotate
 
 ## Troubleshooting
 
-- **No models found**: Ensure that the required models are downloaded and placed in the `Models/` directory.
-- **Performance issues**: Zooming out can be laggy, especially with multiple scroll wheel clicks and multiple effects applied such as blurred background and drop shadow.
+- **No models found**: Ensure that the required models are downloaded and placed in the `Models/` directory. Use the model downloader to ensure the filenames and locations are correct.
+- **Performance issues**: Adding multiple effects can cause slowdown, such as blurred background and drop shadow. The app is currently single-threaded, so running large models can freeze the app temporarily during processing.
 
 # Support Me
 

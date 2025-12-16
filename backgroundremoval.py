@@ -29,6 +29,7 @@ from pymatting import estimate_alpha_cf
 import src.download_manager as download_manager
 from src.ui_widgets import CollapsibleFrame, SynchronisedGraphicsView
 from src.ui_dialogs import SaveOptionsDialog, ImageEditorDialog
+from src.trimap_editor import TrimapEditorDialog
 from src.utils import pil2pixmap, numpy_to_pixmap
 from src.constants import PAINT_BRUSH_SCREEN_SIZE, UNDO_STEPS, SOFTEN_RADIUS, SAM_TRT_WARMUP_POINTS
 
@@ -411,9 +412,9 @@ class BackgroundRemoverGUI(QMainWindow):
         
         self.chk_alpha_matting = QCheckBox("Alpha Matting (Slow, Experimental)")
         self.chk_alpha_matting.setToolTip("Uses a matting algorithm to estimate the transparency of mask edges.\n"
-                                          "This can improve the quality of detailed edges such as hair, especially with binary mask models like SAM.\n"
-                                          "A estimated trimap is generated based on the current model output overlay\n"
-                                          "This is computationally expensive and is only applied when 'Add' or 'Subtract' is clicked.")
+                                          "This can improve the quality of detailed edges such as hair, especially when using binary mask models like SAM.\n"
+                                          "This requires a trimap, either estimated from a SAM or automatic models, or manually drawn.\n"
+                                          "This is computationally expensive and is only applied when 'Add' or 'Subtract' is clicked. Undo if the effect is unsatisfactory")
         sl.addWidget(self.chk_alpha_matting)
 
         self.chk_alpha_matting.toggled.connect(self.handle_alpha_matting_toggle)
@@ -427,17 +428,37 @@ class BackgroundRemoverGUI(QMainWindow):
         am_layout = QVBoxLayout(self.alpha_matting_frame)
         am_layout.setContentsMargins(15, 5, 0, 5) # Indent options slightly
 
-        am_layout.addWidget(QLabel("<b>Matting Algorithm:</b>"))
+        matting_label = QLabel("<b>Matting Algorithm:</b>")
+        matting_tt = "Additional models can be downloaded using the model manager.\nThe default included PyMatting algo can be very slow on large images.\nViTMatte (model downloader) can be much faster and far more accurate"
+        matting_label.setToolTip(matting_tt)
+        am_layout.addWidget(matting_label)
+
         self.combo_matting_algorithm = QComboBox()
+        self.combo_matting_algorithm.setToolTip(matting_tt)
         self.populate_matting_models()
         am_layout.addWidget(self.combo_matting_algorithm)
 
-        self.chk_show_trimap = QCheckBox("Show Estimated Trimap on Input")
-        self.chk_show_trimap.setToolTip("Displays the generated trimap on the input view.\n"
-                                        "White = Foreground, Blue = Unknown (semi transparent, e.g. hair edges), Black = Background")
-        self.chk_show_trimap.toggled.connect(self.toggle_trimap_display)
-        am_layout.addWidget(self.chk_show_trimap)
+        # --- Trimap Source Radio Buttons ---
+        am_layout.addWidget(QLabel("<b>Trimap Source:</b>"))
+        self.trimap_mode_group = QButtonGroup(self)
+        self.rb_trimap_auto = QRadioButton("Automatic (from model mask + sliders)")
+        self.rb_trimap_custom = QRadioButton("Custom (user-drawn)")
+        
+        self.trimap_mode_group.addButton(self.rb_trimap_auto)
+        self.trimap_mode_group.addButton(self.rb_trimap_custom)
+        
+        self.rb_trimap_auto.setChecked(True)
 
+        am_layout.addWidget(self.rb_trimap_auto)
+        am_layout.addWidget(self.rb_trimap_custom)
+        
+        self.trimap_mode_group.buttonToggled.connect(self.on_trimap_mode_changed)
+        
+        # --- Group sliders for easy show/hide ---
+        self.auto_trimap_sliders_widget = QWidget()
+        sliders_layout = QVBoxLayout(self.auto_trimap_sliders_widget)
+        sliders_layout.setContentsMargins(0, 5, 0, 0)
+        
         def make_am_slider_row(lbl_text, min_v, max_v, def_v):
             h_layout = QHBoxLayout()
             label = QLabel(f"{lbl_text}: {def_v}")
@@ -445,7 +466,6 @@ class BackgroundRemoverGUI(QMainWindow):
             slider = QSlider(Qt.Orientation.Horizontal)
             slider.setRange(min_v, max_v)
             slider.setValue(def_v)
-            # Use the new throttled update function
             slider.valueChanged.connect(lambda val, l=label, txt=lbl_text: (l.setText(f"{txt}: {val}"), self.update_trimap_preview_throttled()))
             h_layout.addWidget(label)
             h_layout.addWidget(slider)
@@ -453,14 +473,28 @@ class BackgroundRemoverGUI(QMainWindow):
 
         self.lbl_fg_erode, self.sl_fg_erode, fg_layout = make_am_slider_row("FG Shrink", 0, 100, 15)
         self.sl_fg_erode.setToolTip("Shrinks the solid foreground area to create the 'unknown' region.")
-        am_layout.addLayout(fg_layout)
+        sliders_layout.addLayout(fg_layout)
 
         self.lbl_bg_erode, self.sl_bg_erode, bg_layout = make_am_slider_row("BG Shrink", 0, 100, 15)
         self.sl_bg_erode.setToolTip("Shrinks the solid background area to create the 'unknown' region.")
-        am_layout.addLayout(bg_layout)
+        sliders_layout.addLayout(bg_layout)
+
+        am_layout.addWidget(self.auto_trimap_sliders_widget)
+        
+        self.btn_edit_trimap = QPushButton("Open Trimap Editor...")
+        self.btn_edit_trimap.clicked.connect(self.open_trimap_editor)
+        self.btn_edit_trimap.setVisible(False)
+        am_layout.addWidget(self.btn_edit_trimap)
+        
+        self.chk_show_trimap = QCheckBox("Show Trimap on Input")
+        self.chk_show_trimap.setToolTip("Displays the generated trimap on the input view.\n"
+                                        "White = Foreground, Blue = Unknown (semi transparent, e.g. hair edges), Black = Background")
+        self.chk_show_trimap.toggled.connect(self.toggle_trimap_display)
+        am_layout.addWidget(self.chk_show_trimap)
+
 
         sl.addWidget(self.alpha_matting_frame)
-        self.alpha_matting_frame.hide() # Hidden by default
+        self.alpha_matting_frame.hide()
 
 
         self.chk_shadow = QCheckBox("Drop Shadow")
@@ -1350,6 +1384,10 @@ class BackgroundRemoverGUI(QMainWindow):
         self.undo_history = [self.working_mask.copy()]
         self.redo_history = [] 
         
+        self.last_trimap = None
+        if hasattr(self, 'user_trimap'):
+            del self.user_trimap
+
         if hasattr(self, "encoder_output"): 
             delattr(self, "encoder_output")
         self.last_crop_rect = None 
@@ -2021,6 +2059,47 @@ class BackgroundRemoverGUI(QMainWindow):
     def add_mask(self): self.modify_mask(ImageChops.add)
     def subtract_mask(self): self.modify_mask(ImageChops.subtract)
 
+    def on_trimap_mode_changed(self):
+        """Shows or hides UI elements based on the selected trimap mode."""
+        is_auto = self.rb_trimap_auto.isChecked()
+        
+        self.auto_trimap_sliders_widget.setVisible(is_auto)
+        
+        self.btn_edit_trimap.setVisible(not is_auto)
+        
+        self.update_trimap_preview()
+
+    def open_trimap_editor(self):
+        if not self.original_image:
+            QMessageBox.warning(self, "No Image", "Please load an image first.")
+            return
+
+        initial_trimap = None
+
+        if hasattr(self, 'user_trimap') and self.user_trimap:
+            initial_trimap = self.user_trimap
+        # Otherwise, generate one from the current mask and sliders as a starting point.
+        elif self.model_output_mask:
+            fg_erode = self.sl_fg_erode.value()
+            bg_erode = self.sl_bg_erode.value()
+            trimap_np = self.generate_trimap_from_mask(self.model_output_mask, fg_erode, bg_erode)
+            initial_trimap = Image.fromarray(trimap_np)
+        else:
+            # If there's no mask at all, start with a blank (all unknown) trimap.
+            initial_trimap = Image.new("L", self.original_image.size, 128)
+
+        dialog = TrimapEditorDialog(self.original_image, initial_trimap, self)
+        if dialog.exec():
+            # If the user clicked OK, store the result
+            self.user_trimap = dialog.final_trimap
+            self.last_trimap = np.array(self.user_trimap) 
+            
+            self.rb_trimap_custom.setChecked(True)
+            
+            # Ensure the preview is shown
+            self.chk_show_trimap.setChecked(True)
+            self.status_label.setText("Custom trimap updated.")
+        self.update_trimap_preview()
 
     def update_trimap_preview_throttled(self):
         """Starts a timer to update the trimap preview, preventing too many updates."""
@@ -2045,21 +2124,20 @@ class BackgroundRemoverGUI(QMainWindow):
 
     #@line_profiler.profile
     def update_trimap_preview(self):
-        """Generates and displays the trimap for the current viewport."""
+        """Generates and displays the correct trimap based on the selected source."""
         if not self.model_output_mask or not self.chk_alpha_matting.isChecked() or not self.chk_show_trimap.isChecked():
             self.trimap_overlay_item.setPixmap(QPixmap()) # Clear if not needed
             return
 
-        s_total = timer()
+        trimap_np = None
 
-        fg_erode = self.sl_fg_erode.value()
-        bg_erode = self.sl_bg_erode.value()
-
-        trimap_np = self.generate_trimap_from_mask(
-            self.model_output_mask,
-            fg_erode,
-            bg_erode,
-        )
+        if self.rb_trimap_auto.isChecked():
+            fg_erode = self.sl_fg_erode.value()
+            bg_erode = self.sl_bg_erode.value()
+            trimap_np = self.generate_trimap_from_mask(self.model_output_mask, fg_erode, bg_erode)
+        
+        elif self.rb_trimap_custom.isChecked() and hasattr(self, 'user_trimap'):
+            trimap_np = np.array(self.user_trimap)
 
         if trimap_np is not None:
             # Use a look up table for speed
@@ -2069,10 +2147,9 @@ class BackgroundRemoverGUI(QMainWindow):
             lut[255] = [255, 255, 255, 255] # Foreground -> White
             
             trimap_color = lut[trimap_np]
-
             self.trimap_overlay_item.setPixmap(numpy_to_pixmap(trimap_color))
-
-        print(f"Total trimap preview update time: {(timer() - s_total) * 1000:.2f} ms")
+        else:
+            self.trimap_overlay_item.setPixmap(QPixmap()) # Clear if no valid trimap
 
     def modify_mask(self, op):
         if not self.model_output_mask: return
@@ -2083,12 +2160,19 @@ class BackgroundRemoverGUI(QMainWindow):
             self.set_loading(True, "Applying Alpha Matting...")
             try:
                 image_crop, x_off, y_off = self.get_viewport_crop()
-                mask_crop = m.crop((x_off, y_off, x_off + image_crop.width, y_off + image_crop.height))
+                trimap_np = None
 
-                fg_erode = self.sl_fg_erode.value()
-                bg_erode = self.sl_bg_erode.value()
-
-                trimap_np = self.generate_trimap_from_mask(mask_crop, fg_erode, bg_erode)
+                # Get the correct trimap based on UI selection
+                if self.rb_trimap_custom.isChecked() and hasattr(self, 'user_trimap'):
+                    # If a custom trimap exists and is selected, use it.
+                    trimap_crop_pil = self.user_trimap.crop((x_off, y_off, x_off + image_crop.width, y_off + image_crop.height))
+                    trimap_np = np.array(trimap_crop_pil)
+                else: 
+                    # Fallback to the automatic generation method
+                    mask_crop = m.crop((x_off, y_off, x_off + image_crop.width, y_off + image_crop.height))
+                    fg_erode = self.sl_fg_erode.value()
+                    bg_erode = self.sl_bg_erode.value()
+                    trimap_np = self.generate_trimap_from_mask(mask_crop, fg_erode, bg_erode)
                 
                 selected_algorithm = self.combo_matting_algorithm.currentText()
                 
@@ -2098,8 +2182,6 @@ class BackgroundRemoverGUI(QMainWindow):
                     matted_alpha_crop = self.run_pymatting(image_crop, trimap_np)
 
                 if matted_alpha_crop:
-                    # Create a new mask of the full image size and paste the matted crop into it
-                    # to prevent the old mask outside the viewport being retained
                     new_m = m.copy()
                     paste_area = Image.new("L", matted_alpha_crop.size, 0)
                     new_m.paste(paste_area, (x_off, y_off))
@@ -2114,7 +2196,6 @@ class BackgroundRemoverGUI(QMainWindow):
             m = m.filter(ImageFilter.GaussianBlur(radius=SOFTEN_RADIUS))
             
         if self.chk_post.isChecked():
-            # Convert to boolean array for morphological operations
             arr = np.array(m) > 128
             kernel = np.ones((3,3), np.uint8)
             arr = cv2.erode(cv2.dilate(arr.astype(np.uint8), kernel, iterations=1), kernel, iterations=1).astype(bool)
@@ -2284,6 +2365,13 @@ class BackgroundRemoverGUI(QMainWindow):
 
     def reset_all(self):
         self.clear_overlay()
+
+        # Clear Trimap and reset UI
+        self.last_trimap = None
+        if hasattr(self, 'user_trimap'):
+            del self.user_trimap
+        self.rb_trimap_auto.setChecked(True)
+
         self.add_undo_step()
         self.working_mask = Image.new("L", self.original_image.size, 0)
         self.update_output_preview()
