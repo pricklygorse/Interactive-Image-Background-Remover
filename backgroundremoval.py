@@ -23,7 +23,7 @@ from PIL import Image, ImageOps, ImageDraw, ImageEnhance, ImageGrab, ImageFilter
 import onnxruntime as ort
 
 
-from pymatting import estimate_alpha_cf
+from pymatting import estimate_alpha_cf, estimate_foreground_ml
 
 
 import src.download_manager as download_manager
@@ -495,6 +495,12 @@ class BackgroundRemoverGUI(QMainWindow):
 
         sl.addWidget(self.alpha_matting_frame)
         self.alpha_matting_frame.hide()
+
+        self.chk_estimate_foreground = QCheckBox("Mask Edge Colour Correction (Slow)")
+        self.chk_estimate_foreground.setToolTip("Recalculates edge colors to remove halos or fringes from the original background.\n"
+                                                "Recommended for soft edges such as hair")
+        sl.addWidget(self.chk_estimate_foreground)
+        self.chk_estimate_foreground.toggled.connect(self.update_output_preview)
 
 
         self.chk_shadow = QCheckBox("Drop Shadow")
@@ -2305,8 +2311,34 @@ class BackgroundRemoverGUI(QMainWindow):
 
     def render_output_image(self, shadow_downscale=0.125):
         if not self.original_image: return
-        empty = Image.new("RGBA", self.original_image.size, 0)
-        cutout = Image.composite(self.original_image, empty, self.working_mask)
+        
+        if self.chk_estimate_foreground.isChecked():
+            try:
+                image_rgb_normalized = np.array(self.original_image.convert("RGB")) / 255.0
+                alpha_normalized = np.array(self.working_mask.convert("L")) / 255.0
+
+                self.set_loading(True, "Estimating foreground colour correction")
+                foreground_rgb_normalized = estimate_foreground_ml(image_rgb_normalized, alpha_normalized)
+
+                foreground_rgb = np.clip(foreground_rgb_normalized * 255, 0, 255)
+                alpha_channel = np.clip(alpha_normalized * 255, 0, 255)
+                
+                cutout_array = np.dstack((foreground_rgb, alpha_channel)).astype(np.uint8)
+                
+                cutout = Image.fromarray(cutout_array, "RGBA")
+
+                self.set_loading(False)
+
+            except Exception as e:
+                print(f"Error during foreground estimation: {e}")
+                # Fallback to the standard method if something goes wrong
+                empty = Image.new("RGBA", self.original_image.size, 0)
+                cutout = Image.composite(self.original_image, empty, self.working_mask)
+        
+        else:
+
+            empty = Image.new("RGBA", self.original_image.size, 0)
+            cutout = Image.composite(self.original_image, empty, self.working_mask)
         
         if self.chk_shadow.isChecked():
             op = self.sl_s_op.value()
@@ -2353,7 +2385,7 @@ class BackgroundRemoverGUI(QMainWindow):
             final.alpha_composite(cutout)
         return final
 
-    def update_output_preview(self, *args):
+    def update_output_preview(self):
 
         if self.chk_show_mask.isChecked(): 
             final = self.working_mask.convert("RGBA")
