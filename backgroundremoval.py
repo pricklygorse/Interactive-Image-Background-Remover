@@ -2028,6 +2028,7 @@ class BackgroundRemoverGUI(QMainWindow):
 
     def clear_visible_area(self):
         if not self.model_output_mask: return
+        self.add_undo_step()
         crop, x, y = self.get_viewport_crop()
         vis_mask = Image.new("L", self.original_image.size, 0)
         draw = ImageDraw.Draw(vis_mask)
