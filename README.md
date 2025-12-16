@@ -25,10 +25,11 @@ Interactive Background Remover is a user-friendly tool designed to remove backgr
 ### Prerequisites
 
 - Python 3.x
-- Required Python packages: `Pillow`, `numpy`, `onnxruntime`, `opencv-python`, `PyQt6`, `requests`
+- Required Python packages: `Pillow`, `numpy`, `onnxruntime`, `opencv-python`, `PyQt6`, `requests`, `pymatting`
+
 
 ```bash
-pip install pyqt6 Pillow numpy onnxruntime opencv-python requests
+pip install pyqt6 Pillow numpy onnxruntime opencv-python requests pymatting
 ```
 
 Or download prebuilt executables for Windows, Linux and Mac from the [Github releases](https://github.com/pricklygorse/Interactive-Image-Background-Remover/releases) 

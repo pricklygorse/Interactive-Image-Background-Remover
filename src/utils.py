@@ -23,5 +23,21 @@ def pil2pixmap(im):
 
     return QPixmap.fromImage(qim)
 
+def numpy_to_pixmap(np_array):
+    if np_array is None:
+        return QPixmap()
+    
+    if np_array.dtype != np.uint8:
+        if np_array.max() > 1.0:
+            np_array = (np_array / 255.0)
+        np_array = (np_array * 255).astype(np.uint8)
+
+    h, w, ch = np_array.shape
+    bytes_per_line = ch * w
+    
+    q_image = QImage(np_array.data, w, h, bytes_per_line, QImage.Format.Format_RGBA8888)
+    
+    return QPixmap.fromImage(q_image.copy())
+
 def sigmoid(x):
     return 1 / (1 + np.exp(-x))
