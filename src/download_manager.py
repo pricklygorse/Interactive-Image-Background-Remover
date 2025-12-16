@@ -214,6 +214,26 @@ MODEL_DOWNLOAD_GROUPS = [
             },
         ]
     },
+    {
+        "group_name": "Edge Refinement Models",
+        "type": "edge",
+        "models": [
+            {   "id": "vitmatte_small_composition",
+                "name": "ViTMatte Small (Composition 1k dataset)",
+                "description": "Image Matting with Pretrained Plain Vision Transformers (2023)",
+                "files": [
+                    {"file": "vitmatte_s_composition.onnx", "url":"https://huggingface.co/Xenova/vitmatte-small-composition-1k/resolve/main/onnx/model.onnx?download=true", "size_mb": 104.0},
+                ]
+            },
+            {   "id": "vitmatte_small_composition_quant",
+                "name": "ViTMatte Small (Composition 1k dataset) Quantised",
+                "description": "Image Matting with Pretrained Plain Vision Transformers (2023)",
+                "files": [
+                    {"file": "vitmatte_s_composition_quant.onnx", "url":"https://huggingface.co/Xenova/vitmatte-small-composition-1k/resolve/main/onnx/model_quantized.onnx?download=true", "size_mb": 27.5},
+                ]
+            },
+        ]
+    },
 ]
 
 
@@ -507,6 +527,7 @@ class ModelDownloadDialog(QDialog):
             if self.main_app_instance and hasattr(self.main_app_instance, 'populate_sam_models'):
                 self.main_app_instance.populate_sam_models()
                 self.main_app_instance.populate_whole_models()
+                self.main_app_instance.populate_matting_models()
                 if hasattr(self.main_app_instance, 'update_cached_model_icons'):
                     self.main_app_instance.update_cached_model_icons()
         elif w:

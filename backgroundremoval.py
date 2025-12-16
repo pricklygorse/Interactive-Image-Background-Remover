@@ -133,7 +133,8 @@ class BackgroundRemoverGUI(QMainWindow):
         self.working_mask = None
         self.last_trimap = None
         self.loaded_whole_models = {}
-        self.loaded_sam_models = {} 
+        self.loaded_sam_models = {}
+        self.loaded_matting_models = {} 
         self.model_output_mask = None
 
         self.init_ui()
@@ -409,7 +410,8 @@ class BackgroundRemoverGUI(QMainWindow):
         sl.addWidget(self.chk_soften)
         
         self.chk_alpha_matting = QCheckBox("Alpha Matting (Slow, Experimental)")
-        self.chk_alpha_matting.setToolTip("Uses pymatting to refine the mask edges.\n"
+        self.chk_alpha_matting.setToolTip("Uses a matting algorithm to estimate the transparency of mask edges.\n"
+                                          "This can improve the quality of detailed edges such as hair, especially with binary mask models like SAM.\n"
                                           "A estimated trimap is generated based on the current model output overlay\n"
                                           "This is computationally expensive and is only applied when 'Add' or 'Subtract' is clicked.")
         sl.addWidget(self.chk_alpha_matting)
@@ -424,6 +426,11 @@ class BackgroundRemoverGUI(QMainWindow):
         self.alpha_matting_frame = QFrame()
         am_layout = QVBoxLayout(self.alpha_matting_frame)
         am_layout.setContentsMargins(15, 5, 0, 5) # Indent options slightly
+
+        am_layout.addWidget(QLabel("<b>Matting Algorithm:</b>"))
+        self.combo_matting_algorithm = QComboBox()
+        self.populate_matting_models()
+        am_layout.addWidget(self.combo_matting_algorithm)
 
         self.chk_show_trimap = QCheckBox("Show Estimated Trimap on Input")
         self.chk_show_trimap.setToolTip("Displays the generated trimap on the input view.\n"
@@ -1140,6 +1147,20 @@ class BackgroundRemoverGUI(QMainWindow):
         self.combo_whole.clear()
         if matches: self.combo_whole.addItems(sorted(list(set(matches))))
         else: self.combo_whole.addItem("No Models Found")
+
+    def populate_matting_models(self):
+        self.combo_matting_algorithm.clear()
+        # PyMatting is always an option
+        self.combo_matting_algorithm.addItem("PyMatting (CPU)")
+
+        # Scan for ViTMatte (and in the future, more models)
+        matting_models = ["vitmatte"]
+        if os.path.exists(MODEL_ROOT_DIR):
+            for filename in os.listdir(MODEL_ROOT_DIR):
+                for partial in matting_models:
+                    if partial in filename and filename.endswith(".onnx"):
+                        model_name = filename.replace(".onnx", "")
+                        self.combo_matting_algorithm.addItem(model_name)
 
     def setup_keybindings(self):
         QShortcut(QKeySequence("A"), self).activated.connect(self.add_mask)
@@ -2034,12 +2055,10 @@ class BackgroundRemoverGUI(QMainWindow):
         fg_erode = self.sl_fg_erode.value()
         bg_erode = self.sl_bg_erode.value()
 
-        _, trimap_np = self.generate_alpha_and_trimap(
-            self.original_image, 
-            self.model_output_mask, 
+        trimap_np = self.generate_trimap_from_mask(
+            self.model_output_mask,
             fg_erode,
             bg_erode,
-            generate_alpha=False
         )
 
         if trimap_np is not None:
@@ -2069,11 +2088,21 @@ class BackgroundRemoverGUI(QMainWindow):
                 fg_erode = self.sl_fg_erode.value()
                 bg_erode = self.sl_bg_erode.value()
 
-                matted_alpha_crop, _ = self.generate_alpha_and_trimap(image_crop, mask_crop, fg_erode,
-                    bg_erode, generate_alpha=True)
+                trimap_np = self.generate_trimap_from_mask(mask_crop, fg_erode, bg_erode)
+                
+                selected_algorithm = self.combo_matting_algorithm.currentText()
+                
+                if "vitmatte" in selected_algorithm.lower():
+                    matted_alpha_crop = self.run_vitmatte_inference(image_crop, trimap_np)
+                else: # Default to PyMatting
+                    matted_alpha_crop = self.run_pymatting(image_crop, trimap_np)
 
                 if matted_alpha_crop:
-                    new_m = Image.new("L", m.size, 0)
+                    # Create a new mask of the full image size and paste the matted crop into it
+                    # to prevent the old mask outside the viewport being retained
+                    new_m = m.copy()
+                    paste_area = Image.new("L", matted_alpha_crop.size, 0)
+                    new_m.paste(paste_area, (x_off, y_off))
                     new_m.paste(matted_alpha_crop, (x_off, y_off))
                     m = new_m
             except Exception as e:
@@ -2092,56 +2121,100 @@ class BackgroundRemoverGUI(QMainWindow):
             m = Image.fromarray((arr*255).astype(np.uint8))
         self.working_mask = op(self.working_mask, m)
         self.update_output_preview()
-    
-    #@line_profiler.profile
-    def generate_alpha_and_trimap(self, image_crop_pil, mask_crop_pil, fg_erode_size, bg_erode_size, generate_alpha=True):
-        """
-        Generates a trimap and optionally calculates the alpha matte.
-        Set generate_alpha=False for a fast preview of only the trimap.
-        Returns the alpha matte (as PIL.Image or None) and the trimap (as a NumPy array).
-        """
-        img_np = np.array(image_crop_pil.convert("RGB"))
-        mask_np = np.array(mask_crop_pil)
 
+    def generate_trimap_from_mask(self, mask_pil, fg_erode_size, bg_erode_size):
+        """
+        Generates a three-tone trimap from a binary mask using erosion.
+        Returns the trimap as a NumPy array (0=BG, 128=Unknown, 255=FG).
+        """
+        mask_np = np.array(mask_pil)
         foreground_threshold = 240
         background_threshold = 10
 
         is_foreground = mask_np > foreground_threshold
         is_background = mask_np < background_threshold
 
-        t_start_erode = timer()
         # Erode foreground
         if fg_erode_size > 0:
             fg_kernel = np.ones((fg_erode_size, fg_erode_size), np.uint8)
-            is_foreground_eroded = cv2.erode(is_foreground.astype(np.uint8), fg_kernel, iterations=1, borderType=cv2.BORDER_CONSTANT, borderValue=0)
+            is_foreground_eroded = cv2.erode(is_foreground.astype(np.uint8), fg_kernel, iterations=1)
         else:
             is_foreground_eroded = is_foreground
 
         # Erode background
         if bg_erode_size > 0:
             bg_kernel = np.ones((bg_erode_size, bg_erode_size), np.uint8)
-            is_background_eroded = cv2.erode(is_background.astype(np.uint8), bg_kernel, iterations=1, borderType=cv2.BORDER_CONSTANT, borderValue=1)
+            is_background_eroded = cv2.erode(is_background.astype(np.uint8), bg_kernel, iterations=1)
         else:
             is_background_eroded = is_background
-        t_end_erode = timer()
 
         trimap = np.full(mask_np.shape, dtype=np.uint8, fill_value=128)
         trimap[is_foreground_eroded.astype(bool)] = 255
         trimap[is_background_eroded.astype(bool)] = 0
+        
+        return trimap
 
-        if not generate_alpha:
-            return None, trimap
+    def run_pymatting(self, image_crop_pil, trimap_np):
+        """
+        Calculates the alpha matte using the PyMatting library.
+        Returns the alpha matte as a PIL Image.
+        """
+        img_normalized = np.array(image_crop_pil.convert("RGB")) / 255.0
+        trimap_normalized = trimap_np / 255.0
 
-        img_normalized = img_np / 255.0
-        trimap_normalized = trimap / 255.0
-
-        t_start_matting = timer()
         alpha = estimate_alpha_cf(img_normalized, trimap_normalized)
-        t_end_matting = timer()
-
         alpha = np.clip(alpha * 255, 0, 255).astype(np.uint8)
         
-        return Image.fromarray(alpha, mode="L"), trimap
+        return Image.fromarray(alpha, mode="L")
+
+    def run_vitmatte_inference(self, image_crop_pil, trimap_np):
+        """
+        Runs inference with a ViTMatte ONNX model.
+        Returns the alpha matte as a PIL Image.
+        """
+        model_name = self.combo_matting_algorithm.currentText()
+        prov_str, prov_opts, prov_code = self.combo_auto_model_EP.currentData()
+        cache_key = f"{model_name}_{prov_code}"
+        session = self.loaded_matting_models.get(cache_key)
+
+        # TODO - respect users caching options
+        if session is None:
+            model_path = os.path.join(MODEL_ROOT_DIR, model_name + ".onnx")
+            if not os.path.exists(model_path):
+                raise FileNotFoundError(f"ViTMatte model not found at: {model_path}")
+            
+            self.set_loading(True, f"Loading {model_name}...")
+            session = self._create_inference_session(model_path, prov_str, prov_opts, model_name)
+            self.loaded_matting_models[cache_key] = session
+            self.set_loading(False)
+
+        # Preprocess
+        original_size = image_crop_pil.size
+        trimap_pil = Image.fromarray(trimap_np)
+        
+        # use 1024 for performance, but any multiple of 32 will work
+        # TODO maybe let user choose size. On GPU no reason to restrict users
+        target_size = (1024,1024)
+
+        image_resized = image_crop_pil.convert("RGB").resize(target_size, Image.BILINEAR)
+        trimap_resized = trimap_pil.convert("L").resize(target_size, Image.NEAREST)
+
+        image_np = (np.array(image_resized, dtype=np.float32) / 255.0 - np.array([0.485, 0.456, 0.406])) / np.array([0.229, 0.224, 0.225])
+        trimap_np_resized = np.expand_dims(np.array(trimap_resized, dtype=np.float32) / 255.0, axis=-1)
+        
+        combined = np.concatenate((image_np, trimap_np_resized), axis=2)
+        combined = np.transpose(combined, (2, 0, 1))[np.newaxis, ...].astype(np.float32)
+
+        # Inference
+        input_name = session.get_inputs()[0].name
+        outputs = session.run(None, {input_name: combined})
+
+        # --- Postprocess ---
+        alpha = outputs[0][0][0]
+        alpha_image = Image.fromarray((alpha * 255).astype(np.uint8), mode='L')
+        alpha_image = alpha_image.resize(original_size, Image.LANCZOS)
+        
+        return alpha_image
 
 
     def toggle_shadow_options(self, checked):
