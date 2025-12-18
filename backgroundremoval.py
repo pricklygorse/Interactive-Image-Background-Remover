@@ -2329,6 +2329,7 @@ class BackgroundRemoverGUI(QMainWindow):
         else: self.shadow_frame.hide()
         self.update_output_preview()
 
+    #@line_profiler.profile
     def render_output_image(self, shadow_downscale=0.125):
         if not self.original_image: return
         
@@ -2352,13 +2353,13 @@ class BackgroundRemoverGUI(QMainWindow):
             except Exception as e:
                 print(f"Error during foreground estimation: {e}")
                 # Fallback to the standard method if something goes wrong
-                empty = Image.new("RGBA", self.original_image.size, 0)
-                cutout = Image.composite(self.original_image, empty, self.working_mask)
+                cutout = self.original_image.convert("RGBA")
+                cutout.putalpha(self.working_mask)
         
         else:
 
-            empty = Image.new("RGBA", self.original_image.size, 0)
-            cutout = Image.composite(self.original_image, empty, self.working_mask)
+            cutout = self.original_image.convert("RGBA")
+            cutout.putalpha(self.working_mask)
         
         if self.chk_shadow.isChecked():
             op = self.sl_s_op.value()
@@ -2372,13 +2373,11 @@ class BackgroundRemoverGUI(QMainWindow):
             small_h = max(1, int(orig_size[1] * shadow_downscale))
             
             shadow_small = self.working_mask.resize((small_w, small_h), Image.Resampling.NEAREST)
-            
-            scaled_rad = rad * shadow_downscale
-            shadow_small = shadow_small.filter(ImageFilter.GaussianBlur(scaled_rad))
-            
-            shadow = shadow_small.resize(orig_size, Image.Resampling.BICUBIC)
-            
-            shadow = shadow.point(lambda p: int(p * (op/255)))
+            shadow_small = shadow_small.filter(ImageFilter.GaussianBlur(rad * shadow_downscale))
+
+            shadow_small = shadow_small.point(lambda p: int(p * (op/255)))
+
+            shadow = shadow_small.resize(orig_size, Image.Resampling.BILINEAR)
             
             sl = Image.new("RGBA", self.original_image.size, 0)
             sl.putalpha(shadow)
@@ -2390,15 +2389,33 @@ class BackgroundRemoverGUI(QMainWindow):
         if bg_txt == "Transparent": 
             final = cutout
         elif "Blur" in bg_txt:
+            orig_np = np.array(self.original_image).astype(np.float32)
+            rgb = orig_np[:, :, :3]
             m_np = np.array(self.working_mask)
-            k = np.ones((5,5),np.uint8)
-            d_mask = cv2.dilate(m_np, k, iterations=1)
-            orig_rgb = cv2.cvtColor(np.array(self.original_image), cv2.COLOR_RGBA2RGB)
-            f_bg = cv2.inpaint(orig_rgb, d_mask, 3, cv2.INPAINT_TELEA)
+
+            # expand mask to reduce halo effects
+            dilation_size = 7 
+            kernel = np.ones((dilation_size, dilation_size), np.uint8)
+            dilated_mask = cv2.dilate(m_np, kernel, iterations=1)
+            
+            # create weight map from the dilated mask
+            # 1.0 = background (keep), 0.0 = dilated cutout (ignore)
+            weight_map = 1.0 - (dilated_mask.astype(np.float32) / 255.0)
+            
             rad = getattr(self, 'blur_radius', 30)
             if rad % 2 == 0: rad += 1
-            blur = cv2.blur(f_bg, (rad, rad))
-            final = Image.fromarray(blur).convert("RGBA")
+            ksize = (rad, rad)
+
+            # normalised convolution
+            weighted_blur = cv2.blur(rgb * weight_map[..., None], ksize)
+            
+            blurred_weights = cv2.blur(weight_map, ksize)
+
+            result = weighted_blur / (blurred_weights[..., None] + 1e-8)
+            
+            blur_final = np.clip(result, 0, 255).astype(np.uint8)
+            final = Image.fromarray(blur_final).convert("RGBA")
+            
             final.alpha_composite(cutout)
         else:
             final = Image.new("RGBA", self.original_image.size, bg_txt.lower())
