@@ -1,5 +1,8 @@
 # -*- mode: python ; coding: utf-8 -*-
 
+# dropped for now because splash screens don't work
+# pymatting needs to compile on first run, and i'm unsure how to let user know this without a splash screen
+# compilation can take a minute or two
 
 a = Analysis(
     ['backgroundremoval.py'],

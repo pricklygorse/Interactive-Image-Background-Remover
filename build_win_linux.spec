@@ -32,7 +32,7 @@ exe = EXE(
     splash,
     [],
     exclude_binaries=True,
-    name='Interactive-BG-Remover-onedir',
+    name='Interactive-BG-Remover',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

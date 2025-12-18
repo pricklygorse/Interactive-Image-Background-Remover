@@ -54,15 +54,18 @@ jobs:
           mkdir -p dist/Interactive-BG-Remover/Models
           mv Models/place_models_here.txt dist/Interactive-BG-Remover/Models/
 
-      - name: Build executable (macOS)
-        if: runner.os == 'macOS'
-        run: |
-          # mac has issues with --onedir. this is a cpu only build so we can use onefile as it produces smaller binaries than CUDA etc.
-          pyinstaller --clean build_mac.spec
-          mkdir -p dist/mac-bundle/Models
-          mv dist/Interactive-BG-Remover dist/mac-bundle/
-          cp Models/place_models_here.txt dist/mac-bundle/Models/
-          mv dist/mac-bundle dist/Interactive-BG-Remover
+      # dropped for now as i can't test, and splash screens don't work,
+      # so i'm not sure how to let user know that pymatting is compiling, and the app hasn't crashed on first run
+      #
+      # - name: Build executable (macOS)
+      #   if: runner.os == 'macOS'
+      #   run: |
+      #     # mac has issues with --onedir. this is a cpu only build so we can use onefile as it produces smaller binaries than CUDA etc.
+      #     pyinstaller --clean build_mac.spec
+      #     mkdir -p dist/mac-bundle/Models
+      #     mv dist/Interactive-BG-Remover dist/mac-bundle/
+      #     cp Models/place_models_here.txt dist/mac-bundle/Models/
+      #     mv dist/mac-bundle dist/Interactive-BG-Remover
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
