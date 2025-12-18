@@ -50,19 +50,15 @@ jobs:
         if: runner.os != 'macOS'
         shell: bash
         run: |
-          pyinstaller --clean --onedir --windowed --name "Interactive-BG-Remover" \
-            --exclude-module torch \
-            backgroundremoval.py
+          pyinstaller --clean build_win_linux.spec
           mkdir -p dist/Interactive-BG-Remover/Models
           mv Models/place_models_here.txt dist/Interactive-BG-Remover/Models/
 
       - name: Build executable (macOS)
         if: runner.os == 'macOS'
         run: |
-          # mac has issues with --onedir. cpu only build so may as well use onefile
-          pyinstaller --clean --onefile --windowed --name "Interactive-BG-Remover" \
-            --exclude-module torch \
-            backgroundremoval.py
+          # mac has issues with --onedir. this is a cpu only build so we can use onefile as it produces smaller binaries than CUDA etc.
+          pyinstaller --clean build_mac.spec
           mkdir -p dist/mac-bundle/Models
           mv dist/Interactive-BG-Remover dist/mac-bundle/
           cp Models/place_models_here.txt dist/mac-bundle/Models/

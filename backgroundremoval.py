@@ -1,4 +1,10 @@
 #!/usr/bin/env python3
+
+try:
+    import pyi_splash # noqa
+    pyi_splash.update_text("Loading Packages")
+except: pass
+
 import sys
 import os
 import math
@@ -22,9 +28,13 @@ from PyQt6.QtGui import (QPixmap, QImage, QColor, QPainter, QPainterPath, QPen, 
 from PIL import Image, ImageOps, ImageDraw, ImageEnhance, ImageGrab, ImageFilter, ImageChops
 import onnxruntime as ort
 
+try: pyi_splash.update_text("Loading pymatting (Compiles on first run, approx 1-2 minutes)")
+except: pass
 
 from pymatting import estimate_alpha_cf, estimate_foreground_ml
 
+try: pyi_splash.update_text("Loading App Scripts")
+except: pass
 
 import src.download_manager as download_manager
 from src.ui_widgets import CollapsibleFrame, SynchronisedGraphicsView
@@ -103,12 +113,15 @@ def get_available_ep_options():
 AVAILABLE_EPS = get_available_ep_options()
 
 
-
 # --- Main Application ---
 
 class BackgroundRemoverGUI(QMainWindow):
     def __init__(self, image_paths):
         super().__init__()
+        
+        try: pyi_splash.update_text("App Initialisation")
+        except: pass
+        
         self.image_paths = image_paths if image_paths else []
         self.current_image_index = 0
         self.setWindowTitle("Interactive Image Background Remover")
@@ -137,7 +150,8 @@ class BackgroundRemoverGUI(QMainWindow):
         self.loaded_sam_models = {}
         self.loaded_matting_models = {} 
         self.model_output_mask = None
-
+        try: pyi_splash.update_text("Loading UI")
+        except: pass
         self.init_ui()
         self.setup_keybindings()
 
@@ -167,6 +181,11 @@ class BackgroundRemoverGUI(QMainWindow):
         
         saved_theme = self.settings.value("theme", "light")
         self.set_theme(saved_theme)
+
+
+        try: pyi_splash.close()
+        except: pass
+
 
 
     def init_ui(self):
