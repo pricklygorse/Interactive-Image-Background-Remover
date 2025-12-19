@@ -277,6 +277,7 @@ class ModelDownloadThread(QThread):
         filename = self.file_data['file']
         url = self.file_data['url']
         save_path = os.path.join(self.model_root_dir, filename)
+        temp_path = save_path + ".download" 
 
         try:
             # Use stream=True to handle large files
@@ -291,7 +292,9 @@ class ModelDownloadThread(QThread):
             block_size = 8192
             bytes_downloaded = 0
 
-            with open(save_path, 'wb') as f:
+            os.makedirs(os.path.dirname(temp_path), exist_ok=True)
+
+            with open(temp_path, 'wb') as f:
                 for data in response.iter_content(block_size):
                     if not self._is_running:
                         f.close()
@@ -304,11 +307,15 @@ class ModelDownloadThread(QThread):
                     progress = int(bytes_downloaded * 100 / total_size)
                     self.progress_updated.emit(filename, progress)
             
+            os.replace(temp_path, save_path)
             self.download_finished.emit(filename, "Success")
 
         except requests.exceptions.RequestException as e:
             self.error_occurred.emit(filename, f"Network Error: {e}")
         except Exception as e:
+            if os.path.exists(temp_path): 
+                try: os.remove(temp_path)
+                except: pass
             self.error_occurred.emit(filename, f"File System Error: {e}")
 
     def stop(self):
@@ -360,7 +367,11 @@ class ModelDownloadDialog(QDialog):
         self.list_layout.addWidget(header_lbl)
 
     def _check_if_model_downloaded(self, model_data):
-        return all(os.path.exists(os.path.join(self.model_root_dir, f['file'])) for f in model_data['files'])
+        for f in model_data['files']:
+            path = os.path.join(self.model_root_dir, f['file'])
+            if not os.path.exists(path) or os.path.getsize(path) == 0:
+                return False
+        return True
 
     def _add_model_row(self, model_data, model_type):
         model_name = model_data['name']
