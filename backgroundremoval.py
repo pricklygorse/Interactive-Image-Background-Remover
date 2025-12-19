@@ -28,10 +28,7 @@ from PyQt6.QtGui import (QPixmap, QImage, QColor, QPainter, QPainterPath, QPen, 
 from PIL import Image, ImageOps, ImageDraw, ImageEnhance, ImageGrab, ImageFilter, ImageChops
 import onnxruntime as ort
 
-try: pyi_splash.update_text("Loading pymatting (Compiles on first run, approx 1-2 minutes)")
-except: pass
 
-from pymatting import estimate_alpha_cf, estimate_foreground_ml
 
 try: pyi_splash.update_text("Loading App Scripts")
 except: pass
@@ -41,8 +38,12 @@ from src.ui_widgets import CollapsibleFrame, SynchronisedGraphicsView
 from src.ui_dialogs import SaveOptionsDialog, ImageEditorDialog
 from src.trimap_editor import TrimapEditorDialog
 from src.utils import pil2pixmap, numpy_to_pixmap
-from src.constants import PAINT_BRUSH_SCREEN_SIZE, UNDO_STEPS, SOFTEN_RADIUS, SAM_TRT_WARMUP_POINTS
+from src.constants import PAINT_BRUSH_SCREEN_SIZE, UNDO_STEPS, SOFTEN_RADIUS
 
+try: pyi_splash.update_text("Loading pymatting (Compiles on first run, approx 1-2 minutes)")
+except: pass
+
+from src.model_manager import ModelManager 
 
 if getattr(sys, 'frozen', False):
     SCRIPT_BASE_DIR = os.path.dirname(sys.executable)
@@ -53,68 +54,6 @@ MODEL_ROOT_DIR = os.path.join(SCRIPT_BASE_DIR, "Models/")
 
 CACHE_ROOT_DIR = os.path.join(SCRIPT_BASE_DIR, "Models", "cache")
 
-
-
-
-# --- Helper Functions ---
-
-def get_available_ep_options():
-        """
-        Returns list of (Display Name, ProviderStr, OptionsDict, ShortCode)
-        """
-        try:
-            available = ort.get_available_providers()
-            print(available)
-        except:
-            print("No onnxruntime providers")
-            return []
-        options = []
-        
-        # DEBUG override to show all providers
-        #available = ["CUDAExecutionProvider", "CPUExecutionProvider", "TensorrtExecutionProvider", "OpenVINOExecutionProvider", "CoreMLExecutionProvider"] # DEBUG
-        
-        if "TensorrtExecutionProvider" in available:
-            # We will generate specific cache paths at runtime, 
-            # so we pass an empty dict here, or default options.
-            options.append(("TensorRT (GPU)", "TensorrtExecutionProvider", {}, "trt"))
-
-        if "CUDAExecutionProvider" in available:
-            options.append(("CUDA (GPU)", "CUDAExecutionProvider", {}, "cuda"))
-
-        # Windows generic provider
-        if "DmlExecutionProvider" in available:
-            options.append(("DirectML (GPU)", "DmlExecutionProvider", {}, "dml"))
-
-        if "OpenVINOExecutionProvider" in available:
-            try:
-                ov_devices = ort.capi._pybind_state.get_available_openvino_device_ids()
-            except Exception:
-                ov_devices = []
-            
-            # Fallback if query fails but provider exists
-            if not ov_devices: 
-                ov_devices = ['CPU']
-
-            for dev in ov_devices:
-                label = f"OpenVINO-{dev}"
-                opts = {'device_type': dev} 
-                options.append((label, "OpenVINOExecutionProvider", opts, f"ov-{dev.lower()}"))
-
-        # MAC
-        if "CoreMLExecutionProvider" in available:
-            options.append(("CoreML", "CoreMLExecutionProvider", {}, "coreml"))
-
-        # CPU always available
-        options.append(("CPU", "CPUExecutionProvider", {}, "cpu"))
-
-        return options
-
-
-AVAILABLE_EPS = get_available_ep_options()
-
-
-# --- Main Application ---
-
 class BackgroundRemoverGUI(QMainWindow):
     def __init__(self, image_paths, cli_args=None):
         super().__init__()
@@ -122,6 +61,8 @@ class BackgroundRemoverGUI(QMainWindow):
         try: pyi_splash.update_text("App Initialisation")
         except: pass
         
+        self.model_manager = ModelManager(MODEL_ROOT_DIR, CACHE_ROOT_DIR)
+
         self.image_paths = image_paths if image_paths else []
         self.current_image_index = 0
         self.setWindowTitle("Interactive Image Background Remover")
@@ -132,12 +73,8 @@ class BackgroundRemoverGUI(QMainWindow):
         self.undo_history = []
         self.redo_history = []
         self.paint_mode = False
-        self.sam_model_path = None
         self.image_exif = None
         self.blur_radius = 30
-
-        # Track TensorRT warmup per (model, provider) combo
-        self._sam_trt_warmed = set()
 
         # Persistent settings
         self.settings = QSettings("PricklyGorse", "InteractiveBackgroundRemover")
@@ -146,9 +83,7 @@ class BackgroundRemoverGUI(QMainWindow):
         self.working_image = None
         self.working_mask = None
         self.last_trimap = None
-        self.loaded_whole_models = {}
-        self.loaded_sam_models = {}
-        self.loaded_matting_models = {} 
+
         self.model_output_mask = None
         try: pyi_splash.update_text("Loading UI")
         except: pass
@@ -257,7 +192,7 @@ class BackgroundRemoverGUI(QMainWindow):
         sl.addLayout(h_edit_load_buttons)
 
 
-        self.available_eps = AVAILABLE_EPS
+        self.available_eps = ModelManager.get_available_ep_options()
 
         # --- Hardware Acceleration Dropdown ---
         self.hw_options_frame = CollapsibleFrame("Hardware Acceleration Options", 
@@ -303,6 +238,7 @@ class BackgroundRemoverGUI(QMainWindow):
         self.sam_cache_group.blockSignals(True)
         self.sam_cache_group.button(last_sam_cache_mode).setChecked(True)
         self.sam_cache_group.blockSignals(False)
+        self.model_manager.sam_cache_mode = last_sam_cache_mode
 
 
         # Automatic Models
@@ -348,6 +284,9 @@ class BackgroundRemoverGUI(QMainWindow):
         self.auto_cache_group.blockSignals(True)
         self.auto_cache_group.button(last_auto_cache_mode).setChecked(True)
         self.auto_cache_group.blockSignals(False)
+
+        self.model_manager.auto_cache_mode = last_auto_cache_mode
+
         self.trt_cache_option_visibility() # Initial check for TensorRT
 
         # Rest of UI
@@ -427,10 +366,9 @@ class BackgroundRemoverGUI(QMainWindow):
         bg_label.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Preferred)
         bg_layout.addWidget(bg_label)
         self.combo_bg_color = QComboBox()
-        colors = ["Transparent", "White", "Black", "Red", "Blue", 
+        self.combo_bg_color.addItems(["Transparent", "White", "Black", "Red", "Blue", 
                   "Orange", "Yellow", "Green", "Grey", 
-                  "Lightgrey", "Brown", "Blurred (Slow)"]
-        self.combo_bg_color.addItems(colors)
+                  "Lightgrey", "Brown", "Blurred (Slow)"])
         self.combo_bg_color.currentTextChanged.connect(self.handle_bg_change)
         bg_layout.addWidget(self.combo_bg_color)
         sl.addLayout(bg_layout)
@@ -774,126 +712,6 @@ class BackgroundRemoverGUI(QMainWindow):
         else:
             self.set_theme('dark')
 
-    def _warmup_sam_trt(self, max_points=SAM_TRT_WARMUP_POINTS):
-        """
-        Warm up the SAM decoder on TensorRT by running it once with `max_points`
-        synthetic points so the engine is compiled for that max shape.
-
-        After that, any run with <= max_points points should reuse this engine.
-        """
-        model_name = self.combo_sam.currentText()
-        if "sam2" in model_name:
-            self._warmup_sam2_trt(max_points)
-        else:
-            self._warmup_sam1_trt(max_points)
-
-
-    def _warmup_sam1_trt(self, max_points):
-        """
-        Warmup for classic SAM / mobile_sam path used by run_sam_inference().
-
-        We don't need a real image here; TensorRT only cares about shapes.
-        So we feed dummy zeros with the same shapes as the real pipeline.
-        """
-        if not hasattr(self, "sam_encoder") or not hasattr(self, "sam_decoder"):
-            return
-
-        input_size = (684, 1024)  # (H, W)
-        h, w = input_size
-
-        # Encoder
-        enc_input_name = self.sam_encoder.get_inputs()[0].name
-        dummy_img = np.zeros((h, w, 3), dtype=np.float32)
-
-        encoder_inputs = {enc_input_name: dummy_img}
-        embedding = self.sam_encoder.run(None, encoder_inputs)[0]
-
-        # --- Decoder warmup: single call with max_points (+1 sentinel) ---
-        n = max_points
-
-        onnx_coord = np.zeros((1, n + 1, 2), dtype=np.float32)
-        onnx_label = np.zeros((1, n + 1), dtype=np.float32)
-        onnx_label[0, :n] = 1.0 
-        onnx_label[0, -1] = -1.0  # sentinel
-
-        mask_input = np.zeros((1, 1, 256, 256), dtype=np.float32)
-        has_mask_input = np.zeros((1,), dtype=np.float32)
-        orig_im_size = np.array(input_size, dtype=np.float32)  # shape (2,)
-
-        candidate_inputs = {
-            "image_embeddings": embedding,
-            "point_coords": onnx_coord,
-            "point_labels": onnx_label,
-            "mask_input": mask_input,
-            "has_mask_input": has_mask_input,
-            "orig_im_size": orig_im_size,
-        }
-
-        decoder_input_names = [d.name for d in self.sam_decoder.get_inputs()]
-        run_inputs = {
-            name: candidate_inputs[name]
-            for name in decoder_input_names
-            if name in candidate_inputs
-        }
-
-        # One shot at max_points – this should build the TensorRT engine
-        self.sam_decoder.run(None, run_inputs)
-
-
-
-    def _warmup_sam2_trt(self, max_points):
-        """
-        Warmup for SAM2 path used by run_samv2_inference().
-        """
-        if not hasattr(self, "sam_encoder") or not hasattr(self, "sam_decoder"):
-            return
-
-        enc_inputs = self.sam_encoder.get_inputs()
-        enc_input_h, enc_input_w = enc_inputs[0].shape[2:]
-
-        # Encoder
-        image_rgb = np.zeros((enc_input_h, enc_input_w, 3), dtype=np.float32)
-        input_tensor = image_rgb.transpose(2, 0, 1)[np.newaxis, :, :, :]
-        encoder_inputs = {enc_inputs[0].name: input_tensor}
-        high_res_feats_0, high_res_feats_1, image_embed = self.sam_encoder.run(None, encoder_inputs)
-
-        # Decoder. Collect inputs to accomodate Vietdev or Ibaigorodo exported models
-        orig_h, orig_w = enc_input_h, enc_input_w
-        scale_factor = 4
-        mask_input = np.zeros(
-            (1, 1, enc_input_h // scale_factor, enc_input_w // scale_factor),
-            dtype=np.float32
-        )
-        has_mask_input = np.array([0], dtype=np.float32)
-        original_size_np = np.array([orig_h, orig_w], dtype=np.int32)
-
-        all_base_inputs = {
-            'image_embed': image_embed,
-            'high_res_feats_0': high_res_feats_0,
-            'high_res_feats_1': high_res_feats_1,
-            'mask_input': mask_input,
-            'has_mask_input': has_mask_input,
-            'orig_im_size': original_size_np
-        }
-
-        decoder_input_names = [d.name for d in self.sam_decoder.get_inputs()]
-
-        n = max_points
-        points = np.zeros((1, n, 2), dtype=np.float32)
-        labels = np.ones((1, n), dtype=np.float32)  # all positive
-
-        candidate_inputs = dict(all_base_inputs)
-        candidate_inputs["point_coords"] = points
-        candidate_inputs["point_labels"] = labels
-
-        run_inputs = {
-            name: candidate_inputs[name]
-            for name in decoder_input_names
-            if name in candidate_inputs
-        }
-
-        self.sam_decoder.run(None, run_inputs)
-
 
     def toggle_splitter_orientation(self, initial_setup=False):
         current_orientation = self.splitter.orientation()
@@ -923,37 +741,7 @@ class BackgroundRemoverGUI(QMainWindow):
 
     
     
-    def check_is_cached(self, model_name, provider_short_code):
-        """
-        Checks if a model has cache files on disk. 
-        We rely on the directory naming convention from _create_inference_session.
-        """
-        if not os.path.isdir(CACHE_ROOT_DIR):
-            return False
 
-        if provider_short_code == 'cpu': return False
-
-        # We need to reconstruct the folder name logic roughly. 
-        # Since short_code maps to specific provider/device combos, we can filter Models/cache
-                
-        # Simple heuristic: Look for folder containing model_name and provider code
-        # This allows "trt" to match "TensorrtExecutionProvider_u2net"
-        
-        sanitised_model_name = "".join([c for c in model_name if c.isalnum() or c in "-_"])
-        
-        for folder in os.listdir(CACHE_ROOT_DIR):
-            full_path = os.path.join(CACHE_ROOT_DIR, folder)
-            if not os.path.isdir(full_path): continue
-            
-            if sanitised_model_name in folder and len(os.listdir(full_path)) > 0:
-                # Distinguish between providers
-                if provider_short_code == 'trt' and 'Tensorrt' in folder: return True
-                if provider_short_code.startswith('ov') and 'OpenVINO' in folder:
-                    # Check specific device match (e.g. ov-gpu)
-                    device = provider_short_code.split('-')[1].upper()
-                    if device in folder: return True
-                
-        return False
     
     def _get_cached_icon(self):
         """
@@ -964,9 +752,8 @@ class BackgroundRemoverGUI(QMainWindow):
             return self._cached_drive_icon
 
         # Fetch the standard "Hard Drive" icon from the current application style
-        icon = self.style().standardIcon(QStyle.StandardPixmap.SP_DriveHDIcon)
+        self._cached_drive_icon = self.style().standardIcon(QStyle.StandardPixmap.SP_DriveHDIcon)
         
-        self._cached_drive_icon = icon
         return self._cached_drive_icon
 
     def update_cached_model_icons(self):
@@ -979,7 +766,7 @@ class BackgroundRemoverGUI(QMainWindow):
             
             for i in range(self.combo_whole.count()):
                 m_name = self.combo_whole.itemText(i)
-                if self.check_is_cached(m_name, short_code):
+                if self.model_manager.check_is_cached(m_name, short_code):
                     self.combo_whole.setItemIcon(i, drive_icon)
                 else:
                     self.combo_whole.setItemIcon(i, QIcon()) # Set blank icon if not cached
@@ -992,7 +779,7 @@ class BackgroundRemoverGUI(QMainWindow):
             
             for i in range(self.combo_sam.count()):
                 m_name = self.combo_sam.itemText(i)
-                if self.check_is_cached(m_name, sam_code):
+                if self.model_manager.check_is_cached(m_name, sam_code):
                     self.combo_sam.setItemIcon(i, drive_icon)
                 else:
                     self.combo_sam.setItemIcon(i, QIcon())
@@ -1007,15 +794,9 @@ class BackgroundRemoverGUI(QMainWindow):
         prov_str, prov_opts, short_code = data
 
         self.settings.setValue("exec_short_code", short_code)
-
-        # Old session is now invalid and needs removing
-        if self.loaded_whole_models:
-            print("Execution provider changed, clearing model cache.")
-            for key, session in self.loaded_whole_models.items():
-                del session
-            self.loaded_whole_models.clear()
-            gc.collect() 
-
+        
+        self.model_manager.clear_auto_cache()
+        
         self.update_cached_model_icons()
 
         self.status_label.setText(f"Automatic model provider switched to: {short_code.upper()}")
@@ -1043,11 +824,8 @@ class BackgroundRemoverGUI(QMainWindow):
         if checked:
             # Clear loaded models regardless of option chosen
             # to allow easy unloading and consistent behaviour
-            if self.loaded_whole_models:
-                print("Auto model memory cache option changed, clearing cache.")
-                self.loaded_whole_models.clear()
-                gc.collect()
-                self.status_label.setText("Automatic model cache cleared.")
+            self.model_manager.clear_auto_cache()
+            self.status_label.setText("Automatic model cache cleared.")
 
             cache_mode = self.auto_cache_group.id(button)
 
@@ -1067,20 +845,13 @@ class BackgroundRemoverGUI(QMainWindow):
                         return
 
             self.settings.setValue("auto_ram_cache_mode", cache_mode)
+            self.model_manager.auto_cache_mode = cache_mode
 
     def on_sam_cache_changed(self, button, checked):
         if checked:
             # Clear loaded models regardless of option chosen
             # to allow easy unloading and consistent behaviour
-            if self.loaded_sam_models:
-                print("SAM RAM Cache option changed, clearing cache.")
-                self.loaded_sam_models.clear()
-
-            if hasattr(self, 'sam_encoder'): del self.sam_encoder
-            if hasattr(self, 'sam_decoder'): del self.sam_decoder
-            self.sam_model_path = None
-            if hasattr(self, "encoder_output"): delattr(self, "encoder_output")
-            gc.collect()
+            self.model_manager.clear_sam_cache()
             self.status_label.setText("SAM model cache cleared.")
 
             cache_mode = self.sam_cache_group.id(button)
@@ -1101,6 +872,7 @@ class BackgroundRemoverGUI(QMainWindow):
                         return
 
             self.settings.setValue("sam_ram_cache_mode", self.sam_cache_group.id(button))
+            self.model_manager.sam_cache_mode = cache_mode
 
     def on_sam_EP_changed(self, index):
         """
@@ -1112,19 +884,8 @@ class BackgroundRemoverGUI(QMainWindow):
         prov_str, prov_opts, short_code = data
 
         self.settings.setValue("sam_exec_short_code", short_code)
-
-        # Old session is now invalid and needs removing
-        if hasattr(self, 'sam_encoder'): del self.sam_encoder
-        if hasattr(self, 'sam_decoder'): del self.sam_decoder
         
-        self.sam_model_path = None 
-        if hasattr(self, "encoder_output"): delattr(self, "encoder_output")
-
-        if self.loaded_sam_models:
-            self.loaded_sam_models.clear()
-
-        gc.collect()
-
+        self.model_manager.clear_sam_cache()
         self.update_cached_model_icons()
 
         self.status_label.setText(f"SAM provider switched to: {short_code.upper()}")
@@ -1258,8 +1019,8 @@ class BackgroundRemoverGUI(QMainWindow):
         QShortcut(QKeySequence(Qt.Key.Key_Right), self).activated.connect(self.load_next_image) # Next Image
         
         QShortcut(QKeySequence("U"), self).activated.connect(lambda: self.run_automatic_model("u2net"))
-        QShortcut(QKeySequence("I"), self).activated.connect(lambda: self.run_automatic_model("isnet"))
-        QShortcut(QKeySequence("O"), self).activated.connect(lambda: self.run_automatic_model("rmbg"))
+        QShortcut(QKeySequence("I"), self).activated.connect(lambda: self.run_automatic_model("isnet-general-use"))
+        QShortcut(QKeySequence("O"), self).activated.connect(lambda: self.run_automatic_model("rmbg1_4"))
         QShortcut(QKeySequence("B"), self).activated.connect(lambda: self.run_automatic_model("BiRefNet"))
 
     def handle_bg_change(self, text):
@@ -1340,7 +1101,6 @@ class BackgroundRemoverGUI(QMainWindow):
                 self.load_image(self.image_paths[self.current_image_index])
 
     
-
     def preload_startup_models(self):
         """
         Loads models selected in the download manager on startup.
@@ -1356,39 +1116,19 @@ class BackgroundRemoverGUI(QMainWindow):
                 self.combo_sam.setCurrentIndex(idx)
                 
                 self.set_loading(True, f"Pre-loading SAM: {self.combo_sam.currentText()}")
-
-                QApplication.processEvents()
-
-                self._init_sam()
-                
-                self.set_loading(False,f"Pre-loaded SAM: {self.combo_sam.currentText()}")
-
-            else:
-                print(f"Startup SAM model '{sam_model_id}' not found.")
+                # Call manager to load
+                provider_data = self.combo_sam_model_EP.currentData() or ("CPUExecutionProvider", {}, "cpu")
+                self.model_manager.init_sam_session(self.combo_sam.currentText(), provider_data)
+                self.set_loading(False, f"Pre-loaded SAM: {self.combo_sam.currentText()}")
 
         if auto_model_id:
             idx = self.combo_whole.findText(auto_model_id, Qt.MatchFlag.MatchContains)
             if idx >= 0:
                 self.combo_whole.setCurrentIndex(idx)
-                QApplication.processEvents()
-                
-                # This logic is adapted from run_automatic_model to only load the session
-                model_name = self.combo_whole.currentText()
-                model_path = os.path.join(MODEL_ROOT_DIR, model_name + ".onnx")
-                prov_str, prov_opts, prov_code = self.combo_auto_model_EP.currentData()
-                cache_key = f"{model_name}_{prov_code}"
-
-                if cache_key not in self.loaded_whole_models:
-                    try:
-                        self.set_loading(True,f"Pre-loading automatic model: {model_name}")
-                        #self.status_label.setStyleSheet("color: red;")
-                        QApplication.processEvents()
-                        session = self._create_inference_session(model_path, prov_str, prov_opts, model_name)
-                        self.loaded_whole_models[cache_key] = session
-                        self.set_loading(False,f"Pre-loaded Auto: {model_name}")
-                        #self.status_label.setStyleSheet("")
-                    except Exception as e:
-                        print(f"Failed to pre-load automatic model '{model_name}': {e}")
+                self.set_loading(True, f"Pre-loading Automatic Model: {self.combo_whole.currentText()}")
+                provider_data = self.combo_auto_model_EP.currentData()
+                self.model_manager.get_auto_session(self.combo_whole.currentText(), provider_data)
+                self.set_loading(False, f"Pre-loaded Automatic Model")
 
     def update_prev_next_button_state(self):
         if not self.image_paths:
@@ -1434,9 +1174,7 @@ class BackgroundRemoverGUI(QMainWindow):
         if hasattr(self, 'user_trimap'):
             del self.user_trimap
 
-        if hasattr(self, "encoder_output"): 
-            delattr(self, "encoder_output")
-        self.last_crop_rect = None 
+        self.model_manager.clear_sam_cache(clear_loaded_models=False)
         
         # Scratchpad for painting (Invisible QImage)
         # Used to rasterise the vector path when you let go of the mouse.
@@ -1477,97 +1215,7 @@ class BackgroundRemoverGUI(QMainWindow):
         if w <= 0 or h <= 0: return self.original_image, 0, 0
         return self.original_image.crop((x, y, x+w, y+h)), x, y
 
-    def _init_sam(self):
-        model_name = self.combo_sam.currentText()
-        if "Select" in model_name or "No Models" in model_name:
-            return False
-
-        model_path = os.path.join(MODEL_ROOT_DIR, model_name)
-        
-        # Check if the currently active model is already the one we want
-        if self.sam_model_path == model_path and hasattr(self, 'sam_encoder'):
-            return True
-
-        # Retrieve provider data from the SAM combobox
-        # Data format: (ProviderStr, OptionsDict, ShortCode)
-        data = self.combo_sam_model_EP.currentData()
-        if not data:
-            # Fallback if something is wrong
-            prov_str, prov_opts, prov_code = ("CPUExecutionProvider", {}, "cpu")
-        else:
-            prov_str, prov_opts, prov_code = data
-
-        cache_key = f"{model_name}_{prov_code}"
-        cache_mode = self.sam_cache_group.checkedId()
-        
-        if cache_mode > 0 and cache_key in self.loaded_sam_models:
-            self.sam_encoder, self.sam_decoder = self.loaded_sam_models[cache_key]
-            self.sam_model_path = model_path
-            if hasattr(self, "encoder_output"): delattr(self, "encoder_output")
-            self.status_label.setText(f"SAM Ready (Cached RAM): {model_name}")
-            return True
-
-        # Not in cache, load
-        self.set_loading(True, f"Loading SAM ({model_name}) on {prov_code}...")
-
-        try:
-            # Pass 'model_name' so encoder and decoder share the same disc cache folder (openvino, tensorRT) 
-            encoder_sess = self._create_inference_session(
-                model_path + ".encoder.onnx", 
-                prov_str, 
-                prov_opts, 
-                model_name # Cache ID
-            )
-            decoder_sess = self._create_inference_session(
-                model_path + ".decoder.onnx", 
-                prov_str, 
-                prov_opts, 
-                model_name
-            )
-
-            if cache_mode == 1: # Keep last
-                self.loaded_sam_models.clear() 
-                gc.collect()
-                self.loaded_sam_models[cache_key] = (encoder_sess, decoder_sess)
-            elif cache_mode == 2: # Keep all
-                self.loaded_sam_models[cache_key] = (encoder_sess, decoder_sess)
-
-            # Set active references
-            self.sam_encoder = encoder_sess
-            self.sam_decoder = decoder_sess
-            self.sam_model_path = model_path
-            
-            if hasattr(self, "encoder_output"):
-                delattr(self, "encoder_output")
-
-
-            # --- TensorRT warmup: pre-build engine for up to N points ---
-            if prov_str == "TensorrtExecutionProvider":
-                warm_key = f"{model_name}_{prov_code}"
-                if warm_key not in self._sam_trt_warmed:
-                    self.status_label.setText(
-                        f"Warming up SAM TensorRT engine ({model_name}) "
-                        f"for up to {SAM_TRT_WARMUP_POINTS} points..."
-                    )
-                    QApplication.processEvents()
-                    try:
-                        self._warmup_sam_trt(max_points=SAM_TRT_WARMUP_POINTS)
-                    except Exception as e:
-                        print(f"SAM TensorRT warmup failed: {e}")
-                    else:
-                        self._sam_trt_warmed.add(warm_key)
-
-
-
-            self.set_loading(False, f"SAM Ready: {model_name} ({prov_code})")
-            
-            self.update_cached_model_icons()
-            return True
-
-        except Exception as e:
-            QMessageBox.critical(self, "Error", f"Could not load SAM model:\n{e}")
-            self.sam_model_path = None
-            return False
+    
 
     def handle_sam_point(self, scene_pos, is_positive):
         self.coordinates.append([scene_pos.x(), scene_pos.y()])
@@ -1598,67 +1246,7 @@ class BackgroundRemoverGUI(QMainWindow):
         self.labels = []
 
 
-    def _create_inference_session(self, model_path, provider_str, provider_options, model_id_name):
-        """
-        Generic builder for ONNX sessions. 
-        Handles cache directory creation automatically based on provider + model name.
-        """
-
-        # Make path absolute so ONNX external data is resolved from the model's folder,
-        # not from the process working directory.
-        model_path = os.path.abspath(model_path)
-
-        # These session options stop VRAM/RAM usage ballooning with subsequent model runs
-        # by disabling automatic memory allocation
-        # Doesn't seem to affect performance
-        sess_options = ort.SessionOptions()
-        sess_options.enable_cpu_mem_arena = False
-        sess_options.enable_mem_pattern = False
-        
-        final_providers = []
-        cache_dir = None
-        
-        if provider_str == "TensorrtExecutionProvider":
-            sub_dir_name = f"{provider_str}_{model_id_name}"
-            if 'device_type' in provider_options:
-                sub_dir_name = f"{provider_str}-{provider_options['device_type']}_{model_id_name}"
-            sub_dir_name = "".join([c for c in sub_dir_name if c.isalnum() or c in "-_"])
-            cache_dir = os.path.join(CACHE_ROOT_DIR, sub_dir_name)
-            os.makedirs(cache_dir, exist_ok=True)
-
-            trt_opts = {
-                "trt_engine_cache_enable": True,
-                "trt_engine_cache_path": cache_dir,
-            }
-            trt_opts.update(provider_options) # Merge any other opts
-            final_providers.append((provider_str, trt_opts))
-
-        elif provider_str == "OpenVINOExecutionProvider":
-
-            sub_dir_name = f"{provider_str}_{model_id_name}"
-            if 'device_type' in provider_options:
-                sub_dir_name = f"{provider_str}-{provider_options['device_type']}_{model_id_name}"
-            sub_dir_name = "".join([c for c in sub_dir_name if c.isalnum() or c in "-_"])
-            cache_dir = os.path.join(CACHE_ROOT_DIR, sub_dir_name)
-            os.makedirs(cache_dir, exist_ok=True)
-
-            # Inject Cache Config
-            ov_opts = {
-                "cache_dir": cache_dir,
-                "num_streams": 1, # Often helps stability
-            }
-            ov_opts.update(provider_options) # Adds 'device_type': 'GPU' etc.
-            final_providers.append((provider_str, ov_opts))
-
-        else:
-
-            final_providers.append((provider_str, provider_options))
-
-        # Always add CPU as fallback
-        if provider_str != "CPUExecutionProvider":
-            final_providers.append("CPUExecutionProvider")
-
-        return ort.InferenceSession(model_path, sess_options=sess_options, providers=final_providers)
+    
 
     def _process_sam_points(self, coords, labels):
         """
@@ -1673,9 +1261,7 @@ class BackgroundRemoverGUI(QMainWindow):
             return None
 
         view_rect = QRectF(x_off, y_off, crop.width, crop.height)
-        valid_coords = []
-        valid_labels = []
-
+        valid_coords, valid_labels = [], []
         is_box = (labels == [2, 3])
 
         if is_box:
@@ -1702,187 +1288,49 @@ class BackgroundRemoverGUI(QMainWindow):
         return crop, x_off, y_off, valid_coords, valid_labels
 
 
-    def run_samv2_inference(self, coords, labels):
-        """
-        Slightly different logic for SAM2
-        Depending on model download source (to save exporting myself), decoders vary. 
-        Vietdev models don't resize the masks to original image size
-        so we have to resize. Ibaigorodo's models include the resizer, so processing has to be ambigious.
-        """
-        if not self._init_sam(): return
+    def run_sam_inference(self, coords, labels):
+        model_name = self.combo_sam.currentText()
+        if "Select" in model_name or "No Models" in model_name: return
 
+        # Load
+        provider_data = self.combo_sam_model_EP.currentData() or ("CPUExecutionProvider", {}, "cpu")
+        success, msg = self.model_manager.init_sam_session(model_name, provider_data)
+        if not success:
+            QMessageBox.critical(self, "Error", msg)
+            return
+
+        # Preprocess UI Coords
         processed = self._process_sam_points(coords, labels)
         if not processed:
             return
         crop, x_off, y_off, valid_coords, valid_labels = processed
-        
-        orig_h, orig_w = crop.height, crop.width
         current_crop_rect = (x_off, y_off, crop.width, crop.height)
 
-        final_status = "Idle"
-
-        self.set_loading(True, "Running SAM Encoder...")
-        QApplication.processEvents()
+        self.set_loading(True, "Running SAM Inference...")
+        
         try:
-            encoder_time = 0.0
-            decoder_time = 0.0
-
-            # --- 1. Encoder ---
-            if not hasattr(self, "encoder_output") or getattr(self, "last_crop_rect", None) != current_crop_rect:
-                
-                t_start = timer()
-
-                enc_inputs = self.sam_encoder.get_inputs()
-                enc_input_h, enc_input_w = enc_inputs[0].shape[2:]
-
-                image_rgb = np.array(crop.convert("RGB"))
-                input_img = cv2.resize(image_rgb, (enc_input_w, enc_input_h))
-                mean, std = np.array([0.485, 0.456, 0.406]), np.array([0.229, 0.224, 0.225])
-                input_img = (input_img / 255.0 - mean) / std
-                input_tensor = input_img.transpose(2, 0, 1)[np.newaxis, :, :, :].astype(np.float32)
-
-                encoder_inputs = {enc_inputs[0].name: input_tensor}
-                self.encoder_output = self.sam_encoder.run(None, encoder_inputs)
-
-                self.last_crop_rect = current_crop_rect
-                self.last_enc_shape = (enc_input_h, enc_input_w)
-                encoder_time = (timer() - t_start) * 1000
-
-            # --- 2. Decoder ---
-            t_start = timer()
-            high_res_feats_0, high_res_feats_1, image_embed = self.encoder_output
-            enc_input_h, enc_input_w = self.last_enc_shape
-
-            points = np.array(valid_coords, dtype=np.float32)[np.newaxis, ...]
-            labels_np = np.array(valid_labels, dtype=np.float32)[np.newaxis, ...]
-            points[..., 0] = points[..., 0] / orig_w * enc_input_w
-            points[..., 1] = points[..., 1] / orig_h * enc_input_h
-
-            scale_factor = 4
-            mask_input = np.zeros((1, 1, enc_input_h // scale_factor, enc_input_w // scale_factor), dtype=np.float32)
-            has_mask_input = np.array([0], dtype=np.float32)
-            original_size_np = np.array([orig_h, orig_w], dtype=np.int32)
-
-            all_possible_inputs = {
-                'image_embed': image_embed, 'high_res_feats_0': high_res_feats_0, 'high_res_feats_1': high_res_feats_1,
-                'point_coords': points, 'point_labels': labels_np, 'mask_input': mask_input,
-                'has_mask_input': has_mask_input, 'orig_im_size': original_size_np
-            }
-
-            decoder_input_names = [d.name for d in self.sam_decoder.get_inputs()]
-            decoder_inputs = {name: all_possible_inputs[name] for name in decoder_input_names if name in all_possible_inputs}
-
-            dec_outputs = self.sam_decoder.run(None, decoder_inputs)
-            masks, scores = dec_outputs[0], dec_outputs[1]
-            decoder_time = (timer() - t_start) * 1000
-
-            # --- 3. Post-processing ---
-            scores, masks = scores.squeeze(), masks.squeeze()
-            best_mask_idx = 0 if scores.ndim == 0 else np.argmax(scores)
-            best_mask = masks if masks.ndim == 2 else masks[best_mask_idx]
-
-            final_mask = cv2.resize(best_mask, (orig_w, orig_h), interpolation=cv2.INTER_LINEAR)
-            binary_mask = (final_mask > 0.0).astype(np.uint8) * 255
-
+            if "sam2" in model_name:
+                binary_mask, t_enc, t_dec = self.model_manager.run_sam2(crop, valid_coords, valid_labels, current_crop_rect)
+            else:
+                binary_mask, t_enc, t_dec = self.model_manager.run_sam1(crop, valid_coords, valid_labels, current_crop_rect)
+            
+            # Apply Mask
             self.model_output_mask = Image.new("L", self.original_image.size, 0)
             self.model_output_mask.paste(Image.fromarray(binary_mask, mode="L"), (x_off, y_off))
             self.show_mask_overlay()
 
-            if encoder_time > 0:
-                final_status = f"SAM: Encoder {encoder_time:.0f}ms | Decoder {decoder_time:.0f}ms"
+            if t_enc > 0:
+                final_status = f"SAM: Encoder {t_enc:.0f}ms | Decoder {t_dec:.0f}ms"
             else:
-                final_status = f"SAM: Encoder (Cached) | Decoder {decoder_time:.0f}ms"
+                final_status = f"SAM: Encoder (Cached) | Decoder {t_dec:.0f}ms"
 
         except Exception as e:
             print(f"SAM Error: {e}")
             final_status = "SAM Error"
         finally:
-            QApplication.restoreOverrideCursor()
             self.set_loading(False, final_status)
 
-    def run_sam_inference(self, coords, labels):
-        
-        if "sam2" in self.combo_sam.currentText():
-            self.run_samv2_inference(coords, labels)
-            return
-        
-        if not self._init_sam(): return
-        
-        processed = self._process_sam_points(coords, labels)
-        if not processed:
-            return
-        crop, x_off, y_off, valid_coords, valid_labels = processed
 
-        current_crop_rect = (x_off, y_off, crop.width, crop.height)
-        final_status = "Idle"
-        self.set_loading(True,"Running Sam Encoder...")
-        QApplication.processEvents() 
-        try:
-            target_size, input_size = 1024, (684, 1024)
-            img_np = np.array(crop.convert("RGB"))
-            
-            encoder_time = 0.0
-            decoder_time = 0.0
-            
-            # --- Encoder ---
-            if not hasattr(self, "encoder_output") or getattr(self, "last_crop_rect", None) != current_crop_rect:
-                #self.status_label.setText("Running SAM Encoder...")
-                #QApplication.processEvents() 
-
-                t_start = timer()
-                
-                scale = min(input_size[1] / img_np.shape[1], input_size[0] / img_np.shape[0])
-                transform_matrix = np.array([[scale, 0, 0], [0, scale, 0], [0, 0, 1]])
-                cv_image = cv2.warpAffine(img_np, transform_matrix[:2], (input_size[1], input_size[0]), flags=cv2.INTER_LINEAR)
-                
-                encoder_inputs = {self.sam_encoder.get_inputs()[0].name: cv_image.astype(np.float32)}
-                self.encoder_output = self.sam_encoder.run(None, encoder_inputs)
-                
-                self.last_crop_rect = current_crop_rect
-                self.last_transform = transform_matrix
-                self.last_orig_size = img_np.shape[:2]
-                
-                encoder_time = (timer() - t_start) * 1000
-
-            # --- Decoder ---
-            t_start = timer()
-            
-            embedding = self.encoder_output[0]
-            onnx_coord = np.concatenate([np.array(valid_coords), np.array([[0.0, 0.0]])], axis=0)[None, :, :]
-            onnx_label = np.concatenate([np.array(valid_labels), np.array([-1])], axis=0)[None, :].astype(np.float32)
-            coords_aug = np.concatenate([onnx_coord, np.ones((1, onnx_coord.shape[1], 1), dtype=np.float32)], axis=2)
-            onnx_coord = np.matmul(coords_aug, self.last_transform.T)[:, :, :2].astype(np.float32)
-
-            decoder_inputs = {
-                "image_embeddings": embedding,
-                "point_coords": onnx_coord, "point_labels": onnx_label,
-                "mask_input": np.zeros((1, 1, 256, 256), dtype=np.float32),
-                "has_mask_input": np.zeros(1, dtype=np.float32),
-                "orig_im_size": np.array(input_size, dtype=np.float32),
-            }
-            masks = self.sam_decoder.run(None, decoder_inputs)[0]
-            
-            inv_mtx = np.linalg.inv(self.last_transform)
-            mask_resized = cv2.warpAffine(masks[0, 0, :, :], inv_mtx[:2], (self.last_orig_size[1], self.last_orig_size[0]), flags=cv2.INTER_LINEAR)
-            mask_final = (mask_resized > 0.0).astype(np.uint8) * 255
-            
-            decoder_time = (timer() - t_start) * 1000
-            
-            self.model_output_mask = Image.new("L", self.original_image.size, 0)
-            self.model_output_mask.paste(Image.fromarray(mask_final, mode="L"), (x_off, y_off))
-            self.show_mask_overlay()
-
-            if encoder_time > 0:
-                final_status = f"SAM: Encoder {encoder_time:.0f}ms | Decoder {decoder_time:.0f}ms"
-            else:
-                final_status = f"SAM: Encoder (Cached) | Decoder {decoder_time:.0f}ms"
-
-        except Exception as e: 
-            print(f"SAM Error: {e}")
-            final_status = "SAM Error"
-        finally:
-            QApplication.restoreOverrideCursor()
-            self.set_loading(False, final_status)
 
     def run_automatic_model(self, model_name=None):
         # Check if run from a hotkey (u,i,o,b) or get name from model list
@@ -1897,129 +1345,34 @@ class BackgroundRemoverGUI(QMainWindow):
             msg_box.exec()
             return
 
-
-        found_name = None
-        for f in os.listdir(MODEL_ROOT_DIR):
-            if model_name in f and f.endswith(".onnx"):
-                found_name = f.replace(".onnx", "")
-                break
-        if not found_name:
-            self.status_label.setText(f"Model {model_name} not found")
-            return
-
-        model_name = found_name
-        model_path = os.path.join(MODEL_ROOT_DIR, model_name + ".onnx")
         crop, x_off, y_off = self.get_viewport_crop()
         if crop.width == 0 or crop.height == 0:
             return
 
-        prov_str, prov_opts, prov_code = self.combo_auto_model_EP.currentData()
+        provider_data = self.combo_auto_model_EP.currentData()
 
-        session = None
-        cache_key = f"{model_name}_{prov_code}"
-        load_time = 0.0 
-        cache_mode = self.auto_cache_group.checkedId()
+        try:
+            self.set_loading(True, f"Loading {model_name}...")
+            session, load_time = self.model_manager.get_auto_session(model_name, provider_data)
+            _,_, prov_code = provider_data
+            self.update_cached_model_icons()
+            self.set_loading(False,"Model Loaded")
 
-        if cache_mode > 0 and cache_key in self.loaded_whole_models:
-            session = self.loaded_whole_models[cache_key]
-
-        if session is None:
-            self.set_loading(True, f"Loading and running {model_name} on {prov_code.upper()}...")
-            t_start = timer()
-            try:
-                if cache_mode == 1: # Cache Last
-                    # Clear previous models before adding the new one
-                    if self.loaded_whole_models:
-                        for key, sess in self.loaded_whole_models.items():
-                            del sess
-                        self.loaded_whole_models.clear()
-                        gc.collect()
-                
-                session = self._create_inference_session(model_path, prov_str, prov_opts, model_name)
-                load_time = (timer() - t_start) * 1000
-                self.update_cached_model_icons()
-
-                self.loaded_whole_models[cache_key] = session
-
-            except Exception as e:
-                self.set_loading(False, "Model load failed")
-                QMessageBox.critical(self, "Model Load Error", f"Failed to create ONNX session for {model_name} on {prov_code.upper()}:\n\n{e}")
-                return
-        
-        # Only set loading once if the session was already cached
-        # otherwise loading cursor persists after inference 
-        if load_time == 0.0:
             self.set_loading(True, f"Running {model_name}...")
-        
-        # Get model input size from the session
-        try:
-            input_shape = session.get_inputs()[0].shape
-            # Assume shape is [batch, channels, height, width]
-            target_h, target_w = input_shape[2], input_shape[3]
+            mask_arr, inf_time = self.model_manager.run_auto_inference(session, crop, model_name)
 
-            if "rmbg" in model_name.lower() and "2" in model_name.lower():
-                # rmbg2 needs specifying manually
-                target_h = 1024
-                target_w = 1024
+            res_mask = Image.fromarray((mask_arr * 255).astype("uint8"), "L").resize(crop.size, Image.Resampling.LANCZOS)
 
-        except Exception as e:
-            self.set_loading(False, "Error reading model input.")
-            QMessageBox.critical(
-                self,
-                "Model Error",
-                f"Could not read valid H/W from the model input shape ({session.get_inputs()[0].shape}):\n{e}"
-            )
-            return
-
-        final_status = "Idle"
-        inference_time = 0.0
-        try:
-            # --- Preprocessing ---
-            img_r = crop.convert("RGB").resize((target_w, target_h), Image.BICUBIC)
-
-            if "isnet" in model_name or "rmbg" in model_name:
-                mean, std = (0.5, 0.5, 0.5), (1.0, 1.0, 1.0)
-            else:
-                mean, std = (0.485, 0.456, 0.406), (0.229, 0.224, 0.225)
-
-            im = np.array(img_r) / 255.0
-            tmp = np.zeros((im.shape[0], im.shape[1], 3), dtype=np.float32)
-            tmp[:, :, 0] = (im[:, :, 0] - mean[0]) / std[0]
-            tmp[:, :, 1] = (im[:, :, 1] - mean[1]) / std[1]
-            tmp[:, :, 2] = (im[:, :, 2] - mean[2]) / std[2]
-
-            inp = np.expand_dims(tmp.transpose((2, 0, 1)), 0).astype(np.float32)
-
-            # --- Inference ---
-            t_start_inf = timer()
-            result = session.run(None, {session.get_inputs()[0].name: inp})[0]
-            inference_time = (timer() - t_start_inf) * 1000
-
-            # --- Postprocessing ---
-            mask = result[0][0]
-            
-            if "BiRefNet" in model_name:
-                mask = 1 / (1 + np.exp(-mask))
-
-            denom = (mask.max() - mask.min()) or 1.0
-            mask = (mask - mask.min()) / denom
-
-            res_mask = Image.fromarray((mask * 255).astype("uint8"), "L").resize(
-                crop.size, Image.Resampling.LANCZOS
-            )
             self.model_output_mask = Image.new("L", self.original_image.size, 0)
             self.model_output_mask.paste(res_mask, (x_off, y_off))
             self.show_mask_overlay()
 
             load_str = f"{load_time:.0f}ms" if load_time > 0 else "Cached"
-            final_status = f"{model_name} ({prov_code.upper()}): Load {load_str} | Inf {inference_time:.0f}ms"
-
-            if cache_mode == 0: # No Caching
-                del session
-                gc.collect()
-        except Exception as e: 
-            QMessageBox.critical(self, "Error", str(e))
+            final_status = f"{model_name} ({prov_code.upper()}): Load {load_str} | Inf {inf_time:.0f}ms"
+        
+        except Exception as e:
             final_status = "Inference Error"
+            QMessageBox.critical(self, "Error", str(e))
         finally:
             self.set_loading(False, final_status)
 
@@ -2223,10 +1576,15 @@ class BackgroundRemoverGUI(QMainWindow):
                 
                 selected_algorithm = self.combo_matting_algorithm.currentText()
                 
-                if "vitmatte" in selected_algorithm.lower():
-                    matted_alpha_crop = self.run_vitmatte_inference(image_crop, trimap_np)
-                else: # Default to PyMatting
-                    matted_alpha_crop = self.run_pymatting(image_crop, trimap_np)
+                # For now use the provider we have selected in automatic models combobox
+                provider_data = self.combo_auto_model_EP.currentData()
+                
+                matted_alpha_crop = self.model_manager.run_matting(
+                    selected_algorithm, 
+                    image_crop, 
+                    trimap_np, 
+                    provider_data
+                )
 
                 if matted_alpha_crop:
                     new_m = m.copy()
@@ -2235,7 +1593,7 @@ class BackgroundRemoverGUI(QMainWindow):
                     new_m.paste(matted_alpha_crop, (x_off, y_off))
                     m = new_m
             except Exception as e:
-                QMessageBox.critical(self, "Alpha Matting Error", f"An error occurred during alpha matting:\n{e}")
+                QMessageBox.critical(self, "Alpha Matting Error", str(e))
             finally:
                 self.set_loading(False, "Idle")
         
@@ -2282,68 +1640,7 @@ class BackgroundRemoverGUI(QMainWindow):
         
         return trimap
 
-    def run_pymatting(self, image_crop_pil, trimap_np):
-        """
-        Calculates the alpha matte using the PyMatting library.
-        Returns the alpha matte as a PIL Image.
-        """
-        img_normalized = np.array(image_crop_pil.convert("RGB")) / 255.0
-        trimap_normalized = trimap_np / 255.0
-
-        alpha = estimate_alpha_cf(img_normalized, trimap_normalized)
-        alpha = np.clip(alpha * 255, 0, 255).astype(np.uint8)
-        
-        return Image.fromarray(alpha, mode="L")
-
-    def run_vitmatte_inference(self, image_crop_pil, trimap_np):
-        """
-        Runs inference with a ViTMatte ONNX model.
-        Returns the alpha matte as a PIL Image.
-        """
-        model_name = self.combo_matting_algorithm.currentText()
-        prov_str, prov_opts, prov_code = self.combo_auto_model_EP.currentData()
-        cache_key = f"{model_name}_{prov_code}"
-        session = self.loaded_matting_models.get(cache_key)
-
-        # TODO - respect users caching options
-        if session is None:
-            model_path = os.path.join(MODEL_ROOT_DIR, model_name + ".onnx")
-            if not os.path.exists(model_path):
-                raise FileNotFoundError(f"ViTMatte model not found at: {model_path}")
-            
-            self.set_loading(True, f"Loading {model_name}...")
-            session = self._create_inference_session(model_path, prov_str, prov_opts, model_name)
-            self.loaded_matting_models[cache_key] = session
-            self.set_loading(False)
-
-        # Preprocess
-        original_size = image_crop_pil.size
-        trimap_pil = Image.fromarray(trimap_np)
-        
-        # use 1024 for performance, but any multiple of 32 will work
-        # TODO maybe let user choose size. On GPU no reason to restrict users
-        target_size = (1024,1024)
-
-        image_resized = image_crop_pil.convert("RGB").resize(target_size, Image.BILINEAR)
-        trimap_resized = trimap_pil.convert("L").resize(target_size, Image.NEAREST)
-
-        image_np = (np.array(image_resized, dtype=np.float32) / 255.0 - np.array([0.485, 0.456, 0.406])) / np.array([0.229, 0.224, 0.225])
-        trimap_np_resized = np.expand_dims(np.array(trimap_resized, dtype=np.float32) / 255.0, axis=-1)
-        
-        combined = np.concatenate((image_np, trimap_np_resized), axis=2)
-        combined = np.transpose(combined, (2, 0, 1))[np.newaxis, ...].astype(np.float32)
-
-        # Inference
-        input_name = session.get_inputs()[0].name
-        outputs = session.run(None, {input_name: combined})
-
-        # --- Postprocess ---
-        alpha = outputs[0][0][0]
-        alpha_image = Image.fromarray((alpha * 255).astype(np.uint8), mode='L')
-        alpha_image = alpha_image.resize(original_size, Image.LANCZOS)
-        
-        return alpha_image
-
+    
 
     def toggle_shadow_options(self, checked):
         if checked: self.shadow_frame.show()
@@ -2356,18 +1653,10 @@ class BackgroundRemoverGUI(QMainWindow):
         
         if self.chk_estimate_foreground.isChecked():
             try:
-                image_rgb_normalized = np.array(self.original_image.convert("RGB")) / 255.0
-                alpha_normalized = np.array(self.working_mask.convert("L")) / 255.0
 
                 self.set_loading(True, "Estimating foreground colour correction")
-                foreground_rgb_normalized = estimate_foreground_ml(image_rgb_normalized, alpha_normalized)
 
-                foreground_rgb = np.clip(foreground_rgb_normalized * 255, 0, 255)
-                alpha_channel = np.clip(alpha_normalized * 255, 0, 255)
-                
-                cutout_array = np.dstack((foreground_rgb, alpha_channel)).astype(np.uint8)
-                
-                cutout = Image.fromarray(cutout_array, "RGBA")
+                cutout = self.model_manager.estimate_foreground(self.original_image, self.working_mask)
 
                 self.set_loading(False)
 
