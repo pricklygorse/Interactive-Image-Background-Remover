@@ -4,7 +4,7 @@ try:
     import pyi_splash # noqa
     pyi_splash.update_text("Loading Packages")
 except: pass
-
+import argparse
 import sys
 import os
 import math
@@ -116,7 +116,7 @@ AVAILABLE_EPS = get_available_ep_options()
 # --- Main Application ---
 
 class BackgroundRemoverGUI(QMainWindow):
-    def __init__(self, image_paths):
+    def __init__(self, image_paths, cli_args=None):
         super().__init__()
         
         try: pyi_splash.update_text("App Initialisation")
@@ -153,6 +153,27 @@ class BackgroundRemoverGUI(QMainWindow):
         try: pyi_splash.update_text("Loading UI")
         except: pass
         self.init_ui()
+
+        if cli_args.binary:
+            self.chk_post.setChecked(True)
+        if cli_args.soften:
+            self.chk_soften.setChecked(True)
+        if cli_args.alpha_matting:
+                self.chk_alpha_matting.setChecked(True)
+        if cli_args.colour_correction:
+                self.chk_estimate_foreground.setChecked(True)
+        if cli_args.shadow:
+                self.chk_shadow.setChecked(True)
+
+        if cli_args.bg_colour:
+            # Search for the color in the combo box (case-insensitive)
+            index = self.combo_bg_color.findText(cli_args.bg_colour, 
+                                                Qt.MatchFlag.MatchFixedString)
+            if index >= 0:
+                self.combo_bg_color.setCurrentIndex(index)
+            else:
+                print(f"Warning: Background color '{cli_args.bg_colour}' not found in options.")
+
         self.setup_keybindings()
 
         # Debounce the sliders for heavy computation options
@@ -2733,9 +2754,23 @@ Shortcuts:
         d.exec()
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Interactive Image Background Remover")
+    parser.add_argument("images", nargs="*", help="Paths to images")
+    
+    parser.add_argument("--alpha-matting", action="store_true", help="Start with Alpha Matting enabled")
+    parser.add_argument("--bg-colour", type=str)
+    parser.add_argument("--binary", action="store_true", help="Start with Binary Mask enabled")
+    parser.add_argument("--soften", action="store_true", help="Start with Soften Mask enabled")
+    parser.add_argument("--shadow", action="store_true", help="Start with Drop Shadow enabled")
+    parser.add_argument("--colour-correction", action="store_true", help="Start with Colour Correction enabled")
+
+
+
+    args = parser.parse_args()
+
     app = QApplication(sys.argv)
     # Set fusion for consistency across OS. The theme will be loaded from settings.
     app.setStyle("Fusion")
-    window = BackgroundRemoverGUI(sys.argv[1:])
+    window = BackgroundRemoverGUI(args.images, args)
     window.showMaximized()
     sys.exit(app.exec())
