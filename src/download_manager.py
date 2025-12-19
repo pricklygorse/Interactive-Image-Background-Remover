@@ -212,6 +212,27 @@ MODEL_DOWNLOAD_GROUPS = [
                     {"file": "BiRefNet-DIS-epoch_590.onnx", "url": REMBG_BASE_URL + "BiRefNet-DIS-epoch_590.onnx", "size_mb": 928.0}
                 ]
             },
+            {   "id": "BEN2",
+                "name": "BEN2: Background Erase Network (2025)",
+                "description": "BEN2 (Background Erase Network) introduces a novel approach to foreground segmentation through its innovative Confidence Guided Matting (CGM) pipeline",
+                "files": [
+                    {"file": "ben2_base.onnx", "url": "https://huggingface.co/PramaLLC/BEN2/resolve/main/BEN2_Base.onnx?download=true", "size_mb": 223.0}  # mirror https://huggingface.co/RedbeardNZ/BEN2/resolve/main/BEN2_Base.onnx?download=true
+                ]
+            },
+            {   "id": "mvanet",
+                "name": "MVANet (2024)",
+                "description": "Multi-view Aggregation Network for Dichotomous Image Segmentation",
+                "files": [
+                    {"file": "mvanet_full.onnx", "url": "https://huggingface.co/onnx-community/MVANet-ONNX/resolve/main/onnx/model.onnx?download=true", "size_mb": 422.0} 
+                ]
+            },
+            {   "id": "mvanet_quant",
+                "name": "MVANet (2024) quantised",
+                "description": "Multi-view Aggregation Network for Dichotomous Image Segmentation",
+                "files": [
+                    {"file": "mvanet_quant.onnx", "url": "https://huggingface.co/onnx-community/MVANet-ONNX/resolve/main/onnx/model_quantized.onnx?download=true", "size_mb": 141.0} 
+                ]
+            },
         ]
     },
     {

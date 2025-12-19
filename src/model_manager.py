@@ -225,7 +225,9 @@ class ModelManager:
         if "isnet" in model_name or "rmbg" in model_name:
             mean, std = (0.5, 0.5, 0.5), (1.0, 1.0, 1.0)
         else:
+            # BEN2 uses imagenet normalisation
             mean, std = (0.485, 0.456, 0.406), (0.229, 0.224, 0.225)
+
 
         im = np.array(img_r) / 255.0
         tmp = np.zeros((im.shape[0], im.shape[1], 3), dtype=np.float32)
@@ -240,7 +242,7 @@ class ModelManager:
         inference_time = (timer() - t_start) * 1000
 
         mask = result[0][0]
-        if "BiRefNet" in model_name:
+        if "BiRefNet" in model_name or "mvanet" in model_name:
             mask = 1 / (1 + np.exp(-mask))
 
         denom = (mask.max() - mask.min()) or 1.0

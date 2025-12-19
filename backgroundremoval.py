@@ -978,7 +978,7 @@ class BackgroundRemoverGUI(QMainWindow):
         else: self.combo_sam.addItem("No Models Found")
 
     def populate_whole_models(self):
-        whole_models = ["rmbg", "isnet", "u2net", "BiRefNet"]
+        whole_models = ["rmbg", "isnet", "u2net", "BiRefNet", "ben2", "mvanet"]
         matches = []
         if os.path.exists(MODEL_ROOT_DIR):
             for filename in os.listdir(MODEL_ROOT_DIR):
