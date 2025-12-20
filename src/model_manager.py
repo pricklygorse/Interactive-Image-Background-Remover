@@ -393,6 +393,15 @@ class ModelManager:
         mask_resized = cv2.warpAffine(masks[0, 0, :, :], inv_mtx[:2], (self.last_orig_size[1], self.last_orig_size[0]), flags=cv2.INTER_LINEAR)
         final_mask = (mask_resized > 0.0).astype(np.uint8) * 255
         
+        # although we binarise the mask, we could keep it soft using a sigmoid function
+        # which may work better with alpha matting.
+        # for now, continue to output binary mask
+        # scale_intensity = 2 # increase low confidence areas to reduce softness
+        # probs = 1 / (1 + np.exp(-(mask_resized * scale_intensity)))
+        # probs = (probs - 0.5) * 2        # Rescale so that the 0.5 boundary becomes 0.0
+        # final_mask = (np.clip(probs, 0, 1) * 255).astype(np.uint8) # clip away <0 (background)
+
+
         dec_time = (timer() - t_start) * 1000
         return final_mask, enc_time, dec_time
 
