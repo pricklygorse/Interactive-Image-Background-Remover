@@ -1361,10 +1361,8 @@ class BackgroundRemoverGUI(QMainWindow):
             self.set_loading(True, f"Running {model_name}...")
             mask_arr, inf_time = self.model_manager.run_auto_inference(session, crop, model_name)
 
-            res_mask = Image.fromarray((mask_arr * 255).astype("uint8"), "L").resize(crop.size, Image.Resampling.LANCZOS)
-
             self.model_output_mask = Image.new("L", self.original_image.size, 0)
-            self.model_output_mask.paste(res_mask, (x_off, y_off))
+            self.model_output_mask.paste(Image.fromarray(mask_arr, "L"), (x_off, y_off))
             self.show_mask_overlay()
 
             load_str = f"{load_time:.0f}ms" if load_time > 0 else "Cached"

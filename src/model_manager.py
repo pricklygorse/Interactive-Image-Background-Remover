@@ -247,8 +247,11 @@ class ModelManager:
 
         denom = (mask.max() - mask.min()) or 1.0
         mask = (mask - mask.min()) / denom
+
+        mask = cv2.resize(mask, (image_crop.width, image_crop.height), interpolation=cv2.INTER_LINEAR)
+        final_mask = (mask * 255).astype(np.uint8)
         
-        return mask, inference_time
+        return final_mask, inference_time
     
     # --- SAM Models ---
 
