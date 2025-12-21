@@ -21,7 +21,7 @@ from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QH
                              QGraphicsRectItem, QGraphicsEllipseItem, QGraphicsPathItem, 
                              QTextEdit, QSizePolicy, QRadioButton, QButtonGroup, QInputDialog, 
                              QProgressBar, QStyle)
-from PyQt6.QtCore import Qt, QTimer, QPointF, QRectF, QSettings, QPropertyAnimation, QEasingCurve
+from PyQt6.QtCore import Qt, QTimer, QPointF, QRectF, QSettings, QPropertyAnimation, QEasingCurve, QThread, pyqtSignal
 from PyQt6.QtGui import (QPixmap, QImage, QColor, QPainter, QPainterPath, QPen, QBrush,
                          QKeySequence, QShortcut, QCursor, QIcon, QPalette)
 
@@ -53,6 +53,25 @@ else:
 MODEL_ROOT_DIR = os.path.join(SCRIPT_BASE_DIR, "Models/")
 
 CACHE_ROOT_DIR = os.path.join(SCRIPT_BASE_DIR, "Models", "cache")
+
+class InferenceWorker(QThread):
+    """Super simple threaded worker that can take functions"""
+    finished = pyqtSignal(object)  # Success result (mask, image, etc.)
+    error = pyqtSignal(str)       # Error message
+
+    def __init__(self, task_fn, *args, **kwargs):
+        super().__init__()
+        self.task_fn = task_fn
+        self.args = args
+        self.kwargs = kwargs
+
+    def run(self):
+        try:
+            result = self.task_fn(*self.args, **self.kwargs)
+            self.finished.emit(result)
+        except Exception as e:
+            self.error.emit(str(e))
+
 
 class BackgroundRemoverGUI(QMainWindow):
     def __init__(self, image_paths, cli_args=None):
@@ -940,12 +959,15 @@ class BackgroundRemoverGUI(QMainWindow):
             self.progress_bar.show()
             self.status_label.setText(message if message else "Processing...")
             self.status_label.setStyleSheet("color: red;")
+            # Prevent multiple threads being created by user clicking stuff
+            self.centralWidget().layout().itemAt(0).widget().setEnabled(False)
             QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
             QApplication.processEvents() 
         else:
             self.progress_bar.hide()
             self.status_label.setText(message if message else "Idle")
             self.status_label.setStyleSheet("")
+            self.centralWidget().layout().itemAt(0).widget().setEnabled(True)
             QApplication.restoreOverrideCursor()
 
     def showEvent(self, event):
@@ -1218,6 +1240,10 @@ class BackgroundRemoverGUI(QMainWindow):
     
 
     def handle_sam_point(self, scene_pos, is_positive):
+        
+        if self.is_busy():
+            return # Interaction blocked during inference
+        
         self.coordinates.append([scene_pos.x(), scene_pos.y()])
         self.labels.append(1 if is_positive else 0)
         c = Qt.GlobalColor.green if is_positive else Qt.GlobalColor.red
@@ -1239,14 +1265,15 @@ class BackgroundRemoverGUI(QMainWindow):
         self.run_sam_inference(self.coordinates, self.labels)
 
     def handle_sam_box(self, rect):
+        
+        if self.is_busy():
+            return # Interaction blocked during inference
+    
         self.coordinates = [[rect.left(), rect.top()], [rect.right(), rect.bottom()]]
         self.labels = [2, 3]
         self.run_sam_inference(self.coordinates, self.labels)
         self.coordinates = []
         self.labels = []
-
-
-    
 
     def _process_sam_points(self, coords, labels):
         """
@@ -1289,50 +1316,59 @@ class BackgroundRemoverGUI(QMainWindow):
 
 
     def run_sam_inference(self, coords, labels):
+        
+        # Prevent multiple threads
+        if self.is_busy():
+            return
+        
         model_name = self.combo_sam.currentText()
         if "Select" in model_name or "No Models" in model_name: return
 
-        # Load
+        self.set_loading(True, "Running SAM Inference. First run on viewport is slow.")
+        
         provider_data = self.combo_sam_model_EP.currentData() or ("CPUExecutionProvider", {}, "cpu")
-        success, msg = self.model_manager.init_sam_session(model_name, provider_data)
-        if not success:
-            QMessageBox.critical(self, "Error", msg)
-            return
-
-        # Preprocess UI Coords
+        
         processed = self._process_sam_points(coords, labels)
         if not processed:
             return
         crop, x_off, y_off, valid_coords, valid_labels = processed
         current_crop_rect = (x_off, y_off, crop.width, crop.height)
 
-        self.set_loading(True, "Running SAM Inference...")
         
-        try:
-            if "sam2" in model_name:
-                binary_mask, t_enc, t_dec = self.model_manager.run_sam2(crop, valid_coords, valid_labels, current_crop_rect)
-            else:
-                binary_mask, t_enc, t_dec = self.model_manager.run_sam1(crop, valid_coords, valid_labels, current_crop_rect)
+        def _do_sam_work(model_manager, model_name, provider_data, crop, valid_coords, valid_labels, current_crop_rect):
             
-            # Apply Mask
-            self.model_output_mask = Image.new("L", self.original_image.size, 0)
-            self.model_output_mask.paste(Image.fromarray(binary_mask, mode="L"), (x_off, y_off))
-            self.show_mask_overlay()
-
-            if t_enc > 0:
-                final_status = f"SAM: Encoder {t_enc:.0f}ms | Decoder {t_dec:.0f}ms"
+            success, msg = model_manager.init_sam_session(model_name, provider_data)
+            if not success: raise Exception(msg)
+            
+            prov_code = provider_data[2]
+            if "sam2" in model_name:
+                mask_arr, status = model_manager.run_sam2(crop, valid_coords, valid_labels, current_crop_rect, prov_code)
             else:
-                final_status = f"SAM: Encoder (Cached) | Decoder {t_dec:.0f}ms"
-
-        except Exception as e:
-            print(f"SAM Error: {e}")
-            final_status = "SAM Error"
-        finally:
-            self.set_loading(False, final_status)
+                mask_arr, status = model_manager.run_sam1(crop, valid_coords, valid_labels, current_crop_rect, prov_code)
+            
+            return {"mask": mask_arr, "status": status}
 
 
+        self.worker = InferenceWorker(
+            _do_sam_work, 
+            self.model_manager, model_name, provider_data, 
+            crop, valid_coords, valid_labels, current_crop_rect
+        )
+        
+        self.worker.finished.connect(lambda res: self._on_inference_finished(res, x_off, y_off))
+        self.worker.error.connect(lambda msg: (self.set_loading(False), QMessageBox.critical(self, "SAM Error", msg)))
+        self.worker.start()
+
+    
+    def is_busy(self):
+        """Checks if a background task is currently running."""
+        return hasattr(self, 'worker') and self.worker is not None and self.worker.isRunning()
 
     def run_automatic_model(self, model_name=None):
+        
+        if self.is_busy():
+            return # Prevent multiple threads
+        
         # Check if run from a hotkey (u,i,o,b) or get name from model list
         if not model_name: 
             model_name = self.combo_whole.currentText()
@@ -1350,29 +1386,39 @@ class BackgroundRemoverGUI(QMainWindow):
             return
 
         provider_data = self.combo_auto_model_EP.currentData()
+        self.set_loading(True, f"Processing {model_name}...")
 
-        try:
-            self.set_loading(True, f"Loading {model_name}...")
-            session, load_time = self.model_manager.get_auto_session(model_name, provider_data)
-            _,_, prov_code = provider_data
-            self.update_cached_model_icons()
-            self.set_loading(False,"Model Loaded")
+        def _do_auto_work(model_manager, model_name, provider_data, crop):
+            prov_str, prov_opts, prov_code = provider_data
+            session, load_t = model_manager.get_auto_session(model_name, provider_data)
+            # Send prov_code to generate the status message
+            mask_arr, status = model_manager.run_auto_inference(session, crop, model_name, load_t, prov_code)
+            return {"mask": mask_arr, "status": status}
 
-            self.set_loading(True, f"Running {model_name}...")
-            mask_arr, inf_time = self.model_manager.run_auto_inference(session, crop, model_name)
+        self.worker = InferenceWorker(_do_auto_work, 
+                                      self.model_manager, 
+                                      model_name, 
+                                      provider_data, 
+                                      crop)
+        self.worker.finished.connect(lambda res: self._on_inference_finished(res, x_off, y_off))
+        self.worker.error.connect(lambda msg: (self.set_loading(False), QMessageBox.critical(self, "Error", msg)))
+        self.worker.start()
 
-            self.model_output_mask = Image.new("L", self.original_image.size, 0)
-            self.model_output_mask.paste(Image.fromarray(mask_arr, "L"), (x_off, y_off))
-            self.show_mask_overlay()
+    def _on_inference_finished(self, result, x_off, y_off):
+        """Processes model output masks into a overlay, and updates UI"""
+        mask_arr = result["mask"]
+        status_msg = result["status"]
 
-            load_str = f"{load_time:.0f}ms" if load_time > 0 else "Cached"
-            final_status = f"{model_name} ({prov_code.upper()}): Load {load_str} | Inf {inf_time:.0f}ms"
+        # Paste the viewport mask into the correct place
+        self.model_output_mask = Image.new("L", self.original_image.size, 0)
+        self.model_output_mask.paste(Image.fromarray(mask_arr, mode="L"), (x_off, y_off))
         
-        except Exception as e:
-            final_status = "Inference Error"
-            QMessageBox.critical(self, "Error", str(e))
-        finally:
-            self.set_loading(False, final_status)
+        # Update UI
+        self.show_mask_overlay()
+        self.update_cached_model_icons()
+        
+        self.set_loading(False, status_msg)
+
 
     def show_mask_overlay(self):
         if self.model_output_mask:
@@ -1775,7 +1821,10 @@ class BackgroundRemoverGUI(QMainWindow):
         self.view_output.update_brush_cursor(scene_pos)
 
     def handle_paint_start(self, pos):
-
+        
+        if self.is_busy():
+            return # Interaction blocked during inference
+        
         # If a path is already being drawn, do nothing.
         if hasattr(self, 'current_path'): return
 
@@ -1813,6 +1862,9 @@ class BackgroundRemoverGUI(QMainWindow):
 
     def handle_paint_move(self, last, curr):
         
+        if self.is_busy():
+            return # Interaction blocked during inference
+        
         if hasattr(self, 'current_path'):
             self.current_path.lineTo(curr)
             self.temp_path_item.setPath(self.current_path)
@@ -1821,7 +1873,10 @@ class BackgroundRemoverGUI(QMainWindow):
                 self.temp_path_item_out.setPath(self.current_path)
 
     def handle_paint_end(self):
-      
+        
+        if self.is_busy():
+            return # Interaction blocked during inference
+        
         # Clean up visual item
         if hasattr(self, 'temp_path_item'):
             self.scene_input.removeItem(self.temp_path_item)

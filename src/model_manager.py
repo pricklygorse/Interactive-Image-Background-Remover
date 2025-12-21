@@ -209,7 +209,7 @@ class ModelManager:
             
         return session, load_time
     
-    def run_auto_inference(self, session, image_crop, model_name):
+    def run_auto_inference(self, session, image_crop, model_name, load_time, prov_code):
         """
         Runs inference on a PIL image using the provided session.
         Returns the mask as a numpy array (0.0 to 1.0)
@@ -241,6 +241,9 @@ class ModelManager:
         result = session.run(None, {session.get_inputs()[0].name: inp})[0]
         inference_time = (timer() - t_start) * 1000
 
+        load_str = f"{load_time:.0f}ms" if load_time > 0 else "Cached"
+        status = f"{model_name} ({prov_code.upper()}): Load {load_str} | Inf {inference_time:.0f}ms"
+
         mask = result[0][0]
         if "BiRefNet" in model_name or "mvanet" in model_name:
             mask = 1 / (1 + np.exp(-mask))
@@ -251,7 +254,7 @@ class ModelManager:
         mask = cv2.resize(mask, (image_crop.width, image_crop.height), interpolation=cv2.INTER_LINEAR)
         final_mask = (mask * 255).astype(np.uint8)
         
-        return final_mask, inference_time
+        return final_mask, status
     
     # --- SAM Models ---
 
@@ -352,7 +355,7 @@ class ModelManager:
         actual_inputs = {k: v for k, v in inputs.items() if k in [i.name for i in self.sam_decoder.get_inputs()]}
         self.sam_decoder.run(None, actual_inputs)
 
-    def run_sam1(self, image_crop, valid_coords, valid_labels, current_crop_rect):
+    def run_sam1(self, image_crop, valid_coords, valid_labels, current_crop_rect, prov_code):
         target_size, input_size = 1024, (684, 1024)
         img_np = np.array(image_crop.convert("RGB"))
         t_start = timer()
@@ -406,9 +409,13 @@ class ModelManager:
 
 
         dec_time = (timer() - t_start) * 1000
-        return final_mask, enc_time, dec_time
 
-    def run_sam2(self, image_crop, valid_coords, valid_labels, current_crop_rect):
+        enc_str = f"{enc_time:.0f}ms" if enc_time > 0.1 else "Cached"
+        status = f"SAM ({prov_code.upper()}): Enc {enc_str} | Dec {dec_time:.0f}ms"
+
+        return final_mask, status
+
+    def run_sam2(self, image_crop, valid_coords, valid_labels, current_crop_rect, prov_code):
         orig_h, orig_w = image_crop.height, image_crop.width
         t_start = timer()
         
@@ -458,9 +465,14 @@ class ModelManager:
              
         final_mask = cv2.resize(best_mask, (orig_w, orig_h), interpolation=cv2.INTER_LINEAR)
         binary = (final_mask > 0.0).astype(np.uint8) * 255
+        # see notes in run_sam1 if want to use a soft mask, not binary, for alpha matting
         
         dec_time = (timer() - t_start) * 1000
-        return binary, enc_time, dec_time
+
+        enc_str = f"{enc_time:.0f}ms" if enc_time > 0.1 else "Cached"
+        status = f"SAM ({prov_code.upper()}): Enc {enc_str} | Dec {dec_time:.0f}ms"
+
+        return binary, status
         
     def get_matting_session(self, model_name, provider_data):
         # uses cache clearing setting from automatic models, unsure if worth making it's own specific option
