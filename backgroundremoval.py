@@ -170,7 +170,7 @@ class BackgroundRemoverGUI(QMainWindow):
 
         # --- Sidebar ---
         sidebar_container = QFrame()
-        sidebar_container.setFixedWidth(300)
+        sidebar_container.setFixedWidth(320)
         sidebar_layout = QVBoxLayout(sidebar_container)
         sidebar_layout.setContentsMargins(0, 0, 0, 0)
 
@@ -182,7 +182,7 @@ class BackgroundRemoverGUI(QMainWindow):
         
         scroll_widget = QWidget()
         sl = QVBoxLayout(scroll_widget) # Main layout for controls
-        scroll_widget.setFixedWidth(sidebar_container.width()) # Constrain content width
+        scroll_widget.setFixedWidth(sidebar_container.width()-8) # Constrain content width
         scroll_area.setWidget(scroll_widget)
         sidebar_layout.addWidget(scroll_area)
 
