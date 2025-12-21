@@ -186,34 +186,9 @@ class BackgroundRemoverGUI(QMainWindow):
         scroll_area.setWidget(scroll_widget)
         sidebar_layout.addWidget(scroll_area)
 
-        nav = QHBoxLayout()
-        btn_open_file = QPushButton("Open"); btn_open_file.clicked.connect(self.load_image_dialog)
-        btn_open_clipboard = QPushButton("Clipboard"); btn_open_clipboard.clicked.connect(self.load_clipboard)
-        self.btn_prev_image = QPushButton("<<")
-        self.btn_prev_image.setMaximumWidth(40)
-        self.btn_prev_image.setToolTip("Load Previous Image (Left Arrow Key)")
-        self.btn_prev_image.clicked.connect(self.load_previous_image)
-        self.btn_next_image = QPushButton(">>")
-        self.btn_next_image.setMaximumWidth(40)
-        self.btn_next_image.setToolTip("Load Next Image (Right Arrow Key)")
-        self.btn_next_image.clicked.connect(self.load_next_image)
-        nav.addWidget(btn_open_file); nav.addWidget(btn_open_clipboard); nav.addWidget(self.btn_prev_image); nav.addWidget(self.btn_next_image)
-        sl.addLayout(nav)
-
-        self.update_prev_next_button_state()
-        
-        btn_edit_image = QPushButton("Edit Image"); btn_edit_image.clicked.connect(self.open_image_editor)
-        btn_load_mask = QPushButton("Load Mask"); btn_load_mask.clicked.connect(self.load_mask_dialog)
-
-        h_edit_load_buttons = QHBoxLayout()
-        h_edit_load_buttons.addWidget(btn_edit_image)
-        h_edit_load_buttons.addWidget(btn_load_mask)
-        sl.addLayout(h_edit_load_buttons)
-
-
-        self.available_eps = ModelManager.get_available_ep_options()
-
         # --- Hardware Acceleration Dropdown ---
+        self.available_eps = ModelManager.get_available_ep_options()
+        
         self.hw_options_frame = CollapsibleFrame("Hardware Acceleration Options", 
                                                  tooltip="Configure which hardware (CPU/GPU) is used for different model types.\n" 
                                                          "First run on GPU can take take while models compile\n"
@@ -308,9 +283,43 @@ class BackgroundRemoverGUI(QMainWindow):
 
         self.trt_cache_option_visibility() # Initial check for TensorRT
 
-        # Rest of UI
+        # End Hardware Acceleration
+
+
+
+
+        nav = QHBoxLayout()
+        btn_open_file = QPushButton("Open"); btn_open_file.clicked.connect(self.load_image_dialog)
+        btn_open_clipboard = QPushButton("Clipboard"); btn_open_clipboard.clicked.connect(self.load_clipboard)
+        self.btn_prev_image = QPushButton("<<")
+        self.btn_prev_image.setMaximumWidth(40)
+        self.btn_prev_image.setToolTip("Load Previous Image (Left Arrow Key)")
+        self.btn_prev_image.clicked.connect(self.load_previous_image)
+        self.btn_next_image = QPushButton(">>")
+        self.btn_next_image.setMaximumWidth(40)
+        self.btn_next_image.setToolTip("Load Next Image (Right Arrow Key)")
+        self.btn_next_image.clicked.connect(self.load_next_image)
+        nav.addWidget(btn_open_file); nav.addWidget(btn_open_clipboard); nav.addWidget(self.btn_prev_image); nav.addWidget(self.btn_next_image)
+        sl.addLayout(nav)
+
+        self.update_prev_next_button_state()
+        
+        btn_edit_image = QPushButton("Edit Image"); btn_edit_image.clicked.connect(self.open_image_editor)
+        btn_load_mask = QPushButton("Load Mask"); btn_load_mask.clicked.connect(self.load_mask_dialog)
+
+        h_edit_load_buttons = QHBoxLayout()
+        h_edit_load_buttons.addWidget(btn_edit_image)
+        h_edit_load_buttons.addWidget(btn_load_mask)
+        sl.addLayout(h_edit_load_buttons)
+
+        # End File loading buttons
+
+        
+
+        # Mask generation model selection
+
         h_models_header = QHBoxLayout()
-        lbl_models = QLabel("<b> Models:</b>")
+        lbl_models = QLabel("<b> Mask Generation:</b>")
         lbl_models.setContentsMargins(3, 0, 0, 0)
         h_models_header.addWidget(lbl_models)
         h_models_header.addStretch()
@@ -346,61 +355,35 @@ class BackgroundRemoverGUI(QMainWindow):
         self.populate_whole_models()
         sl.addWidget(self.combo_whole)
         
-        btn_whole = QPushButton("Run Automatic"); btn_whole.clicked.connect(lambda: self.run_automatic_model())
-        sl.addWidget(btn_whole)
+        # Run Model Button and layout adjustment
+        h_whole_model = QHBoxLayout()
+        self.btn_whole = QPushButton("Run Model"); self.btn_whole.clicked.connect(lambda: self.run_automatic_model())
+        h_whole_model.addWidget(self.combo_whole)
+        h_whole_model.addWidget(self.btn_whole)
+        sl.addLayout(h_whole_model)
 
-        lbl_actions = QLabel("<b> Actions:</b>")
-        lbl_actions.setContentsMargins(3, 0, 0, 0)
-        sl.addWidget(lbl_actions)
-        h_act = QHBoxLayout()
-        btn_add = QPushButton("Add Mask"); btn_add.clicked.connect(self.add_mask)
-        btn_sub = QPushButton("Sub Mask"); btn_sub.clicked.connect(self.subtract_mask)
-        h_act.addWidget(btn_add); h_act.addWidget(btn_sub)
-        sl.addLayout(h_act)
-        
-        h_ut = QHBoxLayout()
-        btn_undo = QPushButton("Undo"); btn_undo.clicked.connect(self.undo)
+        divider = QFrame()
+        divider.setFrameShape(QFrame.Shape.HLine)
+        divider.setFrameShadow(QFrame.Shadow.Sunken)
+        sl.addWidget(divider)
+
+        h_clr_pnt = QHBoxLayout()
         btn_clr = QPushButton("Clear Points/Masks"); btn_clr.clicked.connect(self.clear_overlay)
-        h_ut.addWidget(btn_undo); h_ut.addWidget(btn_clr)
-        sl.addLayout(h_ut)
-        
-        h_rs = QHBoxLayout()
-        btn_rst = QPushButton("Reset Img"); btn_rst.clicked.connect(self.reset_working_image)
-        btn_all = QPushButton("Reset All"); btn_all.clicked.connect(self.reset_all)
-        h_rs.addWidget(btn_rst); h_rs.addWidget(btn_all)
-        sl.addLayout(h_rs)
-        
-        h_vs = QHBoxLayout()
-        btn_cp = QPushButton("Copy In->Out"); btn_cp.clicked.connect(self.copy_input_to_output)
-        btn_c_vis = QPushButton("Clear Visible"); btn_c_vis.clicked.connect(self.clear_visible_area)
-        h_vs.addWidget(btn_cp); h_vs.addWidget(btn_c_vis) 
-        sl.addLayout(h_vs)
-
-        lbl_options = QLabel("<b>Options:</b>")
-        lbl_options.setContentsMargins(3, 0, 0, 0)
-        sl.addWidget(lbl_options)
-
-        bg_layout = QHBoxLayout()
-        bg_label = QLabel("Background:")
-        bg_label.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Preferred)
-        bg_layout.addWidget(bg_label)
-        self.combo_bg_color = QComboBox()
-        self.combo_bg_color.addItems(["Transparent", "White", "Black", "Red", "Blue", 
-                  "Orange", "Yellow", "Green", "Grey", 
-                  "Lightgrey", "Brown", "Blurred (Slow)"])
-        self.combo_bg_color.currentTextChanged.connect(self.handle_bg_change)
-        bg_layout.addWidget(self.combo_bg_color)
-        sl.addLayout(bg_layout)
-
         self.chk_paint = QCheckBox("Paintbrush (P)"); self.chk_paint.toggled.connect(self.toggle_paint_mode)
-        sl.addWidget(self.chk_paint)
+        h_clr_pnt.addWidget(btn_clr); h_clr_pnt.addWidget(self.chk_paint)
+        sl.addLayout(h_clr_pnt)
+
+
         
-        self.chk_show_mask = QCheckBox("Show Mask"); self.chk_show_mask.toggled.connect(self.update_output_preview)
-        sl.addWidget(self.chk_show_mask)
-        
+
+
+        lbl_modifiers = QLabel("<b> Mask Modifiers:</b>")
+        lbl_modifiers.setContentsMargins(3, 0, 0, 0)
+        sl.addWidget(lbl_modifiers)
+
         self.chk_post = QCheckBox("Binary Mask (no partial transparency)")
         sl.addWidget(self.chk_post)
-        
+
         self.chk_soften = QCheckBox("Soften Mask/Paintbrush Edges")
         soften_checked = self.settings.value("soften_mask", False, type=bool)
         self.chk_soften.setChecked(soften_checked)
@@ -492,6 +475,69 @@ class BackgroundRemoverGUI(QMainWindow):
 
         sl.addWidget(self.alpha_matting_frame)
         self.alpha_matting_frame.hide()
+
+        # end alpha matting
+
+
+
+        lbl_actions = QLabel("<b> Output Image Actions:</b>")
+        lbl_actions.setContentsMargins(3, 0, 0, 0)
+        sl.addWidget(lbl_actions)
+        h_act = QHBoxLayout()
+        btn_add = QPushButton("Add Mask"); btn_add.clicked.connect(self.add_mask)
+        btn_sub = QPushButton("Sub Mask"); btn_sub.clicked.connect(self.subtract_mask)
+        h_act.addWidget(btn_add); h_act.addWidget(btn_sub)
+        sl.addLayout(h_act)
+        
+        h_ut = QHBoxLayout()
+        btn_undo = QPushButton("Undo"); btn_undo.clicked.connect(self.undo)
+        btn_redo = QPushButton("Redo"); btn_redo.clicked.connect(self.redo)
+        h_ut.addWidget(btn_undo); h_ut.addWidget(btn_redo)
+        sl.addLayout(h_ut)
+
+
+
+        lbl_canvas = QLabel("<b> Canvas:</b>")
+        lbl_canvas.setContentsMargins(3, 0, 0, 0)
+        sl.addWidget(lbl_canvas)
+
+
+
+        
+        h_rs = QHBoxLayout()
+        btn_rst = QPushButton("Reset Img"); btn_rst.clicked.connect(self.reset_working_image)
+        btn_all = QPushButton("Reset All"); btn_all.clicked.connect(self.reset_all)
+        h_rs.addWidget(btn_rst); h_rs.addWidget(btn_all)
+        sl.addLayout(h_rs)
+        
+        h_vs = QHBoxLayout()
+        btn_cp = QPushButton("Copy In->Out"); btn_cp.clicked.connect(self.copy_input_to_output)
+        btn_c_vis = QPushButton("Clear Viewport"); btn_c_vis.clicked.connect(self.clear_visible_area)
+        h_vs.addWidget(btn_cp); h_vs.addWidget(btn_c_vis) 
+        sl.addLayout(h_vs)
+
+        lbl_options = QLabel("<b>Output Styling:</b>")
+        lbl_options.setContentsMargins(3, 0, 0, 0)
+        sl.addWidget(lbl_options)
+
+        bg_layout = QHBoxLayout()
+        bg_label = QLabel("Background:")
+        bg_label.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Preferred)
+        bg_layout.addWidget(bg_label)
+        self.combo_bg_color = QComboBox()
+        self.combo_bg_color.addItems(["Transparent", "White", "Black", "Red", "Blue", 
+                  "Orange", "Yellow", "Green", "Grey", 
+                  "Lightgrey", "Brown", "Blurred (Slow)"])
+        self.combo_bg_color.currentTextChanged.connect(self.handle_bg_change)
+        bg_layout.addWidget(self.combo_bg_color)
+        sl.addLayout(bg_layout)
+        
+        self.chk_show_mask = QCheckBox("Preview Output Mask"); self.chk_show_mask.toggled.connect(self.update_output_preview)
+        sl.addWidget(self.chk_show_mask)
+        
+        
+        
+        
 
         self.chk_estimate_foreground = QCheckBox("Mask Edge Colour Correction (Slow)")
         self.chk_estimate_foreground.setToolTip("Recalculates edge colors to remove halos or fringes from the original background.\n"
@@ -1147,7 +1193,7 @@ class BackgroundRemoverGUI(QMainWindow):
             idx = self.combo_whole.findText(auto_model_id, Qt.MatchFlag.MatchContains)
             if idx >= 0:
                 self.combo_whole.setCurrentIndex(idx)
-                self.set_loading(True, f"Pre-loading Automatic Model: {self.combo_whole.currentText()}")
+                self.set_loading(True, f"Pre-loading Automatic Model: {self.combo_whole.currentText()} (Startup)")
                 provider_data = self.combo_auto_model_EP.currentData()
                 self.model_manager.get_auto_session(self.combo_whole.currentText(), provider_data)
                 self.set_loading(False, f"Pre-loaded Automatic Model")
