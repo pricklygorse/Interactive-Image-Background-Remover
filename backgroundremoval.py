@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 
 try:
-    import pyi_splash # noqa
+    import pyi_splash # type: ignore
     pyi_splash.update_text("Loading Packages")
 except: pass
 import argparse
@@ -1652,7 +1652,7 @@ class BackgroundRemoverGUI(QMainWindow):
         if self.is_busy(): return # Prevent multiple threads
 
         self.add_undo_step()
-        
+
         # Capture state for the worker thread 
         mask_to_process = self.model_output_mask.copy()
         apply_matting = self.chk_alpha_matting.isChecked()
