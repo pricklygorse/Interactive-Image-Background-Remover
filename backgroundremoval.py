@@ -1642,12 +1642,28 @@ class BackgroundRemoverGUI(QMainWindow):
             self.trimap_overlay_item.setPixmap(QPixmap()) # Clear if no valid trimap
 
     def modify_mask(self, op):
+        """
+        Apply modifiers to the mask outputted by the models. Entire pipeline is threaded
+        
+        :param op: imagechops operation: add or subtract
+        """
+        
         if not self.model_output_mask: return
-        self.add_undo_step()
-        m = self.model_output_mask
+        if self.is_busy(): return # Prevent multiple threads
 
-        if self.chk_alpha_matting.isChecked():
-            self.set_loading(True, "Applying Alpha Matting...")
+        self.add_undo_step()
+        
+        # Capture state for the worker thread 
+        mask_to_process = self.model_output_mask.copy()
+        apply_matting = self.chk_alpha_matting.isChecked()
+        apply_soften = self.chk_soften.isChecked()
+        apply_binary = self.chk_post.isChecked()
+
+        msg = " Alpha matting can take a while" if apply_matting else ""
+        self.set_loading(True, "Applying mask..." + msg)
+        
+        matting_params = {}
+        if apply_matting:
             try:
                 image_crop, x_off, y_off = self.get_viewport_crop()
                 trimap_np = None
@@ -1659,43 +1675,71 @@ class BackgroundRemoverGUI(QMainWindow):
                     trimap_np = np.array(trimap_crop_pil)
                 else: 
                     # Fallback to the automatic generation method
-                    mask_crop = m.crop((x_off, y_off, x_off + image_crop.width, y_off + image_crop.height))
+                    mask_crop = mask_to_process.crop((x_off, y_off, x_off + image_crop.width, y_off + image_crop.height))
                     fg_erode = self.sl_fg_erode.value()
                     bg_erode = self.sl_bg_erode.value()
                     trimap_np = self.generate_trimap_from_mask(mask_crop, fg_erode, bg_erode)
                 
-                selected_algorithm = self.combo_matting_algorithm.currentText()
-                
-                # For now use the provider we have selected in automatic models combobox
-                provider_data = self.combo_auto_model_EP.currentData()
-                
-                matted_alpha_crop = self.model_manager.run_matting(
-                    selected_algorithm, 
-                    image_crop, 
-                    trimap_np, 
-                    provider_data
+                matting_params = {
+                    'image_crop': image_crop,
+                    'trimap_np': trimap_np,
+                    'x_off': x_off, 'y_off': y_off,
+                    'algorithm': self.combo_matting_algorithm.currentText(),
+                    # For now use the provider we have selected in automatic models combobox
+                    # Unsure if worth giving user the option to select EP, since VitMatte is essentially a automatic model
+                    'provider_data': self.combo_auto_model_EP.currentData()
+                }
+            except Exception as e:
+                QMessageBox.critical(self, "Alpha Matting Prep Error", str(e))
+                self.set_loading(False)
+                return
+
+        def _do_modify_work(model_manager, base_mask, matting_enabled, soften_enabled, binary_enabled, m_params):
+            processed_mask = base_mask
+
+            if matting_enabled and m_params:
+                matted_alpha_crop = model_manager.run_matting(
+                    m_params['algorithm'], 
+                    m_params['image_crop'], 
+                    m_params['trimap_np'], 
+                    m_params['provider_data']
                 )
 
                 if matted_alpha_crop:
-                    new_m = m.copy()
+                    # Create a new mask to avoid modifying the original in the thread
+                    new_m = processed_mask.copy()
+                    # Create a black patch to clear the area under the new matted crop
                     paste_area = Image.new("L", matted_alpha_crop.size, 0)
-                    new_m.paste(paste_area, (x_off, y_off))
-                    new_m.paste(matted_alpha_crop, (x_off, y_off))
-                    m = new_m
-            except Exception as e:
-                QMessageBox.critical(self, "Alpha Matting Error", str(e))
-            finally:
-                self.set_loading(False, "Idle")
-        
-        if self.chk_soften.isChecked():
-            m = m.filter(ImageFilter.GaussianBlur(radius=SOFTEN_RADIUS))
+                    new_m.paste(paste_area, (m_params['x_off'], m_params['y_off']))
+                    # Paste the new matted result
+                    new_m.paste(matted_alpha_crop, (m_params['x_off'], m_params['y_off']))
+                    processed_mask = new_m
+
+            if soften_enabled:
+                processed_mask = processed_mask.filter(ImageFilter.GaussianBlur(radius=SOFTEN_RADIUS))
             
-        if self.chk_post.isChecked():
-            arr = np.array(m) > 128
-            kernel = np.ones((3,3), np.uint8)
-            arr = cv2.erode(cv2.dilate(arr.astype(np.uint8), kernel, iterations=1), kernel, iterations=1).astype(bool)
-            m = Image.fromarray((arr*255).astype(np.uint8))
-        self.working_mask = op(self.working_mask, m)
+            if binary_enabled:
+                arr = np.array(processed_mask) > 128
+                kernel = np.ones((3,3), np.uint8)
+                arr = cv2.erode(cv2.dilate(arr.astype(np.uint8), kernel, iterations=1), kernel, iterations=1).astype(bool)
+                processed_mask = Image.fromarray((arr*255).astype(np.uint8))
+            
+            return processed_mask
+
+        # Create and start the worker
+        self.worker = InferenceWorker(
+            _do_modify_work,
+            self.model_manager, mask_to_process,
+            apply_matting, apply_soften, apply_binary, matting_params
+        )
+        self.worker.finished.connect(lambda result_mask: self._on_modify_mask_finished(result_mask, op))
+        self.worker.error.connect(lambda msg: (self.set_loading(False), QMessageBox.critical(self, "Mask Processing Error", msg)))
+        self.worker.start()
+
+    def _on_modify_mask_finished(self, processed_mask, op):
+        """Handles the result from the mask modification worker."""
+        self.working_mask = op(self.working_mask, processed_mask)
+        self.set_loading(False, "Idle")
         self.update_output_preview()
 
     def generate_trimap_from_mask(self, mask_pil, fg_erode_size, bg_erode_size):
