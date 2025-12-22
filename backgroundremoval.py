@@ -1130,8 +1130,6 @@ class BackgroundRemoverGUI(QMainWindow):
 
     def populate_matting_models(self):
         self.combo_matting_algorithm.clear()
-        # PyMatting is always an option
-        self.combo_matting_algorithm.addItem("PyMatting (CPU)")
 
         # Scan for ViTMatte (and in the future, more models)
         matting_models = ["vitmatte"]
@@ -1141,6 +1139,14 @@ class BackgroundRemoverGUI(QMainWindow):
                     if partial in filename and filename.endswith(".onnx"):
                         model_name = filename.replace(".onnx", "")
                         self.combo_matting_algorithm.addItem(model_name)
+
+        # Add the older and weaker indexnet model below Vitmatte, if present
+        if os.path.exists(os.path.join(MODEL_ROOT_DIR, "indexnet.onnx")):
+            self.combo_matting_algorithm.addItem("indexnet")
+        
+        # PyMatting is always an option, and often the worst option
+        # but i'm importing anyway for estimate_foreground_ml, may as well offer estimate_alpha_cf here
+        self.combo_matting_algorithm.addItem("PyMatting (CPU)")
 
     def setup_keybindings(self):
         QShortcut(QKeySequence("A"), self).activated.connect(self.add_mask)

@@ -248,17 +248,66 @@ MODEL_DOWNLOAD_GROUPS = [
         "type": "edge",
         "models": [
             {   "id": "vitmatte_small_composition",
-                "name": "ViTMatte Small (Composition 1k dataset)",
+                "name": "ViTMatte Small - Composition 1k dataset",
                 "description": "Image Matting with Pretrained Plain Vision Transformers (2023)",
                 "files": [
                     {"file": "vitmatte_s_composition.onnx", "url":"https://huggingface.co/Xenova/vitmatte-small-composition-1k/resolve/main/onnx/model.onnx?download=true", "size_mb": 104.0},
                 ]
             },
             {   "id": "vitmatte_small_composition_quant",
-                "name": "ViTMatte Small (Composition 1k dataset) Quantised",
+                "name": "ViTMatte Small - Composition 1k dataset Quantised (recommended)",
                 "description": "Image Matting with Pretrained Plain Vision Transformers (2023)",
                 "files": [
                     {"file": "vitmatte_s_composition_quant.onnx", "url":"https://huggingface.co/Xenova/vitmatte-small-composition-1k/resolve/main/onnx/model_quantized.onnx?download=true", "size_mb": 27.5},
+                ]
+            },
+            {   "id": "vitmatte_base_composition",
+                "name": "ViTMatte Base - Composition 1k dataset",
+                "description": "Image Matting with Pretrained Plain Vision Transformers (2023)",
+                "files": [
+                    {"file": "vitmatte_b_composition.onnx", "url":"https://huggingface.co/Xenova/vitmatte-base-composition-1k/resolve/main/onnx/model.onnx?download=true", "size_mb": 387.0},
+                ]
+            },
+            # {   "id": "vitmatte_base_composition_quant",   # base quants produce broken masks, or something i'm doing wrong
+            #     "name": "ViTMatte Base - Composition 1k dataset Quantised",
+            #     "description": "Image Matting with Pretrained Plain Vision Transformers (2023)",
+            #     "files": [
+            #         {"file": "vitmatte_b_composition_quant.onnx", "url":"https://huggingface.co/Xenova/vitmatte-base-composition-1k/resolve/main/onnx/model_quantized.onnx?download=true", "size_mb": 99.0},
+            #     ]
+            # },
+            {   "id": "vitmatte_small_distinctions",
+                "name": "ViTMatte Small - Distinctions 646 dataset",
+                "description": "Image Matting with Pretrained Plain Vision Transformers (2023)",
+                "files": [
+                    {"file": "vitmatte_s_distinctions.onnx", "url":"https://huggingface.co/Xenova/vitmatte-small-distinctions-646/resolve/main/onnx/model.onnx?download=true", "size_mb": 104.0},
+                ]
+            },
+            {   "id": "vitmatte_small_distinctions_quant",
+                "name": "ViTMatte Small - Distinctions 646 dataset Quantised (recommended)",
+                "description": "Image Matting with Pretrained Plain Vision Transformers (2023)",
+                "files": [
+                    {"file": "vitmatte_s_distinctions_quant.onnx", "url":"https://huggingface.co/Xenova/vitmatte-small-distinctions-646/resolve/main/onnx/model_quantized.onnx?download=true", "size_mb": 27.5},
+                ]
+            },
+            {   "id": "vitmatte_base_distinctions",
+                "name": "ViTMatte Base - Distinctions 646 dataset",
+                "description": "Image Matting with Pretrained Plain Vision Transformers (2023)",
+                "files": [
+                    {"file": "vitmatte_b_distinctions.onnx", "url":"https://huggingface.co/Xenova/vitmatte-base-distinctions-646/resolve/main/onnx/model.onnx?download=true", "size_mb": 387.0},
+                ]
+            },
+            # {   "id": "vitmatte_base_distinctions_quant",       # base quants produce broken masks, or something i'm doing wrong
+            #     "name": "ViTMatte Base - Distinctions 646 dataset Quantised",
+            #     "description": "Image Matting with Pretrained Plain Vision Transformers (2023)",
+            #     "files": [
+            #         {"file": "vitmatte_b_distinctions_quant.onnx", "url":"https://huggingface.co/Xenova/vitmatte-base-distinctions-646/resolve/main/onnx/model_quantized.onnx?download=true", "size_mb": 99.0},
+            #     ]
+            # },
+            {   "id": "indexnet",
+                "name": "IndexNet (2019)",
+                "description": "An older image matting model. Included for completeness",
+                "files": [
+                    {"file": "indexnet.onnx", "url":"https://storage.googleapis.com/ailia-models/indexnet/indexnet.onnx", "size_mb": 23.8},
                 ]
             },
         ]

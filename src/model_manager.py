@@ -548,9 +548,13 @@ class ModelManager:
         return session
     
     def run_matting(self, algorithm_name, image_pil, trimap_np, provider_data):
-        if "vitmatte" in algorithm_name.lower():
+        name_lower = algorithm_name.lower()
+        if "vitmatte" in name_lower:
             session = self.get_matting_session(algorithm_name, provider_data)
             return self._run_vitmatte_inference(session, image_pil, trimap_np)
+        elif "indexnet" in name_lower:
+            session = self.get_matting_session(algorithm_name, provider_data)
+            return self._run_indexnet_inference(session, image_pil, trimap_np)
         else:
             return self._run_pymatting(image_pil, trimap_np)
 
@@ -599,6 +603,42 @@ class ModelManager:
         alpha_image = Image.fromarray((alpha * 255).astype(np.uint8), mode='L')
         
         return alpha_image.resize(original_size, Image.LANCZOS)
+    
+    def _run_indexnet_inference(self, session, image_pil, trimap_np):
+        # 1. Prepare dimensions (Multiples of 32)
+        orig_w, orig_h = image_pil.size
+        target_w = (orig_w + 31) // 32 * 32
+        target_h = (orig_h + 31) // 32 * 32
+
+        # 2. Resize and Preprocess
+        # Using BILINEAR for image, NEAREST for trimap to preserve the 0, 128, 255 values
+        img_resized = np.array(image_pil.convert("RGB").resize((target_w, target_h), Image.BILINEAR))
+        tri_resized = np.array(Image.fromarray(trimap_np).resize((target_w, target_h), Image.NEAREST))
+
+        # Combine to 4 channels and normalize to 0.0 - 1.0
+        # IndexNet does NOT use ImageNet stats, just a simple divide by 255
+        input_data = np.zeros((1, 4, target_h, target_w), dtype=np.float32)
+        input_data[0, 0:3, :, :] = img_resized.transpose(2, 0, 1)
+        input_data[0, 3, :, :] = tri_resized
+        input_data /= 255.0
+
+        # 3. Inference
+        input_name = session.get_inputs()[0].name
+        result = session.run(None, {input_name: input_data})[0]
+
+        # 4. Post-process
+        alpha = result[0][0] # IndexNet output is usually [1, 1, H, W]
+        
+        # Resize back to original
+        alpha_resized = cv2.resize(alpha, (orig_w, orig_h), interpolation=cv2.INTER_LINEAR)
+        
+        # Apply the IndexNet "Final Output" logic: 
+        # Force pixels where trimap was 0 to 0, and 255 to 255
+        alpha_final = np.clip(alpha_resized * 255, 0, 255).astype(np.uint8)
+        alpha_final[trimap_np == 0] = 0
+        alpha_final[trimap_np == 255] = 255
+
+        return Image.fromarray(alpha_final, mode="L")
 
     def estimate_foreground(self, image_pil, alpha_mask_pil):
         """Refines foreground colors to remove background halos."""
