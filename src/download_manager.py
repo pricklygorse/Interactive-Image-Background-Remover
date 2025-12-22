@@ -4,7 +4,8 @@ import requests
 from PyQt6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, 
                              QProgressBar, QScrollArea, QWidget, QMessageBox, QFrame, 
                              QSizePolicy,QStackedWidget,QCheckBox)
-from PyQt6.QtCore import (QThread, pyqtSignal, Qt)
+from PyQt6.QtWidgets import QTabWidget
+from PyQt6.QtCore import (QThread, pyqtSignal, Qt, QSize)
 
 REMBG_BASE_URL = "https://github.com/danielgatis/rembg/releases/download/v0.0.0/"
 SAM2_BASE_URL = "https://huggingface.co/mabote-itumeleng/ONNX-SAM2-Segment-Anything/resolve/main/"
@@ -341,30 +342,34 @@ class ModelDownloadDialog(QDialog):
         self.file_progress_tracker = {}
 
         self.status_label = QLabel("Ready to download models. Setting large models to <i>Load on Startup</i> is not advised")
+        self.status_label.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
         self.layout.addWidget(self.status_label)
         
+        self.tabs = QTabWidget()
+        self.layout.addWidget(self.tabs)
+        
+        for group in MODEL_DOWNLOAD_GROUPS:
+            self._add_tab(group)
+
+    def _add_tab(self, group):
+        tab = QWidget()
+        tab_layout = QVBoxLayout(tab)
+        tab_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
+
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-        
-        self.list_widget = QWidget()
-        self.list_layout = QVBoxLayout(self.list_widget)
-        self.list_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
-        
-        scroll.setWidget(self.list_widget)
-        self.layout.addWidget(scroll)
-        
-        for group in MODEL_DOWNLOAD_GROUPS:
-            self._add_group_header(group['group_name'])
-            model_type = group.get('type')
-            for model in group['models']:
-                self._add_model_row(model, model_type)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
 
-    def _add_group_header(self, name):
-        header_lbl = QLabel(f"<b>--- {name} ---</b>")
-        header_lbl.setStyleSheet("padding-top: 10px; padding-bottom: 5px;")
-        header_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.list_layout.addWidget(header_lbl)
+        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+
+        scroll.setWidget(tab)
+        self.tabs.addTab(scroll, group['group_name'])
+
+        model_type = group.get('type')
+        for model in group['models']:
+            self._add_model_row(model, model_type, tab_layout)
 
     def _check_if_model_downloaded(self, model_data):
         for f in model_data['files']:
@@ -373,7 +378,7 @@ class ModelDownloadDialog(QDialog):
                 return False
         return True
 
-    def _add_model_row(self, model_data, model_type):
+    def _add_model_row(self, model_data, model_type, list_layout):
         model_name = model_data['name']
         model_id = model_data['id']
         is_downloaded = self._check_if_model_downloaded(model_data)
@@ -388,7 +393,8 @@ class ModelDownloadDialog(QDialog):
         name_lbl = QLabel(f"<b>{model_name}</b> ({combined_size:.1f} MB)")
         name_lbl.setToolTip(model_data['description'])
         
-        name_lbl.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred) 
+        name_lbl.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        name_lbl.setMinimumWidth(200)
         h_top.addWidget(name_lbl)
 
         # Use a QStackedWidget to swap between a download button and a progress bar.
@@ -400,6 +406,8 @@ class ModelDownloadDialog(QDialog):
 
         progress_bar = QProgressBar()
         progress_bar.setRange(0, 100)
+        progress_bar.setMinimumSize(QSize(100, 0))
+
         progress_bar.setTextVisible(True)
 
         action_widget.addWidget(download_btn)
@@ -413,13 +421,13 @@ class ModelDownloadDialog(QDialog):
             action_widget.setCurrentWidget(download_btn)
 
         h_top.addWidget(action_widget)
-        
         row_layout.addLayout(h_top)
 
         # Second row: Description and Startup Checkbox
         h_bottom = QHBoxLayout()
         desc_lbl = QLabel(model_data['description'])
         desc_lbl.setWordWrap(True)
+        desc_lbl.setMinimumWidth(200)
         desc_lbl.setStyleSheet("font-size: 9pt; color: #666;")
         h_bottom.addWidget(desc_lbl)
 
@@ -442,11 +450,11 @@ class ModelDownloadDialog(QDialog):
         divider.setFrameShape(QFrame.Shape.HLine)
         divider.setFrameShadow(QFrame.Shadow.Sunken)
         row_layout.addWidget(divider)
-        
-        self.list_layout.addWidget(row)
+
+        list_layout.addWidget(row)
         self.row_widgets[model_id] = {
-            'row': row, 
-            'progress': progress_bar, 
+            'row': row,
+            'progress': progress_bar,
             'button': download_btn,
             'action_widget': action_widget,
             'startup_cb': startup_cb,
