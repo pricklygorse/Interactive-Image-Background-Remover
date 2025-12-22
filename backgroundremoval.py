@@ -34,7 +34,7 @@ try: pyi_splash.update_text("Loading App Scripts")
 except: pass
 
 import src.download_manager as download_manager
-from src.ui_widgets import CollapsibleFrame, SynchronisedGraphicsView
+from src.ui_widgets import CollapsibleFrame, SynchronisedGraphicsView, ThumbnailList
 from src.ui_dialogs import SaveOptionsDialog, ImageEditorDialog
 from src.trimap_editor import TrimapEditorDialog
 from src.utils import pil2pixmap, numpy_to_pixmap
@@ -153,6 +153,10 @@ class BackgroundRemoverGUI(QMainWindow):
         QTimer.singleShot(10, self.update_cached_model_icons)
         # Delay model pre-loading
         QTimer.singleShot(100, self.preload_startup_models)
+
+        if self.image_paths:
+            self.update_thumbnail_strip()
+            QTimer.singleShot(50, lambda: self.load_image(self.image_paths[0]))
         
         saved_theme = self.settings.value("theme", "light")
         self.set_theme(saved_theme)
@@ -167,6 +171,9 @@ class BackgroundRemoverGUI(QMainWindow):
         self.setAcceptDrops(True)
         main = QWidget(); self.setCentralWidget(main)
         layout = QHBoxLayout(main)
+        # remove gap above status bar
+        layout.setContentsMargins(6, 6, 6, 0) 
+        layout.setSpacing(6)
 
         # --- Sidebar ---
         sidebar_container = QFrame()
@@ -181,8 +188,8 @@ class BackgroundRemoverGUI(QMainWindow):
         scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         
         scroll_widget = QWidget()
-        sl = QVBoxLayout(scroll_widget) # Main layout for controls
-        scroll_widget.setFixedWidth(sidebar_container.width()-8) # Constrain content width
+        controls_layout = QVBoxLayout(scroll_widget) # Main layout for controls
+        scroll_widget.setFixedWidth(sidebar_container.width()-8) # Constrain content width. -8 so scrollbar doesnt overlap buttons
         scroll_area.setWidget(scroll_widget)
         sidebar_layout.addWidget(scroll_area)
 
@@ -273,7 +280,7 @@ class BackgroundRemoverGUI(QMainWindow):
         self.auto_cache_group.buttonToggled.connect(self.on_auto_cache_changed)
 
         # Add all to layout
-        sl.addWidget(self.hw_options_frame)
+        controls_layout.addWidget(self.hw_options_frame)
         last_auto_cache_mode = self.settings.value("auto_ram_cache_mode", 1, type=int)
         self.auto_cache_group.blockSignals(True)
         self.auto_cache_group.button(last_auto_cache_mode).setChecked(True)
@@ -291,26 +298,17 @@ class BackgroundRemoverGUI(QMainWindow):
         nav = QHBoxLayout()
         btn_open_file = QPushButton("Open"); btn_open_file.clicked.connect(self.load_image_dialog)
         btn_open_clipboard = QPushButton("Clipboard"); btn_open_clipboard.clicked.connect(self.load_clipboard)
-        self.btn_prev_image = QPushButton("<<")
-        self.btn_prev_image.setMaximumWidth(40)
-        self.btn_prev_image.setToolTip("Load Previous Image (Left Arrow Key)")
-        self.btn_prev_image.clicked.connect(self.load_previous_image)
-        self.btn_next_image = QPushButton(">>")
-        self.btn_next_image.setMaximumWidth(40)
-        self.btn_next_image.setToolTip("Load Next Image (Right Arrow Key)")
-        self.btn_next_image.clicked.connect(self.load_next_image)
-        nav.addWidget(btn_open_file); nav.addWidget(btn_open_clipboard); nav.addWidget(self.btn_prev_image); nav.addWidget(self.btn_next_image)
-        sl.addLayout(nav)
+        nav.addWidget(btn_open_file); nav.addWidget(btn_open_clipboard)
+        controls_layout.addLayout(nav)
 
-        self.update_prev_next_button_state()
-        
+
         btn_edit_image = QPushButton("Edit Image"); btn_edit_image.clicked.connect(self.open_image_editor)
         btn_load_mask = QPushButton("Load Mask"); btn_load_mask.clicked.connect(self.load_mask_dialog)
 
         h_edit_load_buttons = QHBoxLayout()
         h_edit_load_buttons.addWidget(btn_edit_image)
         h_edit_load_buttons.addWidget(btn_load_mask)
-        sl.addLayout(h_edit_load_buttons)
+        controls_layout.addLayout(h_edit_load_buttons)
 
         # End File loading buttons
 
@@ -329,49 +327,49 @@ class BackgroundRemoverGUI(QMainWindow):
         self.btn_download.setFixedSize(120, 32)
         self.btn_download.clicked.connect(self.open_download_manager)
         h_models_header.addWidget(self.btn_download)
-        sl.addLayout(h_models_header)
+        controls_layout.addLayout(h_models_header)
         
         lbl_sam = QLabel(" Interactive (SAM):")
         lbl_sam.setToolTip("<b>Segment Anything Models</b><br>"
                            "These require you to interact with the image.<br>"
                            "<i>Usage: Left-click to add points, right-click to add negative (avoid) points, or drag to draw boxes around the subject.</i><br><br>"
                            "Disc drive icons show models that have saved optimised versions cached.")
-        sl.addWidget(lbl_sam)
+        controls_layout.addWidget(lbl_sam)
 
         self.combo_sam = QComboBox()
         self.combo_sam.setToolTip(lbl_sam.toolTip())
         self.populate_sam_models()
-        sl.addWidget(self.combo_sam)
+        controls_layout.addWidget(self.combo_sam)
         lbl_whole = QLabel(" Automatic (Whole Image):")
         lbl_whole.setToolTip("<b>Automatic Models</b><br>"
                              "These run automatically on the entire image.<br>"
                              "<i>Usage: Select a model and click 'Run Automatic'. No points needed.</i><br><br>"
                              "Disc drive icons show models that have saved optimised versions cached.")
-        sl.addWidget(lbl_whole)
+        controls_layout.addWidget(lbl_whole)
 
         # Whole Image Combo
         self.combo_whole = QComboBox()
         self.combo_whole.setToolTip(lbl_whole.toolTip()) # Reuse the tooltip
         self.populate_whole_models()
-        sl.addWidget(self.combo_whole)
+        controls_layout.addWidget(self.combo_whole)
         
         # Run Model Button and layout adjustment
         h_whole_model = QHBoxLayout()
         self.btn_whole = QPushButton("Run Model"); self.btn_whole.clicked.connect(lambda: self.run_automatic_model())
         h_whole_model.addWidget(self.combo_whole)
         h_whole_model.addWidget(self.btn_whole)
-        sl.addLayout(h_whole_model)
+        controls_layout.addLayout(h_whole_model)
 
         divider = QFrame()
         divider.setFrameShape(QFrame.Shape.HLine)
         divider.setFrameShadow(QFrame.Shadow.Sunken)
-        sl.addWidget(divider)
+        controls_layout.addWidget(divider)
 
         h_clr_pnt = QHBoxLayout()
         btn_clr = QPushButton("Clear Points/Masks"); btn_clr.clicked.connect(self.clear_overlay)
         self.chk_paint = QCheckBox("Paintbrush (P)"); self.chk_paint.toggled.connect(self.toggle_paint_mode)
         h_clr_pnt.addWidget(btn_clr); h_clr_pnt.addWidget(self.chk_paint)
-        sl.addLayout(h_clr_pnt)
+        controls_layout.addLayout(h_clr_pnt)
 
 
         
@@ -379,29 +377,29 @@ class BackgroundRemoverGUI(QMainWindow):
 
         lbl_modifiers = QLabel("<b> Mask Modifiers:</b>")
         lbl_modifiers.setContentsMargins(3, 0, 0, 0)
-        sl.addWidget(lbl_modifiers)
+        controls_layout.addWidget(lbl_modifiers)
 
         self.chk_post = QCheckBox("Binary Mask (no partial transparency)")
-        sl.addWidget(self.chk_post)
+        controls_layout.addWidget(self.chk_post)
 
         self.chk_soften = QCheckBox("Soften Mask/Paintbrush Edges")
         soften_checked = self.settings.value("soften_mask", False, type=bool)
         self.chk_soften.setChecked(soften_checked)
         self.chk_soften.toggled.connect(lambda checked: self.settings.setValue("soften_mask", checked))
-        sl.addWidget(self.chk_soften)
+        controls_layout.addWidget(self.chk_soften)
         
         self.chk_alpha_matting = QCheckBox("Alpha Matting (Slow, Experimental)")
         self.chk_alpha_matting.setToolTip("Uses a matting algorithm to estimate the transparency of mask edges.\n"
                                           "This can improve the quality of detailed edges such as hair, especially when using binary mask models like SAM.\n"
                                           "This requires a trimap, either estimated from a SAM or automatic models, or manually drawn.\n"
                                           "This is computationally expensive and is only applied when 'Add' or 'Subtract' is clicked. Undo if the effect is unsatisfactory")
-        sl.addWidget(self.chk_alpha_matting)
+        controls_layout.addWidget(self.chk_alpha_matting)
 
         self.chk_alpha_matting.toggled.connect(self.handle_alpha_matting_toggle)
-        sl.addWidget(self.chk_alpha_matting)
+        controls_layout.addWidget(self.chk_alpha_matting)
 
         self.chk_alpha_matting.toggled.connect(self.handle_alpha_matting_toggle)
-        sl.addWidget(self.chk_alpha_matting)
+        controls_layout.addWidget(self.chk_alpha_matting)
 
         # --- Alpha Matting Options Frame ---
         self.alpha_matting_frame = QFrame()
@@ -473,7 +471,7 @@ class BackgroundRemoverGUI(QMainWindow):
         am_layout.addWidget(self.chk_show_trimap)
 
 
-        sl.addWidget(self.alpha_matting_frame)
+        controls_layout.addWidget(self.alpha_matting_frame)
         self.alpha_matting_frame.hide()
 
         # end alpha matting
@@ -482,24 +480,24 @@ class BackgroundRemoverGUI(QMainWindow):
 
         lbl_actions = QLabel("<b> Output Image Actions:</b>")
         lbl_actions.setContentsMargins(3, 0, 0, 0)
-        sl.addWidget(lbl_actions)
+        controls_layout.addWidget(lbl_actions)
         h_act = QHBoxLayout()
         btn_add = QPushButton("Add Mask"); btn_add.clicked.connect(self.add_mask)
         btn_sub = QPushButton("Sub Mask"); btn_sub.clicked.connect(self.subtract_mask)
         h_act.addWidget(btn_add); h_act.addWidget(btn_sub)
-        sl.addLayout(h_act)
+        controls_layout.addLayout(h_act)
         
         h_ut = QHBoxLayout()
         btn_undo = QPushButton("Undo"); btn_undo.clicked.connect(self.undo)
         btn_redo = QPushButton("Redo"); btn_redo.clicked.connect(self.redo)
         h_ut.addWidget(btn_undo); h_ut.addWidget(btn_redo)
-        sl.addLayout(h_ut)
+        controls_layout.addLayout(h_ut)
 
 
 
         lbl_canvas = QLabel("<b> Canvas:</b>")
         lbl_canvas.setContentsMargins(3, 0, 0, 0)
-        sl.addWidget(lbl_canvas)
+        controls_layout.addWidget(lbl_canvas)
 
 
 
@@ -508,17 +506,17 @@ class BackgroundRemoverGUI(QMainWindow):
         btn_rst = QPushButton("Reset Img"); btn_rst.clicked.connect(self.reset_working_image)
         btn_all = QPushButton("Reset All"); btn_all.clicked.connect(self.reset_all)
         h_rs.addWidget(btn_rst); h_rs.addWidget(btn_all)
-        sl.addLayout(h_rs)
+        controls_layout.addLayout(h_rs)
         
         h_vs = QHBoxLayout()
         btn_cp = QPushButton("Copy In->Out"); btn_cp.clicked.connect(self.copy_input_to_output)
         btn_c_vis = QPushButton("Clear Viewport"); btn_c_vis.clicked.connect(self.clear_visible_area)
         h_vs.addWidget(btn_cp); h_vs.addWidget(btn_c_vis) 
-        sl.addLayout(h_vs)
+        controls_layout.addLayout(h_vs)
 
         lbl_options = QLabel("<b>Output Styling:</b>")
         lbl_options.setContentsMargins(3, 0, 0, 0)
-        sl.addWidget(lbl_options)
+        controls_layout.addWidget(lbl_options)
 
         bg_layout = QHBoxLayout()
         bg_label = QLabel("Background:")
@@ -530,10 +528,10 @@ class BackgroundRemoverGUI(QMainWindow):
                   "Lightgrey", "Brown", "Blurred (Slow)"])
         self.combo_bg_color.currentTextChanged.connect(self.handle_bg_change)
         bg_layout.addWidget(self.combo_bg_color)
-        sl.addLayout(bg_layout)
+        controls_layout.addLayout(bg_layout)
         
         self.chk_show_mask = QCheckBox("Preview Output Mask"); self.chk_show_mask.toggled.connect(self.update_output_preview)
-        sl.addWidget(self.chk_show_mask)
+        controls_layout.addWidget(self.chk_show_mask)
         
         
         
@@ -542,13 +540,13 @@ class BackgroundRemoverGUI(QMainWindow):
         self.chk_estimate_foreground = QCheckBox("Mask Edge Colour Correction (Slow)")
         self.chk_estimate_foreground.setToolTip("Recalculates edge colors to remove halos or fringes from the original background.\n"
                                                 "Recommended for soft edges such as hair")
-        sl.addWidget(self.chk_estimate_foreground)
+        controls_layout.addWidget(self.chk_estimate_foreground)
         self.chk_estimate_foreground.toggled.connect(self.update_output_preview)
 
 
         self.chk_shadow = QCheckBox("Drop Shadow")
         self.chk_shadow.toggled.connect(self.toggle_shadow_options)
-        sl.addWidget(self.chk_shadow)
+        controls_layout.addWidget(self.chk_shadow)
 
         self.shadow_frame = QFrame()
         sf_layout = QVBoxLayout(self.shadow_frame)
@@ -583,14 +581,14 @@ class BackgroundRemoverGUI(QMainWindow):
         sf_layout.addLayout(h_y_layout)
         sf_layout.addLayout(h_r_layout)
             
-        sl.addWidget(self.shadow_frame)
+        controls_layout.addWidget(self.shadow_frame)
         self.shadow_frame.hide()
 
-        sl.addStretch()
+        controls_layout.addStretch()
         btn_save = QPushButton("Save As..."); btn_save.clicked.connect(self.save_image)
-        sl.addWidget(btn_save)
+        controls_layout.addWidget(btn_save)
         btn_qsave = QPushButton("Quick Save JPG"); btn_qsave.clicked.connect(self.quick_save_jpeg)
-        sl.addWidget(btn_qsave)
+        controls_layout.addWidget(btn_qsave)
 
         bottom_buttons_layout = QHBoxLayout()
 
@@ -602,10 +600,13 @@ class BackgroundRemoverGUI(QMainWindow):
         self.btn_theme_toggle.clicked.connect(self.toggle_light_dark_mode)
         self.btn_theme_toggle.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Preferred)
         bottom_buttons_layout.addWidget(self.btn_theme_toggle)
-        sl.addLayout(bottom_buttons_layout)
+        controls_layout.addLayout(bottom_buttons_layout)
 
-        self.splitter = QSplitter(Qt.Orientation.Horizontal)
-        self.splitter.setChildrenCollapsible(False)
+        # end Sidebar
+
+
+        self.in_out_splitter = QSplitter(Qt.Orientation.Horizontal)
+        self.in_out_splitter.setChildrenCollapsible(False)
         
         is_light_mode = QApplication.styleHints().colorScheme() != Qt.ColorScheme.Dark
         hatch_color = QColor(220, 220, 220) if is_light_mode else QColor(60, 60, 60)
@@ -635,7 +636,7 @@ class BackgroundRemoverGUI(QMainWindow):
         self.trimap_overlay_item = QGraphicsPixmapItem(); self.trimap_overlay_item.setOpacity(0.7); self.scene_input.addItem(self.trimap_overlay_item)
 
         l_in.addWidget(self.view_input)
-        self.splitter.addWidget(w_in)
+        self.in_out_splitter.addWidget(w_in)
         
         w_out = QWidget(); l_out = QVBoxLayout(w_out)
         w_out.setMinimumWidth(150)
@@ -662,14 +663,34 @@ class BackgroundRemoverGUI(QMainWindow):
         self.scene_output.addItem(self.output_pixmap_item)
 
         l_out.addWidget(self.view_output)
-        self.splitter.addWidget(w_out)
+        self.in_out_splitter.addWidget(w_out)
 
         self.view_input.set_sibling(self.view_output)
         self.view_output.set_sibling(self.view_input)
 
-        layout.addWidget(sidebar_container)
-        layout.addWidget(self.splitter, 1) # Give splitter stretch factor and add it to the main layout
+        # Holds the views (top) and the thumbnails (bottom)
+        views_thumbs_widget = QWidget()
+        views_thumbs_layout = QVBoxLayout(views_thumbs_widget)
+        views_thumbs_layout.setContentsMargins(0, 0, 0, 0)
+        views_thumbs_layout.setSpacing(2) # Small gap between views and thumbnails
 
+        # Initialise the thumbnail strip
+        self.thumbnail_strip = ThumbnailList()
+        self.thumbnail_strip.itemClicked.connect(self.on_thumbnail_clicked)
+
+        # Add the splitter to the top, thumbnails to the bottom
+        views_thumbs_layout.addWidget(self.in_out_splitter, 1) # '1' ensures views take most space
+        views_thumbs_layout.addWidget(self.thumbnail_strip)
+
+
+
+
+
+        # Assemble sidebar + views
+        layout.addWidget(sidebar_container)
+        layout.addWidget(views_thumbs_widget, 1) # Add the container instead of the splitter
+
+        # status bar 
         self.status_label = QLabel("Idle")
         self.status_label.setFixedWidth(600)
         self.zoom_label = QLabel("Zoom: 100%")
@@ -685,6 +706,53 @@ class BackgroundRemoverGUI(QMainWindow):
         
         self.toggle_splitter_orientation(initial_setup=True)
 
+    def is_mask_modified(self):
+        """Checks if the working mask has data or history."""
+        if len(self.undo_history) > 1:
+            return True
+        if self.working_mask:
+            # Check for non-zero pixels
+            extrema = self.working_mask.getextrema()
+            if extrema and extrema[1] > 0:
+                return True
+        return False
+
+    def check_proceed_if_modified(self):
+        """Prompts user if mask is modified. Returns True to proceed."""
+        if self.is_mask_modified():
+            reply = QMessageBox.question(
+                self, "Unsaved Changes",
+                "The current mask has been modified. Switching images will clear the mask. Continue?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No
+            )
+            return reply == QMessageBox.StandardButton.Yes
+        return True
+
+    def on_thumbnail_clicked(self, item):
+        new_index = self.thumbnail_strip.row(item)
+        if new_index == self.current_image_index:
+            return
+
+        if self.check_proceed_if_modified():
+            self.current_image_index = new_index
+            path = item.data(Qt.ItemDataRole.UserRole)
+            if path == "Clipboard":
+                self.load_clipboard()
+            else:
+                self.load_image(path)
+
+    def update_thumbnail_strip(self):
+        """Synchronizes the list widget with self.image_paths."""
+        self.thumbnail_strip.clear()
+        for path in self.image_paths:
+            self.thumbnail_strip.add_image_thumbnail(path)
+            # Could possibly thread this, but individual image loading is fast,
+            # so just show them one by one as they load to prevent app hanging
+            QApplication.processEvents()
+        
+        if self.current_image_index < self.thumbnail_strip.count():
+            self.thumbnail_strip.setCurrentRow(self.current_image_index)
 
     def set_theme(self, mode):
         """Applies light or dark mode and saves the preference.
@@ -762,9 +830,10 @@ class BackgroundRemoverGUI(QMainWindow):
             self.btn_theme_toggle.setToolTip("Switch to Dark Mode")
             self.settings.setValue("theme", "light")
 
-        # Tweaks for collapsible menu and splitter toggle button
+        # update widgets that require overrides
         self.hw_options_frame.collapsible_set_light_dark()
         self.toggle_splitter_orientation(initial_setup=True)
+        self.thumbnail_strip.update_style(mode == 'dark')
 
     def toggle_light_dark_mode(self):
         """Switches from the current theme to the other."""
@@ -779,13 +848,13 @@ class BackgroundRemoverGUI(QMainWindow):
 
 
     def toggle_splitter_orientation(self, initial_setup=False):
-        current_orientation = self.splitter.orientation()
+        current_orientation = self.in_out_splitter.orientation()
         
         if initial_setup:
             target_orientation = current_orientation
         else:
             target_orientation = Qt.Orientation.Vertical if current_orientation == Qt.Orientation.Horizontal else Qt.Orientation.Horizontal
-            self.splitter.setOrientation(target_orientation)
+            self.in_out_splitter.setOrientation(target_orientation)
 
         icon_pixmap_enum = QStyle.StandardPixmap.SP_ToolBarHorizontalExtensionButton if target_orientation == Qt.Orientation.Vertical else QStyle.StandardPixmap.SP_ToolBarVerticalExtensionButton
         
@@ -975,6 +1044,7 @@ class BackgroundRemoverGUI(QMainWindow):
             if fnames:
                 self.image_paths = sorted(fnames)
                 self.current_image_index = 0
+                self.update_thumbnail_strip()
                 self.load_image(self.image_paths[0])
         super().dropEvent(event)
 
@@ -1018,8 +1088,8 @@ class BackgroundRemoverGUI(QMainWindow):
 
     def showEvent(self, event):
         super().showEvent(event)
-        w = self.splitter.width()
-        self.splitter.setSizes([w//2, w//2])
+        w = self.in_out_splitter.width()
+        self.in_out_splitter.setSizes([w//2, w//2])
 
     def open_download_manager(self):
         dlg = download_manager.ModelDownloadDialog(
@@ -1083,8 +1153,6 @@ class BackgroundRemoverGUI(QMainWindow):
         QShortcut(QKeySequence("P"), self).activated.connect(self.chk_paint.toggle)
         QShortcut(QKeySequence("Ctrl+S"), self).activated.connect(self.save_image)
         QShortcut(QKeySequence("Ctrl+Shift+S"), self).activated.connect(self.quick_save_jpeg) # Quick Save JPG
-        QShortcut(QKeySequence(Qt.Key.Key_Left), self).activated.connect(self.load_previous_image) # Previous Image
-        QShortcut(QKeySequence(Qt.Key.Key_Right), self).activated.connect(self.load_next_image) # Next Image
         
         QShortcut(QKeySequence("U"), self).activated.connect(lambda: self.run_automatic_model("u2net"))
         QShortcut(QKeySequence("I"), self).activated.connect(lambda: self.run_automatic_model("isnet-general-use"))
@@ -1110,8 +1178,12 @@ class BackgroundRemoverGUI(QMainWindow):
             self.update_input_view()
             self.update_output_preview()
             self.status_label.setText(f"Loaded: {os.path.basename(path)} [{self.current_image_index + 1}/{len(self.image_paths)}]")
-            self.update_prev_next_button_state()
             self.update_window_title()
+
+            self.thumbnail_strip.blockSignals(True)
+            self.thumbnail_strip.setCurrentRow(self.current_image_index)
+            self.thumbnail_strip.blockSignals(False)
+
         except Exception as e: QMessageBox.critical(self, "Error", str(e))
 
     def load_blank_image(self):
@@ -1128,10 +1200,9 @@ class BackgroundRemoverGUI(QMainWindow):
             self.init_working_buffers()
             self.update_input_view()
             self.update_output_preview()
+            self.update_thumbnail_strip()
             self.status_label.setText("Loaded from Clipboard [1/1]")
             self.update_window_title()
-            if hasattr(self, 'update_next_button_state'):
-                self.update_prev_next_button_state()
             return
 
         QMessageBox.information(self, "Clipboard Empty", 
@@ -1143,9 +1214,8 @@ class BackgroundRemoverGUI(QMainWindow):
         if fnames:
             self.image_paths = fnames
             self.current_image_index = 0
+            self.update_thumbnail_strip()
             self.load_image(fnames[0])
-            if hasattr(self, 'update_next_button_state'):
-                self.update_prev_next_button_state()
 
     def load_mask_dialog(self):
         fname, _ = QFileDialog.getOpenFileName(self, "Open Mask", "", "Images (*.png)")
@@ -1155,19 +1225,6 @@ class BackgroundRemoverGUI(QMainWindow):
                 self.add_undo_step()
                 self.working_mask = mask
                 self.update_output_preview()
-
-    def load_next_image(self):
-        if self.image_paths and self.image_paths[0] != "Clipboard" and len(self.image_paths) > 1:
-            if self.current_image_index < len(self.image_paths) - 1:
-                self.current_image_index += 1
-                self.load_image(self.image_paths[self.current_image_index])
-
-    def load_previous_image(self):
-        if self.image_paths and self.image_paths[0] != "Clipboard" and len(self.image_paths) > 1:
-            if self.current_image_index > 0:
-                self.current_image_index -= 1
-                self.load_image(self.image_paths[self.current_image_index])
-
     
     def preload_startup_models(self):
         """
@@ -1197,17 +1254,6 @@ class BackgroundRemoverGUI(QMainWindow):
                 provider_data = self.combo_auto_model_EP.currentData()
                 self.model_manager.get_auto_session(self.combo_whole.currentText(), provider_data)
                 self.set_loading(False, f"Pre-loaded Automatic Model")
-
-    def update_prev_next_button_state(self):
-        if not self.image_paths:
-            self.btn_next_image.setEnabled(False)
-            self.btn_prev_image.setEnabled(False)
-            return
-
-        is_clipboard = (self.image_paths[0] == "Clipboard")
-        
-        self.btn_next_image.setEnabled(self.current_image_index < len(self.image_paths) - 1 and not is_clipboard)
-        self.btn_prev_image.setEnabled(self.current_image_index > 0 and not is_clipboard)
 
         
     def _sanitise_filename_for_windows(self, path: str) -> str:

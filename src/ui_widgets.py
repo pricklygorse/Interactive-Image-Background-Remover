@@ -4,14 +4,13 @@ from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QH
                              QSlider, QFrame, QSplitter, QDialog, QScrollArea, 
                              QGraphicsRectItem, QGraphicsEllipseItem, QGraphicsPathItem, 
                              QTextEdit, QSizePolicy, QRadioButton, QButtonGroup, QInputDialog, 
-                             QProgressBar, QStyle)
-from PyQt6.QtCore import Qt, QTimer, QPointF, QRectF, QSettings, QPropertyAnimation, QEasingCurve
+                             QProgressBar, QStyle,
+                             QListWidget, QListWidgetItem, QListView, QAbstractItemView)
+from PyQt6.QtCore import Qt, QTimer, QPointF, QRectF, QSettings, QPropertyAnimation, QEasingCurve, QSize
 from PyQt6.QtGui import (QPixmap, QImage, QColor, QPainter, QPainterPath, QPen, QBrush,
                          QKeySequence, QShortcut, QCursor, QIcon, QPalette)
 
-from PIL import Image, ImageOps, ImageDraw, ImageEnhance, ImageGrab, ImageFilter, ImageChops
-import math
-import numpy as np
+import os
 
 
 from src.constants import DEFAULT_ZOOM_FACTOR, PAINT_BRUSH_SCREEN_SIZE, MIN_SAM_BOX_SIZE
@@ -469,3 +468,75 @@ class SynchronisedGraphicsView(QGraphicsView):
                 # Direct access to sibling item to ensure sync
                 self.sibling.brush_cursor_item.hide()
         super().leaveEvent(event)
+
+
+
+
+class ThumbnailList(QListWidget):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFlow(QListWidget.Flow.LeftToRight)
+        self.setViewMode(QListWidget.ViewMode.IconMode)
+        self.setWrapping(False)
+        self.setFixedHeight(120)
+        self.setSpacing(2)
+        self.setIconSize(QSize(70, 70))
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.update_style()
+
+    def update_style(self, is_dark=False):
+        text_color = "white" if is_dark else "black"
+        self.setStyleSheet(f"""
+            QListWidget {{
+                border: none;
+                background-color: transparent;
+                color: {text_color};
+            }}
+            QListWidget::item {{
+                border: 2px solid transparent;
+                border-radius: 5px;
+                color: {text_color};
+            }}
+            QListWidget::item:selected {{
+                border: 2px solid #2a82da;
+                background-color: rgba(42, 130, 218, 0.2);
+            }}
+        """)
+
+    def wheelEvent(self, event):
+        """Redirects vertical mouse wheel movement to horizontal scrolling."""
+        # Check if the event has a vertical delta (typical mouse wheel)
+        delta = event.angleDelta().y()
+        if delta != 0:
+            # Scroll the horizontal scroll bar instead
+            # Subtracting the delta makes 'wheel down' scroll right
+            hs = self.horizontalScrollBar()
+            hs.setValue(hs.value() - delta)
+            event.accept()
+        else:
+            super().wheelEvent(event)
+
+    def add_image_thumbnail(self, file_path):
+        if file_path == "Clipboard":
+            # Just a placeholder icon for clipboard
+            icon = self.style().standardIcon(QStyle.StandardPixmap.SP_FileIcon)
+            item = QListWidgetItem(icon, "Clipboard")
+        else:
+            # Generate a fast thumbnail using QPixmap
+            pixmap = QPixmap(file_path)
+            if not pixmap.isNull():
+                thumb = pixmap.scaled(70, 70, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+                
+                b_name = os.path.basename(file_path)
+                if len(b_name) > 16:
+                    b_name = f"{b_name[:7]}...{b_name[-7:]}"
+
+                item = QListWidgetItem(QIcon(thumb), b_name)
+            else:
+                return
+        
+        item.setData(Qt.ItemDataRole.UserRole, file_path)
+        item.setToolTip(file_path)
+        self.addItem(item)
