@@ -214,21 +214,42 @@ class ModelManager:
         Runs inference on a PIL image using the provided session.
         Returns the mask as a numpy array (0.0 to 1.0)
         """
+
+        # Some models can be exported with differing input dimensions
+        # Try read these first, and use hardcoded values below otherwise
         input_shape = session.get_inputs()[0].shape
         target_h, target_w = input_shape[2], input_shape[3]
 
-        if "rmbg" in model_name.lower() and "2" in model_name.lower():
+        if "modnet" in model_name.lower():
+            # input size of 512 longest edge, multiple of 32 for other
+            orig_w, orig_h = image_crop.width, image_crop.height
+            
+            if orig_w >= orig_h:
+                target_w = 512
+                target_h = int(512 * (orig_h / orig_w))
+            else:
+                target_h = 512
+                target_w = int(512 * (orig_w / orig_h))
+
+            target_w = target_w - (target_w % 32)
+            target_h = target_h - (target_h % 32)
+            
+            target_w = max(target_w, 32)
+            target_h = max(target_h, 32)
+
+            # -1 to 1 normalization
+            mean, std = (0.5, 0.5, 0.5), (0.5, 0.5, 0.5)
+
+        elif "rmbg" in model_name.lower() and "2" in model_name.lower():
             target_h, target_w = 1024, 1024
-
-        img_r = image_crop.convert("RGB").resize((target_w, target_h), Image.BICUBIC)
-
-        if "isnet" in model_name or "rmbg" in model_name:
+            mean, std = (0.5, 0.5, 0.5), (1.0, 1.0, 1.0)
+        elif "isnet" in model_name or "rmbg" in model_name:
             mean, std = (0.5, 0.5, 0.5), (1.0, 1.0, 1.0)
         else:
-            # BEN2 uses imagenet normalisation
+            # BEN2 and others use imagenet normalisation
             mean, std = (0.485, 0.456, 0.406), (0.229, 0.224, 0.225)
 
-
+        img_r = image_crop.convert("RGB").resize((target_w, target_h), Image.BICUBIC)
         im = np.array(img_r) / 255.0
         tmp = np.zeros((im.shape[0], im.shape[1], 3), dtype=np.float32)
         tmp[:, :, 0] = (im[:, :, 0] - mean[0]) / std[0]

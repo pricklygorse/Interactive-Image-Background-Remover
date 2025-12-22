@@ -95,21 +95,21 @@ MODEL_DOWNLOAD_GROUPS = [
         "type": "automatic_general",
         "models": [
             {   "id": "isnet-general-use",
-                "name": "ISNet-General (recommended)",
+                "name": "ISNet-General (recommended) (2022)",
                 "description": "A high-performance pre-trained model for general-purpose background removal. Fast",
                 "files": [
                     {"file": "isnet-general-use.onnx", "url": REMBG_BASE_URL + "isnet-general-use.onnx", "size_mb": 170.0}
                 ]
             },
             {   "id": "rmbg1_4",
-                "name": "BRIA RMBG 1.4 (recommended)",
+                "name": "BRIA RMBG 1.4 (recommended) (2023)",
                 "description": "Enhancement of isnet with proprietary dataset. Fast",
                 "files": [
                     {"file": "rmbg1_4.onnx", "url": "https://huggingface.co/briaai/RMBG-1.4/resolve/main/onnx/model.onnx?download=true", "size_mb": 176.0}
                 ]
             },
             {   "id": "BiRefNet-general-epoch_244",
-                "name": "BiRefNet-General",
+                "name": "BiRefNet-General (2024)",
                 "description": "A pre-trained BiRefNet model for general use cases.",
                 "files": [
                     {"file": "BiRefNet-general-epoch_244.onnx", "url": REMBG_BASE_URL + "BiRefNet-general-epoch_244.onnx", "size_mb": 928.0}
@@ -123,7 +123,7 @@ MODEL_DOWNLOAD_GROUPS = [
                 ]
             },
             {   "id": "u2net",
-                "name": "U2Net",
+                "name": "U2Net (2020)",
                 "description": "The original general-purpose background removal model. Very fast",
                 "files": [
                     {"file": "u2net.onnx", "url": REMBG_BASE_URL + "u2net.onnx", "size_mb": 168.0}
@@ -138,9 +138,16 @@ MODEL_DOWNLOAD_GROUPS = [
             },
             {   "id": "u2netp",
                 "name": "U2NetP (Tiny)",
-                "description": "A ultralight version of the U2Net model (4.36 MB). Very fast.",
+                "description": "A ultralight, very fast, version of the U2Net model (4.36 MB)",
                 "files": [
                     {"file": "u2netp.onnx", "url": REMBG_BASE_URL + "u2netp.onnx", "size_mb": 4.36}
+                ]
+            },
+            {   "id": "modnet",
+                "name": "Modnet Portrait Matting (2022)",
+                "description": "Very fast, lightweight model for portraits.",
+                "files": [
+                    {"file": "modnet_portrait.onnx", "url": "https://huggingface.co/Xenova/modnet/resolve/main/onnx/model.onnx?download=true", "size_mb": 25.9}
                 ]
             },
             {   "id": "BiRefNet-massive-TR_DIS5K_TR_TEs-epoch_420",
@@ -151,7 +158,7 @@ MODEL_DOWNLOAD_GROUPS = [
                 ]
             },
             {   "id": "bria-rmbg-2.0",
-                "name": "BRIA RMBG-2.0",
+                "name": "BRIA RMBG-2.0 (2024)",
                 "description": "Dichotomous image segmentation model for high-accuracy background removal, built on the BiRefNet architecture. Slow, heavy RAM usage",
                 "files": [
                     {"file": "bria-rmbg-2.0.onnx", "url": REMBG_BASE_URL + "bria-rmbg-2.0.onnx", "size_mb": 977.0}
