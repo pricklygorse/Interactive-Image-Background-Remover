@@ -1963,11 +1963,14 @@ class BackgroundRemoverGUI(QMainWindow):
                 self.temp_path_item_out.setPath(self.current_path)
 
     def handle_paint_end(self):
-        
+        """
+        Finalizes the manual brush stroke. 
+        Directly edits the working mask for immediate drawing
+        """
         if self.is_busy():
-            return # Interaction blocked during inference
+            return
         
-        # Clean up visual item
+        # Clean up visual items from both scenes
         if hasattr(self, 'temp_path_item'):
             self.scene_input.removeItem(self.temp_path_item)
             self.temp_path_item = None
@@ -1975,18 +1978,19 @@ class BackgroundRemoverGUI(QMainWindow):
             self.scene_output.removeItem(self.temp_path_item_out)
             self.temp_path_item_out = None
             
-        if not hasattr(self, 'current_path'): return
+        if not hasattr(self, 'current_path'): 
+            return
 
         QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
         try:
-            # Setup the scratchpad QImage
+            # Setup the scratchpad QImage for the current stroke
             self.paint_image.fill(Qt.GlobalColor.transparent)
             
             painter = QPainter(self.paint_image)
-            painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing, False)
             
             # Draw the recorded path onto the scratchpad
-            # White because we just want the alpha shape
+            # White (255) as the mask value for the stroke
             pen = QPen(QColor(255, 255, 255, 255), self.brush_width, 
                       Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin)
             painter.setPen(pen)
@@ -1998,21 +2002,36 @@ class BackgroundRemoverGUI(QMainWindow):
             ptr.setsize(self.paint_image.sizeInBytes())
             h, w = self.paint_image.height(), self.paint_image.width()
             
-            # Zero-copy view into the QImage data
+            # Create NumPy view and extract mask channel
             arr = np.array(ptr, copy=False).reshape(h, w, 4)
-            # Extract the Blue channel (or Alpha) as our mask
-            stroke_mask = Image.fromarray(arr[:, :, 0].copy(), mode="L")
+            stroke_mask_np = arr[:, :, 0].copy()
+
+            if self.chk_soften.isChecked():
+                # ksize (0,0) allows OpenCV to compute the kernel size automatically from sigma
+                stroke_mask_np = cv2.GaussianBlur(stroke_mask_np, (0, 0), sigmaX=SOFTEN_RADIUS)
             
-            # Apply to Model Output
+            stroke_mask = Image.fromarray(stroke_mask_np, mode="L")
+
+            self.add_undo_step()
+
+            # Previously the app modified self.model_output_mask and used self.show_mask_overlay()
+            # 
+            # Changed to immediate editing of output image because can't think of a reason to
+            # paintbrush the model output mask, which is added/sub anyway
+            # When alpha matting, we can edit the trimap so editing the initial mask with paint 
+            # probably limited benefit
             if self.is_erasing:
-                self.model_output_mask = ImageChops.subtract(self.model_output_mask, stroke_mask)
+                # Right Click: Remove from composite
+                self.working_mask = ImageChops.subtract(self.working_mask, stroke_mask)
             else:
-                self.model_output_mask = ImageChops.add(self.model_output_mask, stroke_mask)
+                # Left Click: Add to composite (Paint from original image)
+                self.working_mask = ImageChops.add(self.working_mask, stroke_mask)
             
-            self.show_mask_overlay()
+            self.update_output_preview()
             
         finally:
-            if hasattr(self, 'current_path'): del self.current_path
+            if hasattr(self, 'current_path'): 
+                del self.current_path
             QApplication.restoreOverrideCursor()
 
     def open_image_editor(self):
