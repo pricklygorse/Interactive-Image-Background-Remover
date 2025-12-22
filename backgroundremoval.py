@@ -1572,7 +1572,7 @@ class BackgroundRemoverGUI(QMainWindow):
         elif self.model_output_mask:
             fg_erode = self.sl_fg_erode.value()
             bg_erode = self.sl_bg_erode.value()
-            trimap_np = self.generate_trimap_from_mask(self.model_output_mask, fg_erode, bg_erode)
+            trimap_np = self.model_manager.generate_trimap_from_mask(self.model_output_mask, fg_erode, bg_erode)
             initial_trimap = Image.fromarray(trimap_np)
         else:
             # If there's no mask at all, start with a blank (all unknown) trimap.
@@ -1624,7 +1624,7 @@ class BackgroundRemoverGUI(QMainWindow):
         if self.rb_trimap_auto.isChecked():
             fg_erode = self.sl_fg_erode.value()
             bg_erode = self.sl_bg_erode.value()
-            trimap_np = self.generate_trimap_from_mask(self.model_output_mask, fg_erode, bg_erode)
+            trimap_np = self.model_manager.generate_trimap_from_mask(self.model_output_mask, fg_erode, bg_erode)
         
         elif self.rb_trimap_custom.isChecked() and hasattr(self, 'user_trimap'):
             trimap_np = np.array(self.user_trimap)
@@ -1678,7 +1678,7 @@ class BackgroundRemoverGUI(QMainWindow):
                     mask_crop = mask_to_process.crop((x_off, y_off, x_off + image_crop.width, y_off + image_crop.height))
                     fg_erode = self.sl_fg_erode.value()
                     bg_erode = self.sl_bg_erode.value()
-                    trimap_np = self.generate_trimap_from_mask(mask_crop, fg_erode, bg_erode)
+                    trimap_np = self.model_manager.generate_trimap_from_mask(mask_crop, fg_erode, bg_erode)
                 
                 matting_params = {
                     'image_crop': image_crop,
@@ -1742,37 +1742,7 @@ class BackgroundRemoverGUI(QMainWindow):
         self.set_loading(False, "Idle")
         self.update_output_preview()
 
-    def generate_trimap_from_mask(self, mask_pil, fg_erode_size, bg_erode_size):
-        """
-        Generates a three-tone trimap from a binary mask using erosion.
-        Returns the trimap as a NumPy array (0=BG, 128=Unknown, 255=FG).
-        """
-        mask_np = np.array(mask_pil)
-        foreground_threshold = 240
-        background_threshold = 10
-
-        is_foreground = mask_np > foreground_threshold
-        is_background = mask_np < background_threshold
-
-        # Erode foreground
-        if fg_erode_size > 0:
-            fg_kernel = np.ones((fg_erode_size, fg_erode_size), np.uint8)
-            is_foreground_eroded = cv2.erode(is_foreground.astype(np.uint8), fg_kernel, iterations=1)
-        else:
-            is_foreground_eroded = is_foreground
-
-        # Erode background
-        if bg_erode_size > 0:
-            bg_kernel = np.ones((bg_erode_size, bg_erode_size), np.uint8)
-            is_background_eroded = cv2.erode(is_background.astype(np.uint8), bg_kernel, iterations=1)
-        else:
-            is_background_eroded = is_background
-
-        trimap = np.full(mask_np.shape, dtype=np.uint8, fill_value=128)
-        trimap[is_foreground_eroded.astype(bool)] = 255
-        trimap[is_background_eroded.astype(bool)] = 0
-        
-        return trimap
+    
 
     
 

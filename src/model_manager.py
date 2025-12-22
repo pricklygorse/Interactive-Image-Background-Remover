@@ -473,6 +473,38 @@ class ModelManager:
         status = f"SAM ({prov_code.upper()}): Enc {enc_str} | Dec {dec_time:.0f}ms"
 
         return binary, status
+
+    def generate_trimap_from_mask(self, mask_pil, fg_erode_size, bg_erode_size):
+        """
+        Generates a three-tone trimap from a binary mask using erosion.
+        Returns the trimap as a NumPy array (0=BG, 128=Unknown, 255=FG).
+        """
+        mask_np = np.array(mask_pil)
+        foreground_threshold = 240
+        background_threshold = 10
+
+        is_foreground = mask_np > foreground_threshold
+        is_background = mask_np < background_threshold
+
+        # Erode foreground
+        if fg_erode_size > 0:
+            fg_kernel = np.ones((fg_erode_size, fg_erode_size), np.uint8)
+            is_foreground_eroded = cv2.erode(is_foreground.astype(np.uint8), fg_kernel, iterations=1)
+        else:
+            is_foreground_eroded = is_foreground
+
+        # Erode background
+        if bg_erode_size > 0:
+            bg_kernel = np.ones((bg_erode_size, bg_erode_size), np.uint8)
+            is_background_eroded = cv2.erode(is_background.astype(np.uint8), bg_kernel, iterations=1)
+        else:
+            is_background_eroded = is_background
+
+        trimap = np.full(mask_np.shape, dtype=np.uint8, fill_value=128)
+        trimap[is_foreground_eroded.astype(bool)] = 255
+        trimap[is_background_eroded.astype(bool)] = 0
+        
+        return trimap
         
     def get_matting_session(self, model_name, provider_data):
         # uses cache clearing setting from automatic models, unsure if worth making it's own specific option
