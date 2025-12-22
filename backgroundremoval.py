@@ -1157,7 +1157,7 @@ class BackgroundRemoverGUI(QMainWindow):
         QShortcut(QKeySequence("U"), self).activated.connect(lambda: self.run_automatic_model("u2net"))
         QShortcut(QKeySequence("I"), self).activated.connect(lambda: self.run_automatic_model("isnet-general-use"))
         QShortcut(QKeySequence("O"), self).activated.connect(lambda: self.run_automatic_model("rmbg1_4"))
-        QShortcut(QKeySequence("B"), self).activated.connect(lambda: self.run_automatic_model("BiRefNet"))
+        QShortcut(QKeySequence("B"), self).activated.connect(lambda: self.run_automatic_model("ben2_base"))
 
     def handle_bg_change(self, text):
         if "Blur" in text:
@@ -2211,7 +2211,7 @@ Shortcuts:
 - U: Run u2net
 - I: Run isnet
 - O: Run rmbg1_4
-- B: Run BiRefNet
+- B: Run ben2_base
 - Ctrl+S: Save As
 - Ctrl+Shift+S: Quick Save JPG (White BG)
 - Ctrl+Z: Undo

@@ -251,6 +251,9 @@ class ModelManager:
         denom = (mask.max() - mask.min()) or 1.0
         mask = (mask - mask.min()) / denom
 
+        # ensure float32, otherwise opencv will fail if float64
+        mask = mask.astype(np.float32)
+        
         mask = cv2.resize(mask, (image_crop.width, image_crop.height), interpolation=cv2.INTER_LINEAR)
         final_mask = (mask * 255).astype(np.uint8)
         
