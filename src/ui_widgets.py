@@ -145,6 +145,8 @@ class SynchronisedGraphicsView(QGraphicsView):
         
         self.setRenderHint(QPainter.RenderHint.Antialiasing, False)
         self.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, False)
+
+        self.setViewportUpdateMode(QGraphicsView.ViewportUpdateMode.FullViewportUpdate)
         
         self.setDragMode(QGraphicsView.DragMode.NoDrag)
         
@@ -176,6 +178,22 @@ class SynchronisedGraphicsView(QGraphicsView):
         
         self.scene().addItem(self.brush_cursor_item)
         self.brush_cursor_item.hide()
+
+    def drawBackground(self, painter, rect):
+        """
+        Overrides the background drawing to keep the hatch pattern 
+        fixed to screen pixels, preventing distortion during zoom/pan.
+        """
+        painter.save()
+
+        painter.resetTransform()
+
+        viewport_rect = self.viewport().rect()
+
+        painter.fillRect(viewport_rect, self.palette().color(QPalette.ColorRole.Base))
+        painter.fillRect(viewport_rect, self.backgroundBrush())
+        
+        painter.restore()
 
     def dragEnterEvent(self, event):
         # Pass the event to the parent to handle
