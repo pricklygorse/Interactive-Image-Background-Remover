@@ -157,6 +157,9 @@ class BackgroundRemoverGUI(QMainWindow):
         if self.image_paths:
             self.update_thumbnail_strip()
             QTimer.singleShot(50, lambda: self.load_image(self.image_paths[0]))
+            
+            if cli_args.load_mask:
+                QTimer.singleShot(60, lambda: self.load_associated_mask(self.image_paths[0]))
         
         saved_theme = self.settings.value("theme", "light")
         self.set_theme(saved_theme)
@@ -296,7 +299,7 @@ class BackgroundRemoverGUI(QMainWindow):
 
 
         nav = QHBoxLayout()
-        btn_open_file = QPushButton("Open"); btn_open_file.clicked.connect(self.load_image_dialog)
+        btn_open_file = QPushButton("Open Image(s)"); btn_open_file.clicked.connect(self.load_image_dialog)
         btn_open_clipboard = QPushButton("Clipboard"); btn_open_clipboard.clicked.connect(self.load_clipboard)
         nav.addWidget(btn_open_file); nav.addWidget(btn_open_clipboard)
         controls_layout.addLayout(nav)
@@ -482,8 +485,12 @@ class BackgroundRemoverGUI(QMainWindow):
         lbl_actions.setContentsMargins(3, 0, 0, 0)
         controls_layout.addWidget(lbl_actions)
         h_act = QHBoxLayout()
-        btn_add = QPushButton("Add Mask"); btn_add.clicked.connect(self.add_mask)
-        btn_sub = QPushButton("Sub Mask"); btn_sub.clicked.connect(self.subtract_mask)
+        btn_add = QPushButton("Add Mask (A)"); btn_add.clicked.connect(self.add_mask)
+        btn_add.setToolTip("Add the current model output mask to the composite output image." 
+                           "Mask refinement steps e.g. alpha matting are added at this step")
+        btn_sub = QPushButton("Sub Mask (S)"); btn_sub.clicked.connect(self.subtract_mask)
+        btn_sub.setToolTip("Subtract the current model output mask to the composite output image." 
+                           "Mask refinement steps e.g. alpha matting are added at this step")
         h_act.addWidget(btn_add); h_act.addWidget(btn_sub)
         controls_layout.addLayout(h_act)
         
@@ -1193,6 +1200,21 @@ class BackgroundRemoverGUI(QMainWindow):
 
         except Exception as e: QMessageBox.critical(self, "Error", str(e))
 
+    def load_associated_mask(self, image_path):
+        mask_path = os.path.splitext(image_path)[0] + "_mask.png"
+        if os.path.exists(mask_path):
+            try:
+                mask = Image.open(mask_path).convert("L")
+                if mask.size == self.original_image.size:
+                    self.add_undo_step()
+                    self.working_mask = mask
+                    self.update_output_preview()
+                    self.status_label.setText(f"Loaded associated mask: {os.path.basename(mask_path)}")
+                else:
+                     QMessageBox.warning(self, "Mask Size Mismatch", "The associated mask's dimensions do not match the base image.")
+            except Exception as e:
+                QMessageBox.critical(self, "Error Loading Mask", f"Could not load the associated mask:\n{e}")
+
     def load_blank_image(self):
         self.original_image = Image.new("RGBA", (800, 600), (0,0,0,0))
         self.init_working_buffers()
@@ -1436,6 +1458,8 @@ class BackgroundRemoverGUI(QMainWindow):
         
         processed = self._process_sam_points(coords, labels)
         if not processed:
+            self.clear_overlay()
+            self.set_loading(False)
             return
         crop, x_off, y_off, valid_coords, valid_labels = processed
         current_crop_rect = (x_off, y_off, crop.width, crop.height)
@@ -2290,6 +2314,7 @@ if __name__ == "__main__":
     parser.add_argument("--soften", action="store_true", help="Start with Soften Mask enabled")
     parser.add_argument("--shadow", action="store_true", help="Start with Drop Shadow enabled")
     parser.add_argument("--colour-correction", action="store_true", help="Start with Colour Correction enabled")
+    parser.add_argument("--load-mask", action="store_true", help="Load associated _mask.png file if present")
 
 
 

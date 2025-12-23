@@ -508,7 +508,7 @@ class ThumbnailList(QListWidget):
         text_color = "white" if is_dark else "black"
         self.setStyleSheet(f"""
             QListWidget {{
-                border: none;
+                border: 1px solid #888;
                 background-color: transparent;
                 color: {text_color};
             }}
