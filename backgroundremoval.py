@@ -12,7 +12,7 @@ import numpy as np
 import cv2
 import gc
 from timeit import default_timer as timer
-#import line_profiler
+#from line_profiler import profile
 
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
                              QPushButton, QLabel, QComboBox, QCheckBox, QFileDialog, 
@@ -1289,7 +1289,14 @@ class BackgroundRemoverGUI(QMainWindow):
         self.working_mask = Image.new("L", size, 0)
         self.model_output_mask = Image.new("L", size, 0)
         self.undo_history = [self.working_mask.copy()]
-        self.redo_history = [] 
+        self.redo_history = []
+
+        # used in render_output_image to cache the colour corrected foreground for quick on/off previewing
+        self.working_mask_hash=None
+        self.cached_fg_corrected_cutout=None
+
+        self.cached_blurred_bg = None
+        self.last_blur_params = None # Stores (mask_hash, blur_radius)
         
         self.last_trimap = None
         if hasattr(self, 'user_trimap'):
@@ -1804,85 +1811,121 @@ class BackgroundRemoverGUI(QMainWindow):
         else: self.shadow_frame.hide()
         self.update_output_preview()
 
-    #@line_profiler.profile
+    #@profile
     def render_output_image(self, shadow_downscale=0.125):
         if not self.original_image: return
-        
+
         if self.chk_estimate_foreground.isChecked():
+            
             try:
+                current_mask_hash = hash(self.working_mask.tobytes())
+                
+                if current_mask_hash != self.working_mask_hash:
 
-                self.set_loading(True, "Estimating foreground colour correction")
+                    self.set_loading(True, "Estimating foreground colour correction")
 
-                cutout = self.model_manager.estimate_foreground(self.original_image, self.working_mask)
+                    cutout = self.model_manager.estimate_foreground(self.original_image, self.working_mask)
 
-                self.set_loading(False)
+                    self.set_loading(False)
+                    self.working_mask_hash = current_mask_hash
+                    self.cached_fg_corrected_cutout = cutout
+                else:
+                    cutout = self.cached_fg_corrected_cutout
 
             except Exception as e:
                 print(f"Error during foreground estimation: {e}")
                 # Fallback to the standard method if something goes wrong
                 cutout = self.original_image.convert("RGBA")
                 cutout.putalpha(self.working_mask)
-        
         else:
-
+            # Quick enough to not need caching
             cutout = self.original_image.convert("RGBA")
             cutout.putalpha(self.working_mask)
         
         if self.chk_shadow.isChecked():
+            # work in numpy for speed to avoid requiring caching
             op = self.sl_s_op.value()
             rad = self.sl_s_r.value()
             off_x, off_y = self.sl_s_x.value(), self.sl_s_y.value()
             
-            orig_size = self.working_mask.size
+            w, h = self.working_mask.size
             
-            # Process shadow at a much lower resolution for performance. This feature is very slow
-            small_w = max(1, int(orig_size[0] * shadow_downscale))
-            small_h = max(1, int(orig_size[1] * shadow_downscale))
+            m_np = np.array(self.working_mask)
+            small_w = max(1, int(w * shadow_downscale))
+            small_h = max(1, int(h * shadow_downscale))
             
-            shadow_small = self.working_mask.resize((small_w, small_h), Image.Resampling.NEAREST)
-            shadow_small = shadow_small.filter(ImageFilter.GaussianBlur(rad * shadow_downscale))
+            m_small = cv2.resize(m_np, (small_w, small_h), interpolation=cv2.INTER_NEAREST)
+            
+            blur_size = max(1, int(rad * shadow_downscale))
 
-            shadow_small = shadow_small.point(lambda p: int(p * (op/255)))
-
-            shadow = shadow_small.resize(orig_size, Image.Resampling.BILINEAR)
+            m_blur_small = cv2.GaussianBlur(m_small, (0, 0), sigmaX=blur_size)
+            m_blur_small = cv2.convertScaleAbs(m_blur_small, alpha=op/255.0)
             
-            sl = Image.new("RGBA", self.original_image.size, 0)
-            sl.putalpha(shadow)
-            bg_layer = Image.new("RGBA", self.original_image.size, 0)
-            bg_layer.paste(sl, (off_x, off_y), sl)
-            cutout = Image.alpha_composite(bg_layer, cutout)
+            m_full = cv2.resize(m_blur_small, (w, h), interpolation=cv2.INTER_LINEAR)
+            
+            # Create a black background and use the shifted mask as Alpha
+            shifted_alpha = np.zeros((h, w), dtype=np.uint8)
+            
+            # Calculate slice boundaries for the offset
+            src_y1, src_y2 = max(0, -off_y), min(h, h - off_y)
+            src_x1, src_x2 = max(0, -off_x), min(w, w - off_x)
+            dst_y1, dst_y2 = max(0, off_y), min(h, h + off_y)
+            dst_x1, dst_x2 = max(0, off_x), min(w, w + off_x)
+
+            if dst_y2 > dst_y1 and dst_x2 > dst_x1:
+                shifted_alpha[dst_y1:dst_y2, dst_x1:dst_x2] = m_full[src_y1:src_y2, src_x1:src_x2]
+            
+            shadow_layer_np = np.zeros((h, w, 4), dtype=np.uint8)
+            shadow_layer_np[:, :, 3] = shifted_alpha
+            cutout = Image.alpha_composite(Image.fromarray(shadow_layer_np), cutout)
 
         bg_txt = self.combo_bg_color.currentText()
         if bg_txt == "Transparent": 
             final = cutout
         elif "Blur" in bg_txt:
-            orig_np = np.array(self.original_image).astype(np.float32)
-            rgb = orig_np[:, :, :3]
-            m_np = np.array(self.working_mask)
 
-            # expand mask to reduce halo effects
-            dilation_size = 7 
-            kernel = np.ones((dilation_size, dilation_size), np.uint8)
-            dilated_mask = cv2.dilate(m_np, kernel, iterations=1)
-            
-            # create weight map from the dilated mask
-            # 1.0 = background (keep), 0.0 = dilated cutout (ignore)
-            weight_map = 1.0 - (dilated_mask.astype(np.float32) / 255.0)
-            
+            mask_hash = hash(self.working_mask.tobytes())
             rad = getattr(self, 'blur_radius', 30)
-            if rad % 2 == 0: rad += 1
-            ksize = (rad, rad)
+            current_params = (mask_hash, rad)
+            
+            if current_params == self.last_blur_params and self.cached_blurred_bg is not None:
+                final = self.cached_blurred_bg.copy()
+            else:
+                self.set_loading(True, "Blurring Background")
+                
+                orig_np = np.array(self.original_image)
+                rgb = orig_np[:, :, :3]
+                m_np = np.array(self.working_mask)
 
-            # normalised convolution
-            weighted_blur = cv2.blur(rgb * weight_map[..., None], ksize)
-            
-            blurred_weights = cv2.blur(weight_map, ksize)
+                # expand mask to reduce halo effects
+                dilation_size = 7 
+                kernel = np.ones((dilation_size, dilation_size), np.uint8)
+                dilated_mask = cv2.dilate(m_np, kernel, iterations=1)
+                
+                # create weight map from the dilated mask
+                # 1.0 = background (keep), 0.0 = dilated cutout (ignore)
+                weight_map = (255 - dilated_mask).astype(np.float32) / 255.0
+                          
+                if rad % 2 == 0: rad += 1
+                ksize = (rad, rad)
 
-            result = weighted_blur / (blurred_weights[..., None] + 1e-8)
-            
-            blur_final = np.clip(result, 0, 255).astype(np.uint8)
-            final = Image.fromarray(blur_final).convert("RGBA")
-            
+                # normalised convolution
+                weighted_blur = cv2.blur(rgb * weight_map[..., None], ksize)
+                
+                blurred_weights = cv2.blur(weight_map, ksize)
+
+                result = weighted_blur / (blurred_weights[..., None] + 1e-8)
+                
+                blur_final = cv2.convertScaleAbs(result)
+                final = Image.fromarray(blur_final).convert("RGBA")
+                
+                final.alpha_composite(cutout)
+                self.set_loading(False,"")
+
+                self.cached_blurred_bg = final.copy()
+                self.last_blur_params = current_params
+                self.set_loading(False, "")
+
             final.alpha_composite(cutout)
         else:
             final = Image.new("RGBA", self.original_image.size, bg_txt.lower())
@@ -2123,6 +2166,12 @@ class BackgroundRemoverGUI(QMainWindow):
 
 
         final_image = self.render_output_image()
+
+        # Zero out RGB data in transparent areas for export.
+        # This prevents "ghost backgrounds" when re-loading the file.
+        clean_canvas = Image.new("RGBA", final_image.size, (0, 0, 0, 0))
+        clean_canvas.paste(final_image, (0, 0), final_image)
+        final_image = clean_canvas
 
         # If trimming is enabled, calculate the crop box and apply it.
         if data.get('trim', False):
