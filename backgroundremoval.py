@@ -1467,8 +1467,12 @@ class BackgroundRemoverGUI(QMainWindow):
 
     
     def is_busy(self):
-        """Checks if a background task is currently running."""
-        return hasattr(self, 'worker') and self.worker is not None and self.worker.isRunning()
+        """
+        Checks if a background task is currently running.
+        And a lazy quick check if any image is loaded to prevent models running on the placeholder blank image
+        """
+        is_running = hasattr(self, 'worker') and self.worker is not None and self.worker.isRunning()
+        return is_running or not self.image_paths 
 
     def run_automatic_model(self, model_name=None):
         
