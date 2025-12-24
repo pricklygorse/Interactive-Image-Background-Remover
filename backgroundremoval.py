@@ -33,7 +33,7 @@ import onnxruntime as ort
 try: pyi_splash.update_text("Loading App Scripts")
 except: pass
 
-import src.download_manager as download_manager
+import src.settings_download_manager as settings_download_manager
 from src.ui_widgets import CollapsibleFrame, SynchronisedGraphicsView, ThumbnailList
 from src.ui_dialogs import SaveOptionsDialog, ImageEditorDialog
 from src.trimap_editor import TrimapEditorDialog
@@ -43,16 +43,9 @@ from src.constants import PAINT_BRUSH_SCREEN_SIZE, UNDO_STEPS, SOFTEN_RADIUS
 try: pyi_splash.update_text("Loading pymatting (Compiles on first run, approx 1-2 minutes)")
 except: pass
 
+print("Loading pymatting. On first run this will take a minute or two as it compiles")
 from src.model_manager import ModelManager 
 
-if getattr(sys, 'frozen', False):
-    SCRIPT_BASE_DIR = os.path.dirname(sys.executable)
-else:
-    SCRIPT_BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-
-MODEL_ROOT_DIR = os.path.join(SCRIPT_BASE_DIR, "Models/")
-
-CACHE_ROOT_DIR = os.path.join(SCRIPT_BASE_DIR, "Models", "cache")
 
 class InferenceWorker(QThread):
     """Super simple threaded worker that can take functions"""
@@ -80,7 +73,22 @@ class BackgroundRemoverGUI(QMainWindow):
         try: pyi_splash.update_text("App Initialisation")
         except: pass
         
-        self.model_manager = ModelManager(MODEL_ROOT_DIR, CACHE_ROOT_DIR)
+        # Persistent settings
+        self.settings = QSettings("PricklyGorse", "InteractiveBackgroundRemover")
+
+        # Set up default model location
+        if getattr(sys, 'frozen', False):
+            script_base = os.path.dirname(sys.executable)
+        else:
+            script_base = os.path.dirname(os.path.abspath(__file__))
+            
+        default_model_dir = os.path.join(script_base, "Models")
+        self.model_root_dir = self.settings.value("model_root_dir", default_model_dir)
+
+        cache_root_dir = os.path.join(script_base, "Models", "cache")
+
+
+        self.model_manager = ModelManager(self.model_root_dir, cache_root_dir)
 
         self.image_paths = image_paths if image_paths else []
         self.current_image_index = 0
@@ -95,9 +103,7 @@ class BackgroundRemoverGUI(QMainWindow):
         self.image_exif = None
         self.blur_radius = 30
 
-        # Persistent settings
-        self.settings = QSettings("PricklyGorse", "InteractiveBackgroundRemover")
-
+        
         self.original_image = None
         self.working_image = None
         self.working_mask = None
@@ -328,7 +334,7 @@ class BackgroundRemoverGUI(QMainWindow):
         self.btn_download = QPushButton("Download 📥")
         self.btn_download.setToolTip("Download Models...")
         self.btn_download.setFixedSize(120, 32)
-        self.btn_download.clicked.connect(self.open_download_manager)
+        self.btn_download.clicked.connect(self.open_settings)
         h_models_header.addWidget(self.btn_download)
         controls_layout.addLayout(h_models_header)
         
@@ -495,8 +501,14 @@ class BackgroundRemoverGUI(QMainWindow):
         controls_layout.addLayout(h_act)
         
         h_ut = QHBoxLayout()
-        btn_undo = QPushButton("Undo"); btn_undo.clicked.connect(self.undo)
-        btn_redo = QPushButton("Redo"); btn_redo.clicked.connect(self.redo)
+        btn_undo = QPushButton("Undo ↶")
+        btn_undo.clicked.connect(self.undo)
+        btn_undo.setToolTip("Undo")
+
+        btn_redo = QPushButton("Redo ↷")
+        btn_redo.clicked.connect(self.redo)
+        btn_redo.setToolTip("Redo")
+
         h_ut.addWidget(btn_undo); h_ut.addWidget(btn_redo)
         controls_layout.addLayout(h_ut)
 
@@ -536,12 +548,6 @@ class BackgroundRemoverGUI(QMainWindow):
         self.combo_bg_color.currentTextChanged.connect(self.handle_bg_change)
         bg_layout.addWidget(self.combo_bg_color)
         controls_layout.addLayout(bg_layout)
-        
-        self.chk_show_mask = QCheckBox("Preview Output Mask"); self.chk_show_mask.toggled.connect(self.update_output_preview)
-        controls_layout.addWidget(self.chk_show_mask)
-        
-        
-        
         
 
         self.chk_estimate_foreground = QCheckBox("Mask Edge Colour Correction (Slow)")
@@ -602,11 +608,11 @@ class BackgroundRemoverGUI(QMainWindow):
         btn_help = QPushButton("Help / About"); btn_help.clicked.connect(self.show_help)
         bottom_buttons_layout.addWidget(btn_help)
 
-        self.btn_theme_toggle = QPushButton("🔆")
-        self.btn_theme_toggle.setToolTip("Toggle Dark/Light Mode")
-        self.btn_theme_toggle.clicked.connect(self.toggle_light_dark_mode)
-        self.btn_theme_toggle.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Preferred)
-        bottom_buttons_layout.addWidget(self.btn_theme_toggle)
+        self.btn_settings = QPushButton("⚙️")
+        self.btn_settings.setToolTip("Settings / Model Manager")
+        self.btn_settings.clicked.connect(self.open_settings)
+        self.btn_settings.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Preferred)
+        bottom_buttons_layout.addWidget(self.btn_settings)
         controls_layout.addLayout(bottom_buttons_layout)
 
         # end Sidebar
@@ -652,6 +658,8 @@ class BackgroundRemoverGUI(QMainWindow):
         h_out_header = QHBoxLayout()
         h_out_header.addWidget(QLabel("Output Composite"))
         h_out_header.addStretch()
+        self.chk_show_mask = QCheckBox("Show Mask"); self.chk_show_mask.toggled.connect(self.update_output_preview)
+        h_out_header.addWidget(self.chk_show_mask)
         self.toggle_split_button = QPushButton()
         self.toggle_split_button.setFlat(True)
         self.toggle_split_button.setFixedSize(24, 24)
@@ -799,8 +807,6 @@ class BackgroundRemoverGUI(QMainWindow):
             self.view_input.setBackgroundBrush(QBrush(hatch_color, Qt.BrushStyle.DiagCrossPattern))
             self.view_output.setBackgroundBrush(QBrush(hatch_color, Qt.BrushStyle.DiagCrossPattern))
 
-            self.btn_theme_toggle.setText("🌙")
-            self.btn_theme_toggle.setToolTip("Switch to Light Mode")
             self.settings.setValue("theme", "dark")
         else: # light mode
             # manually set because windows sets default as black when system is black. opposite to linux....
@@ -833,25 +839,12 @@ class BackgroundRemoverGUI(QMainWindow):
             self.view_input.setBackgroundBrush(QBrush(hatch_color, Qt.BrushStyle.DiagCrossPattern))
             self.view_output.setBackgroundBrush(QBrush(hatch_color, Qt.BrushStyle.DiagCrossPattern))
             
-            self.btn_theme_toggle.setText("🔆")
-            self.btn_theme_toggle.setToolTip("Switch to Dark Mode")
             self.settings.setValue("theme", "light")
 
         # update widgets that require overrides
         self.hw_options_frame.collapsible_set_light_dark()
         self.toggle_splitter_orientation(initial_setup=True)
         self.thumbnail_strip.update_style(mode == 'dark')
-
-    def toggle_light_dark_mode(self):
-        """Switches from the current theme to the other."""
-        app = QApplication.instance()
-        if not app: return
-
-        current_bg = app.palette().color(QPalette.ColorRole.Window)
-        if current_bg.lightness() < 128:
-            self.set_theme('light')
-        else:
-            self.set_theme('dark')
 
 
     def toggle_splitter_orientation(self, initial_setup=False):
@@ -1098,19 +1091,29 @@ class BackgroundRemoverGUI(QMainWindow):
         w = self.in_out_splitter.width()
         self.in_out_splitter.setSizes([w//2, w//2])
 
-    def open_download_manager(self):
-        dlg = download_manager.ModelDownloadDialog(
-            model_root_dir=MODEL_ROOT_DIR, 
+    def open_settings(self):
+        dlg = settings_download_manager.SettingsDialog(
+            model_root_dir=self.model_root_dir, 
             main_app_instance=self, 
             parent=self
         )
         dlg.exec()
 
+    def update_model_root_dir(self, new_dir):
+        """Updates the path in the main application and synchronises the model manager."""
+        self.model_root_dir = new_dir
+        self.model_manager.model_root_dir = new_dir
+        
+        self.populate_sam_models()
+        self.populate_whole_models()
+        self.populate_matting_models()
+        self.update_cached_model_icons()
+
     def populate_sam_models(self):
         sam_models = ["mobile_sam", "sam_vit_b", "sam_vit_h", "sam_vit_l", "sam2"]
         matches = []
-        if os.path.exists(MODEL_ROOT_DIR):
-            for filename in os.listdir(MODEL_ROOT_DIR):
+        if os.path.exists(self.model_root_dir):
+            for filename in os.listdir(self.model_root_dir):
                 for partial in sam_models:
                     if partial in filename and ".onnx" in filename:
                         matches.append(filename.replace(".encoder.onnx","").replace(".decoder.onnx",""))
@@ -1126,8 +1129,8 @@ class BackgroundRemoverGUI(QMainWindow):
         # should change these to read from the download manager, but this is easiest for me testing variations of new models atm
         whole_models = ["rmbg", "isnet", "u2net", "BiRefNet", "ben2", "mvanet", "modnet_portrait"]
         matches = []
-        if os.path.exists(MODEL_ROOT_DIR):
-            for filename in os.listdir(MODEL_ROOT_DIR):
+        if os.path.exists(self.model_root_dir):
+            for filename in os.listdir(self.model_root_dir):
                 for partial in whole_models:
                     if partial in filename and ".onnx" in filename:
                         matches.append(filename.replace(".onnx",""))
@@ -1140,15 +1143,15 @@ class BackgroundRemoverGUI(QMainWindow):
 
         # Scan for ViTMatte (and in the future, more models)
         matting_models = ["vitmatte"]
-        if os.path.exists(MODEL_ROOT_DIR):
-            for filename in os.listdir(MODEL_ROOT_DIR):
+        if os.path.exists(self.model_root_dir):
+            for filename in os.listdir(self.model_root_dir):
                 for partial in matting_models:
                     if partial in filename and filename.endswith(".onnx"):
                         model_name = filename.replace(".onnx", "")
                         self.combo_matting_algorithm.addItem(model_name)
 
         # Add the older and weaker indexnet model below Vitmatte, if present
-        if os.path.exists(os.path.join(MODEL_ROOT_DIR, "indexnet.onnx")):
+        if os.path.exists(os.path.join(self.model_root_dir, "indexnet.onnx")):
             self.combo_matting_algorithm.addItem("indexnet")
         
         # PyMatting is always an option, and often the worst option
@@ -1704,7 +1707,8 @@ class BackgroundRemoverGUI(QMainWindow):
     def update_trimap_preview(self):
         """Generates and displays the correct trimap based on the selected source."""
         if not self.model_output_mask or not self.chk_alpha_matting.isChecked() or not self.chk_show_trimap.isChecked():
-            self.trimap_overlay_item.setPixmap(QPixmap()) # Clear if not needed
+            self.trimap_overlay_item.setPixmap(QPixmap())
+            self.view_input.hide_legend()
             return
 
         trimap_np = None
@@ -1726,8 +1730,21 @@ class BackgroundRemoverGUI(QMainWindow):
             
             trimap_color = lut[trimap_np]
             self.trimap_overlay_item.setPixmap(numpy_to_pixmap(trimap_color))
+
+            # Use fixed strings for the legend content
+            legend_text = (
+                "<b>Trimap Legend</b><br>"
+                "⚪ White: Definite Foreground<br>"
+                "🔵 Blue: Unknown (Alpha Edge)<br>"
+                "⚫ Black: Definite Background"
+            )
+            self.view_input.show_legend(legend_text)
+            
         else:
-            self.trimap_overlay_item.setPixmap(QPixmap()) # Clear if no valid trimap
+            self.trimap_overlay_item.setPixmap(QPixmap())
+            self.view_input.hide_legend()
+
+            
 
     def modify_mask(self, op):
         """

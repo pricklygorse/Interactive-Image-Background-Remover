@@ -3,7 +3,7 @@ import sys
 import requests
 from PyQt6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, 
                              QProgressBar, QScrollArea, QWidget, QMessageBox, QFrame, 
-                             QSizePolicy,QStackedWidget,QCheckBox)
+                             QSizePolicy,QStackedWidget,QCheckBox, QComboBox,QLineEdit, QFileDialog)
 from PyQt6.QtWidgets import QTabWidget
 from PyQt6.QtCore import (QThread, pyqtSignal, Qt, QSize)
 
@@ -13,12 +13,12 @@ SAM2_BASE_URL = "https://huggingface.co/mabote-itumeleng/ONNX-SAM2-Segment-Anyth
 MODEL_DOWNLOAD_GROUPS = [
     
     {
-        "group_name": "Segment Anything Models (SAM)",
+        "group_name": "Interactive (SAM) Models",
         "type": "sam",
         "models": [
             {   "id": "mobile_sam",
                 "name": "MobileSAM (Recommended)",
-                "description": "Smallest, fastest SAM model, typically for mobile or low-resource devices",
+                "description": "Smallest, fastest Segment Anything model, typically for mobile or low-resource devices",
                 "files": [
                     {"file": "mobile_sam.encoder.onnx", "url": REMBG_BASE_URL + "mobile_sam.encoder.onnx", "size_mb": 26.9},
                     {"file": "mobile_sam.decoder.onnx", "url": REMBG_BASE_URL + "sam_vit_b_01ec64.decoder.onnx", "size_mb": 15.7}
@@ -26,7 +26,7 @@ MODEL_DOWNLOAD_GROUPS = [
             },
             {   "id": "sam_vit_b_01ec64.quant",
                 "name": "SAM ViT-B (Quantised)",
-                "description": "Base SAM model, quantised for a good balance of accuracy and reduced size.",
+                "description": "Base Segment Anything model, quantised for a good balance of accuracy and reduced size.",
                 "files": [
                     {"file": "sam_vit_b_01ec64.quant.encoder.onnx", "url": REMBG_BASE_URL + "sam_vit_b_01ec64.encoder.quant.onnx", "size_mb": 104.0},
                     {"file": "sam_vit_b_01ec64.quant.decoder.onnx", "url": REMBG_BASE_URL + "sam_vit_b_01ec64.decoder.quant.onnx", "size_mb": 8.35}
@@ -34,7 +34,7 @@ MODEL_DOWNLOAD_GROUPS = [
             },
             {   "id": "sam_vit_b_01ec64",
                 "name": "SAM ViT-B (Full)",
-                "description": "Base SAM model, full precision for maximum accuracy with reasonable speed.",
+                "description": "Base Segment Anything model, full precision for maximum accuracy with reasonable speed.",
                 "files": [
                     {"file": "sam_vit_b_01ec64.encoder.onnx", "url": REMBG_BASE_URL + "sam_vit_b_01ec64.encoder.onnx", "size_mb": 343.0},
                     {"file": "sam_vit_b_01ec64.decoder.onnx", "url": REMBG_BASE_URL + "sam_vit_b_01ec64.decoder.onnx", "size_mb": 15.7}
@@ -42,7 +42,7 @@ MODEL_DOWNLOAD_GROUPS = [
             },
             {   "id": "sam_vit_l_0b3195.quant",
                 "name": "SAM ViT-L (Quantised)",
-                "description": "Large SAM model, quantised for improved accuracy over ViT-B with a moderate size increase. Requires both encoder and decoder.",
+                "description": "Large Segment Anything model, quantised for improved accuracy over ViT-B with a moderate size increase. Requires both encoder and decoder.",
                 "files": [
                     {"file": "sam_vit_l_0b3195.quant.encoder.onnx", "url": REMBG_BASE_URL + "sam_vit_l_0b3195.encoder.quant.onnx", "size_mb": 317.0},
                     {"file": "sam_vit_l_0b3195.quant.decoder.onnx", "url": REMBG_BASE_URL + "sam_vit_l_0b3195.decoder.quant.onnx", "size_mb": 8.35}
@@ -50,7 +50,7 @@ MODEL_DOWNLOAD_GROUPS = [
             },
             {   "id": "sam_vit_l_0b3195",
                 "name": "SAM ViT-L (Full)",
-                "description": "Large SAM model, full precision for highest accuracy but with the largest size. Requires both encoder and decoder.",
+                "description": "Large Segment Anything model, full precision for highest accuracy but with the largest size. Requires both encoder and decoder.",
                 "files": [
                     {"file": "sam_vit_l_0b3195.encoder.onnx", "url": REMBG_BASE_URL + "sam_vit_l_0b3195.encoder.onnx", "size_mb": 1177.6}, 
                     {"file": "sam_vit_l_0b3195.decoder.onnx", "url": REMBG_BASE_URL + "sam_vit_l_0b3195.decoder.onnx", "size_mb": 15.7}
@@ -58,7 +58,7 @@ MODEL_DOWNLOAD_GROUPS = [
             },
             {   "id": "sam2.1_hiera_tiny",
                 "name": "SAM2.1 Hiera Tiny",
-                "description": "SAM 2.1 Hiera model (Tiny). Fastest, but retains good accuracy.",
+                "description": "Segment Anything 2.1 Hiera model (Tiny). Fastest, but retains good accuracy.",
                 "files": [
                     {"file": "sam2.1_hiera_tiny.encoder.onnx", "url": SAM2_BASE_URL + "sam2.1_hiera_tiny_encoder.onnx?download=true", "size_mb": 134.0},
                     {"file": "sam2.1_hiera_tiny.decoder.onnx", "url": SAM2_BASE_URL + "sam2.1_hiera_tiny_decoder.onnx?download=true", "size_mb": 20.7}
@@ -66,7 +66,7 @@ MODEL_DOWNLOAD_GROUPS = [
             },
             {   "id": "sam2.1_hiera_small",
                 "name": "SAM2.1 Hiera Small",
-                "description": "SAM 2.1 Hiera model (Small).",
+                "description": "Segment Anything 2.1 Hiera model (Small).",
                 "files": [
                     {"file": "sam2.1_hiera_small.encoder.onnx", "url": SAM2_BASE_URL + "sam2.1_hiera_small_encoder.onnx?download=true", "size_mb": 163.0},
                     {"file": "sam2.1_hiera_small.decoder.onnx", "url": SAM2_BASE_URL + "sam2.1_hiera_small_decoder.onnx?download=true", "size_mb": 20.7}
@@ -74,7 +74,7 @@ MODEL_DOWNLOAD_GROUPS = [
             },
             {   "id": "sam2.1_hiera_base",
                 "name": "SAM2.1 Hiera Base+",
-                "description": "SAM 2.1 Hiera model (Base+).",
+                "description": "Segment Anything 2.1 Hiera model (Base+).",
                 "files": [
                     {"file": "sam2.1_hiera_base_plus.encoder.onnx", "url": SAM2_BASE_URL + "sam2.1_hiera_base_plus_encoder.onnx?download=true", "size_mb": 340.0},
                     {"file": "sam2.1_hiera_base_plus.decoder.onnx", "url": SAM2_BASE_URL + "sam2.1_hiera_base_plus_decoder.onnx?download=true", "size_mb": 20.7}
@@ -82,7 +82,7 @@ MODEL_DOWNLOAD_GROUPS = [
             },
             {   "id": "sam2.1_hiera_large",
                 "name": "SAM2.1 Hiera Large",
-                "description": "SAM 2.1 Hiera model (Large).",
+                "description": "Segment Anything 2.1 Hiera model (Large).",
                 "files": [
                     {"file": "sam2.1_hiera_large.encoder.onnx", "url": SAM2_BASE_URL + "sam2.1_hiera_large_encoder.onnx?download=true", "size_mb": 889.0},
                     {"file": "sam2.1_hiera_large.decoder.onnx", "url": SAM2_BASE_URL + "sam2.1_hiera_large_decoder.onnx?download=true", "size_mb": 20.7}
@@ -91,7 +91,7 @@ MODEL_DOWNLOAD_GROUPS = [
         ]
     },
     {
-        "group_name": "Automatic Whole-Image Models",
+        "group_name": "Automatic Models",
         "type": "automatic_general",
         "models": [
             {   "id": "isnet-general-use",
@@ -379,7 +379,7 @@ class ModelDownloadThread(QThread):
         self._is_running = False
 
 # --- QDialog for the Download Manager UI ---
-class ModelDownloadDialog(QDialog):
+class SettingsDialog(QDialog):
     def __init__(self, model_root_dir, main_app_instance=None, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Model Download Manager")
@@ -397,30 +397,122 @@ class ModelDownloadDialog(QDialog):
         self.row_widgets = {} 
         self.file_progress_tracker = {}
 
-        self.status_label = QLabel("Ready to download models. Setting large models to <i>Load on Startup</i> is not advised")
+        self.status_label = QLabel("")
         self.status_label.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
         self.layout.addWidget(self.status_label)
         
+
+        # add tabs
+
         self.tabs = QTabWidget()
+        self.tabs.setDocumentMode(True) # Ensures consistent background rendering across OS styles
         self.layout.addWidget(self.tabs)
+
+        self._add_general_tab()
         
         for group in MODEL_DOWNLOAD_GROUPS:
             self._add_tab(group)
 
-    def _add_tab(self, group):
-        tab = QWidget()
-        tab_layout = QVBoxLayout(tab)
-        tab_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
 
+    def _add_general_tab(self):
+        # Use a scroll area to match the structure of the model tabs
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+
+        tab_content = QWidget()
+        tab_content.setAutoFillBackground(True) # Force use of the Window colour role
+        layout = QVBoxLayout(tab_content)
+        layout.setAlignment(Qt.AlignmentFlag.AlignTop)
+
+        # Theme Selection
+        theme_group = QFrame()
+        theme_group.setFrameShape(QFrame.Shape.StyledPanel)
+        theme_layout = QHBoxLayout(theme_group)
+        
+        theme_label = QLabel("<b>Interface Theme:</b>")
+        theme_label.setToolTip("Switch between Light and Dark mode.")
+        
+        self.theme_combo = QComboBox()
+        self.theme_combo.addItems(["Light", "Dark"])
+        
+        # Set current value from settings
+        current_theme = self.settings.value("theme", "light") if self.settings else "light"
+        self.theme_combo.setCurrentText(current_theme.capitalize())
+        
+        self.theme_combo.currentTextChanged.connect(self._on_theme_changed)
+        
+        theme_layout.addWidget(theme_label)
+        theme_layout.addWidget(self.theme_combo)
+        theme_layout.addStretch()
+        
+        layout.addWidget(theme_group)
+
+        # Model Download Location
+        path_group = QFrame()
+        path_group.setFrameShape(QFrame.Shape.StyledPanel)
+        path_layout = QVBoxLayout(path_group)
+        
+        path_label = QLabel("<b>Model Download Location:</b>")
+        path_label.setToolTip("Select the folder where ONNX models are stored and downloaded to.")
+        path_layout.addWidget(path_label)
+        
+        path_selection_layout = QHBoxLayout()
+        self.path_display = QLineEdit(self.model_root_dir)
+        self.path_display.setReadOnly(True)
+        
+        btn_browse = QPushButton("Browse...")
+        btn_browse.clicked.connect(self._on_browse_model_path)
+        
+        path_selection_layout.addWidget(self.path_display)
+        path_selection_layout.addWidget(btn_browse)
+        path_layout.addLayout(path_selection_layout)
+        
+        layout.addWidget(path_group)
+        
+        scroll.setWidget(tab_content)
+        self.tabs.addTab(scroll, "Settings")
+
+    def _on_theme_changed(self, theme_text):
+        if self.main_app_instance:
+            self.main_app_instance.set_theme(theme_text.lower())
+
+    def _on_browse_model_path(self):
+        new_dir = QFileDialog.getExistingDirectory(
+            self, "Select Model Directory", self.model_root_dir
+        )
+        if new_dir:
+            # Normalise path for cross-platform consistency
+            new_dir = os.path.normpath(new_dir)
+            self.model_root_dir = new_dir
+            self.path_display.setText(new_dir)
+            
+            if self.settings:
+                self.settings.setValue("model_root_dir", new_dir)
+            
+            if self.main_app_instance:
+                self.main_app_instance.update_model_root_dir(new_dir)
+            
+            self._refresh_model_status()
+                
+            QMessageBox.information(self, "Model Directory Changed", 
+                                    "The model directory has been updated. You may need to move your existing models to the new folder or re-download them." "Restart recommended")
+
+    def _add_tab(self, group):
+        # Scroll area uses 'Base' colour; tab_content must auto-fill with 'Window' colour to match
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         scroll.setFrameShape(QFrame.Shape.NoFrame)
-
         scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
 
-        scroll.setWidget(tab)
+        tab_content = QWidget()
+        tab_content.setAutoFillBackground(True) 
+        tab_layout = QVBoxLayout(tab_content)
+        tab_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
+
+        scroll.setWidget(tab_content)
         self.tabs.addTab(scroll, group['group_name'])
 
         model_type = group.get('type')
@@ -484,7 +576,10 @@ class ModelDownloadDialog(QDialog):
         desc_lbl = QLabel(model_data['description'])
         desc_lbl.setWordWrap(True)
         desc_lbl.setMinimumWidth(200)
-        desc_lbl.setStyleSheet("font-size: 9pt; color: #666;")
+        desc_lbl.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        f = desc_lbl.font()
+        f.setPointSize(11)
+        desc_lbl.setFont(f)
         h_bottom.addWidget(desc_lbl)
 
         startup_cb = QCheckBox("Load on Startup")
@@ -515,7 +610,8 @@ class ModelDownloadDialog(QDialog):
             'action_widget': action_widget,
             'startup_cb': startup_cb,
             'model_type': model_type,
-            'model_name': model_name
+            'model_name': model_name,
+            'model_data': model_data
         }
 
     def _on_startup_box_toggled(self, is_checked, model_id, model_type):
@@ -629,6 +725,25 @@ class ModelDownloadDialog(QDialog):
         elif w:
              # Progress will be updated by _update_model_progress as other files download
              pass
+    
+    def _refresh_model_status(self):
+        """Updates the Download/Downloaded status for all rows based on current path."""
+        for model_id, widgets in self.row_widgets.items():
+            model_data = widgets.get('model_data')
+            if not model_data: continue
+            
+            is_downloaded = self._check_if_model_downloaded(model_data)
+            if is_downloaded:
+                widgets['progress'].setValue(100)
+                widgets['progress'].setFormat("Downloaded")
+                widgets['action_widget'].setCurrentWidget(widgets['progress'])
+                widgets['startup_cb'].setVisible(True)
+            else:
+                widgets['action_widget'].setCurrentWidget(widgets['button'])
+                widgets['startup_cb'].setVisible(False)
+                # Ensure startup setting is cleared if model is no longer available
+                widgets['startup_cb'].setChecked(False)
+
 
     def closeEvent(self, event):
         # Stop all running threads if the dialog is closed

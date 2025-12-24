@@ -179,6 +179,48 @@ class SynchronisedGraphicsView(QGraphicsView):
         self.scene().addItem(self.brush_cursor_item)
         self.brush_cursor_item.hide()
 
+        # Overlay Legend Widget
+        self.legend_label = QLabel(self)
+        self.legend_label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self.legend_label.hide()
+        self.update_legend_style(is_dark=False)
+
+    def update_legend_style(self, is_dark):
+        bg = "rgba(0, 0, 0, 150)" if is_dark else "rgba(255, 255, 255, 180)"
+        text = "white" if is_dark else "black"
+        self.legend_label.setStyleSheet(f"""
+            QLabel {{
+                background-color: {bg};
+                color: {text};
+                padding: 8px;
+                border-radius: 4px;
+                border: 1px solid #888;
+                font-family: sans-serif;
+                font-size: 10pt;
+            }}
+        """)
+
+    def update_legend_position(self):
+        if self.legend_label.isVisible():
+            self.legend_label.adjustSize()
+            margin = 15
+            # Position at top right of the viewport
+            x = self.viewport().width() - self.legend_label.width() - margin
+            y = margin
+            self.legend_label.move(x, y)
+
+    def show_legend(self, text):
+        self.legend_label.setText(text)
+        self.legend_label.show()
+        self.update_legend_position()
+
+    def hide_legend(self):
+        self.legend_label.hide()
+    
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self.update_legend_position()
+
     def drawBackground(self, painter, rect):
         """
         Overrides the background drawing to keep the hatch pattern 
