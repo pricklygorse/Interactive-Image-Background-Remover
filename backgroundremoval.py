@@ -21,7 +21,7 @@ from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QH
                              QGraphicsRectItem, QGraphicsEllipseItem, QGraphicsPathItem, 
                              QTextEdit, QSizePolicy, QRadioButton, QButtonGroup, QInputDialog, 
                              QProgressBar, QStyle)
-from PyQt6.QtCore import Qt, QTimer, QPointF, QRectF, QSettings, QPropertyAnimation, QEasingCurve, QThread, pyqtSignal
+from PyQt6.QtCore import Qt, QTimer, QPointF, QRectF, QSettings, QPropertyAnimation, QEasingCurve, QThread, pyqtSignal, QEvent
 from PyQt6.QtGui import (QPixmap, QImage, QColor, QPainter, QPainterPath, QPen, QBrush,
                          QKeySequence, QShortcut, QCursor, QIcon, QPalette)
 
@@ -34,7 +34,7 @@ try: pyi_splash.update_text("Loading App Scripts")
 except: pass
 
 import src.settings_download_manager as settings_download_manager
-from src.ui_widgets import CollapsibleFrame, SynchronisedGraphicsView, ThumbnailList
+from src.ui_widgets import CollapsibleFrame, SynchronisedGraphicsView, ThumbnailList, OrientationSplitter
 from src.ui_dialogs import SaveOptionsDialog, ImageEditorDialog
 from src.trimap_editor import TrimapEditorDialog
 from src.utils import pil2pixmap, numpy_to_pixmap
@@ -46,6 +46,9 @@ except: pass
 print("Loading pymatting. On first run this will take a minute or two as it compiles")
 from src.model_manager import ModelManager 
 
+VIEW_IN_MSG = "Models run on current view. Zoom for more detail.   L-Click: Add Point | R-Click: Add Avoid Point | Drag: Box | M-Click: Pan | Scroll: Zoom (Ctrl+Scroll Touchpad) | [P]: Paintbrush"
+VIEW_OUT_MSG = "OUTPUT | M-Click: Pan | Scroll: Zoom | [A/S]: Add/Subtract Current Model Mask from Output"
+VIEW_PAINT_MSG = "PAINTBRUSH | L-Click: Paint | R-Click: Erase | M-Click: Pan | Scroll: Zoom | [P]: Exit Paint"
 
 class InferenceWorker(QThread):
     """Super simple threaded worker that can take functions"""
@@ -618,7 +621,7 @@ class BackgroundRemoverGUI(QMainWindow):
         # end Sidebar
 
 
-        self.in_out_splitter = QSplitter(Qt.Orientation.Horizontal)
+        self.in_out_splitter = OrientationSplitter(Qt.Orientation.Horizontal)
         self.in_out_splitter.setChildrenCollapsible(False)
         
         is_light_mode = QApplication.styleHints().colorScheme() != Qt.ColorScheme.Dark
@@ -626,6 +629,8 @@ class BackgroundRemoverGUI(QMainWindow):
 
         w_in = QWidget(); l_in = QVBoxLayout(w_in)
         w_in.setMinimumWidth(150)
+        l_in.setContentsMargins(0, 0, 0, 0)
+        l_in.setSpacing(2)
 
         # Add invisible widget to match the splitter toggle widget to keep layout spacing correct
         h_in_header = QHBoxLayout()
@@ -653,6 +658,8 @@ class BackgroundRemoverGUI(QMainWindow):
         
         w_out = QWidget(); l_out = QVBoxLayout(w_out)
         w_out.setMinimumWidth(150)
+        l_out.setContentsMargins(0, 0, 0, 0)
+        l_out.setSpacing(2)
 
         # Output header with split orientation change button
         h_out_header = QHBoxLayout()
@@ -660,12 +667,6 @@ class BackgroundRemoverGUI(QMainWindow):
         h_out_header.addStretch()
         self.chk_show_mask = QCheckBox("Show Mask"); self.chk_show_mask.toggled.connect(self.update_output_preview)
         h_out_header.addWidget(self.chk_show_mask)
-        self.toggle_split_button = QPushButton()
-        self.toggle_split_button.setFlat(True)
-        self.toggle_split_button.setFixedSize(24, 24)
-        self.toggle_split_button.setToolTip("Toggle between vertical and horizontal split view")
-        self.toggle_split_button.clicked.connect(self.toggle_splitter_orientation)
-        h_out_header.addWidget(self.toggle_split_button)
         l_out.addLayout(h_out_header)
 
         self.scene_output = QGraphicsScene()
@@ -680,8 +681,14 @@ class BackgroundRemoverGUI(QMainWindow):
         l_out.addWidget(self.view_output)
         self.in_out_splitter.addWidget(w_out)
 
+        self.in_out_splitter.toggle_button.clicked.connect(self.toggle_splitter_orientation)
+
         self.view_input.set_sibling(self.view_output)
         self.view_output.set_sibling(self.view_input)
+
+        # status bar help messages on view mouseover
+        self.view_input.viewport().installEventFilter(self)
+        self.view_output.viewport().installEventFilter(self)
 
         # Holds the views (top) and the thumbnails (bottom)
         views_thumbs_widget = QWidget()
@@ -700,14 +707,12 @@ class BackgroundRemoverGUI(QMainWindow):
 
 
 
-
         # Assemble sidebar + views
         layout.addWidget(sidebar_container)
         layout.addWidget(views_thumbs_widget, 1) # Add the container instead of the splitter
 
         # status bar 
-        self.status_label = QLabel("Idle")
-        self.status_label.setFixedWidth(600)
+        self.status_label = QLabel("Ready")
         self.zoom_label = QLabel("Zoom: 100%")
         self.progress_bar = QProgressBar()
         self.progress_bar.setRange(0, 0)  # Sets "Indeterminate" (bouncing) mode
@@ -856,22 +861,15 @@ class BackgroundRemoverGUI(QMainWindow):
             target_orientation = Qt.Orientation.Vertical if current_orientation == Qt.Orientation.Horizontal else Qt.Orientation.Horizontal
             self.in_out_splitter.setOrientation(target_orientation)
 
-        icon_pixmap_enum = QStyle.StandardPixmap.SP_ToolBarHorizontalExtensionButton if target_orientation == Qt.Orientation.Vertical else QStyle.StandardPixmap.SP_ToolBarVerticalExtensionButton
-        
-        is_dark_mode = app.palette().color(QPalette.ColorRole.Window).lightness() < 128
+        symbol = "⇳" if target_orientation == Qt.Orientation.Horizontal else "⬄"
+        self.in_out_splitter.toggle_button.setText(symbol)
 
-        if is_dark_mode:
-            icon = self.style().standardIcon(icon_pixmap_enum)
-            pixmap = icon.pixmap(24, 24) 
-
-            img = pixmap.toImage()
-
-            # InvertRgb so we don't invert the alpha channel
-            img.invertPixels(QImage.InvertMode.InvertRgb)
-            
-            self.toggle_split_button.setIcon(QIcon(QPixmap.fromImage(img)))
-        else:
-            self.toggle_split_button.setIcon(self.style().standardIcon(icon_pixmap_enum))
+        handle = self.in_out_splitter.handle(1)
+        if handle and handle.layout():
+            if target_orientation == Qt.Orientation.Horizontal:
+                handle.layout().setDirection(QVBoxLayout.Direction.TopToBottom)
+            else:
+                handle.layout().setDirection(QVBoxLayout.Direction.LeftToRight)
 
     
     
@@ -1081,7 +1079,7 @@ class BackgroundRemoverGUI(QMainWindow):
             QApplication.processEvents() 
         else:
             self.progress_bar.hide()
-            self.status_label.setText(message if message else "Idle")
+            self.status_label.setText(message if message else "Ready")
             self.status_label.setStyleSheet("")
             self.centralWidget().layout().itemAt(0).widget().setEnabled(True)
             QApplication.restoreOverrideCursor()
@@ -1359,6 +1357,23 @@ class BackgroundRemoverGUI(QMainWindow):
         zoom = self.view_input.transform().m11() * 100
         self.zoom_label.setText(f"Zoom: {int(zoom)}%")
 
+    def eventFilter(self, source, event):
+        """Captures mouse entry into views to display control hints in the status bar."""
+        if event.type() == QEvent.Type.Enter:
+            if not self.is_busy():
+                if self.paint_mode:
+                    msg = VIEW_PAINT_MSG
+                elif source == self.view_input.viewport():
+                    msg = VIEW_IN_MSG
+                elif source == self.view_output.viewport():
+                    msg = VIEW_OUT_MSG
+                self.status_label.setText(msg)
+        elif event.type() == QEvent.Type.Leave:
+            if not self.is_busy():
+                self.status_label.setText("Ready")
+
+        return super().eventFilter(source, event)
+
     def get_viewport_crop(self):
         vp = self.view_input.viewport().rect()
         sr = self.view_input.mapToScene(vp).boundingRect()
@@ -1440,7 +1455,7 @@ class BackgroundRemoverGUI(QMainWindow):
         if not valid_coords or not valid_labels:
             self.model_output_mask = Image.new("L", self.original_image.size, 0)
             self.overlay_pixmap_item.setPixmap(QPixmap())
-            self.status_label.setText("Idle (No points in view)")
+            self.status_label.setText("Ready (No points in view)")
             return None
 
         return crop, x_off, y_off, valid_coords, valid_labels
@@ -1694,6 +1709,7 @@ class BackgroundRemoverGUI(QMainWindow):
         else:
             # If unchecked, also uncheck the trimap view so it's off if re-enabled
             self.chk_show_trimap.setChecked(False)
+            self.view_input.hide_legend()
 
     def toggle_trimap_display(self, checked):
         """Shows or hides the trimap overlay on the input view."""
@@ -1844,7 +1860,7 @@ class BackgroundRemoverGUI(QMainWindow):
     def _on_modify_mask_finished(self, processed_mask, op):
         """Handles the result from the mask modification worker."""
         self.working_mask = op(self.working_mask, processed_mask)
-        self.set_loading(False, "Idle")
+        self.set_loading(False, "Ready")
         self.update_output_preview()
 
     
@@ -2020,6 +2036,13 @@ class BackgroundRemoverGUI(QMainWindow):
         scene_pos = self.view_input.mapToScene(cursor_pos)
         self.view_input.update_brush_cursor(scene_pos)
         self.view_output.update_brush_cursor(scene_pos)
+
+        if not self.is_busy():
+            if self.view_input.underMouse():
+                if enabled:
+                    self.status_label.setText(VIEW_PAINT_MSG)
+                else:
+                    self.status_label.setText(VIEW_IN_MSG)
 
     def handle_paint_start(self, pos):
         

@@ -4,7 +4,7 @@ from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QH
                              QSlider, QFrame, QSplitter, QDialog, QScrollArea, 
                              QGraphicsRectItem, QGraphicsEllipseItem, QGraphicsPathItem, 
                              QTextEdit, QSizePolicy, QRadioButton, QButtonGroup, QInputDialog, 
-                             QProgressBar, QStyle,
+                             QProgressBar, QStyle, QSplitterHandle,
                              QListWidget, QListWidgetItem, QListView, QAbstractItemView)
 from PyQt6.QtCore import Qt, QTimer, QPointF, QRectF, QSettings, QPropertyAnimation, QEasingCurve, QSize
 from PyQt6.QtGui import (QPixmap, QImage, QColor, QPainter, QPainterPath, QPen, QBrush,
@@ -16,7 +16,28 @@ import os
 from src.constants import DEFAULT_ZOOM_FACTOR, PAINT_BRUSH_SCREEN_SIZE, MIN_SAM_BOX_SIZE
 
 
+class OrientationSplitter(QSplitter):
+    def __init__(self, orientation, parent=None):
+        super().__init__(orientation, parent)
+        self.setHandleWidth(24)
+        self.toggle_button = None
 
+    def createHandle(self):
+        """
+        Overrides the handle creation to insert a toggle button into the splitter handle itself.
+        """
+        handle = QSplitterHandle(self.orientation(), self)
+        layout = QVBoxLayout(handle)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+        
+        self.toggle_button = QPushButton("⇳")
+        self.toggle_button.setMaximumWidth(24)
+        self.toggle_button.setToolTip("Toggle Split Orientation")
+        self.toggle_button.setFlat(False)
+        
+        layout.addWidget(self.toggle_button)
+        return handle
 
 # Animated Collapsable Frame Widget
 class CollapsibleFrame(QFrame):
