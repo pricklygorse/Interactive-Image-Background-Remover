@@ -20,10 +20,10 @@ from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QH
                              QSlider, QFrame, QSplitter, QDialog, QScrollArea, 
                              QGraphicsRectItem, QGraphicsEllipseItem, QGraphicsPathItem, 
                              QTextEdit, QSizePolicy, QRadioButton, QButtonGroup, QInputDialog, 
-                             QProgressBar, QStyle)
+                             QProgressBar, QStyle, QToolBar)
 from PyQt6.QtCore import Qt, QTimer, QPointF, QRectF, QSettings, QPropertyAnimation, QEasingCurve, QThread, pyqtSignal, QEvent
 from PyQt6.QtGui import (QPixmap, QImage, QColor, QPainter, QPainterPath, QPen, QBrush,
-                         QKeySequence, QShortcut, QCursor, QIcon, QPalette)
+                         QKeySequence, QShortcut, QCursor, QIcon, QPalette, QAction)
 
 from PIL import Image, ImageOps, ImageDraw, ImageEnhance, ImageGrab, ImageFilter, ImageChops
 import onnxruntime as ort
@@ -187,6 +187,8 @@ class BackgroundRemoverGUI(QMainWindow):
         layout.setContentsMargins(6, 6, 6, 0) 
         layout.setSpacing(6)
 
+        self.create_global_toolbar()
+
         # --- Sidebar ---
         sidebar_container = QFrame()
         sidebar_container.setFixedWidth(320)
@@ -303,28 +305,7 @@ class BackgroundRemoverGUI(QMainWindow):
         self.trt_cache_option_visibility() # Initial check for TensorRT
 
         # End Hardware Acceleration
-
-
-
-
-        nav = QHBoxLayout()
-        btn_open_file = QPushButton("Open Image(s)"); btn_open_file.clicked.connect(self.load_image_dialog)
-        btn_open_clipboard = QPushButton("Clipboard"); btn_open_clipboard.clicked.connect(self.load_clipboard)
-        nav.addWidget(btn_open_file); nav.addWidget(btn_open_clipboard)
-        controls_layout.addLayout(nav)
-
-
-        btn_edit_image = QPushButton("Edit Image"); btn_edit_image.clicked.connect(self.open_image_editor)
-        btn_load_mask = QPushButton("Load Mask"); btn_load_mask.clicked.connect(self.load_mask_dialog)
-
-        h_edit_load_buttons = QHBoxLayout()
-        h_edit_load_buttons.addWidget(btn_edit_image)
-        h_edit_load_buttons.addWidget(btn_load_mask)
-        controls_layout.addLayout(h_edit_load_buttons)
-
-        # End File loading buttons
-
-        
+       
 
         # Mask generation model selection
 
@@ -379,8 +360,7 @@ class BackgroundRemoverGUI(QMainWindow):
 
         h_clr_pnt = QHBoxLayout()
         btn_clr = QPushButton("Clear Points/Masks"); btn_clr.clicked.connect(self.clear_overlay)
-        self.chk_paint = QCheckBox("Paintbrush (P)"); self.chk_paint.toggled.connect(self.toggle_paint_mode)
-        h_clr_pnt.addWidget(btn_clr); h_clr_pnt.addWidget(self.chk_paint)
+        h_clr_pnt.addWidget(btn_clr)
         controls_layout.addLayout(h_clr_pnt)
 
 
@@ -503,19 +483,6 @@ class BackgroundRemoverGUI(QMainWindow):
         h_act.addWidget(btn_add); h_act.addWidget(btn_sub)
         controls_layout.addLayout(h_act)
         
-        h_ut = QHBoxLayout()
-        btn_undo = QPushButton("Undo ↶")
-        btn_undo.clicked.connect(self.undo)
-        btn_undo.setToolTip("Undo")
-
-        btn_redo = QPushButton("Redo ↷")
-        btn_redo.clicked.connect(self.redo)
-        btn_redo.setToolTip("Redo")
-
-        h_ut.addWidget(btn_undo); h_ut.addWidget(btn_redo)
-        controls_layout.addLayout(h_ut)
-
-
 
         lbl_canvas = QLabel("<b> Canvas:</b>")
         lbl_canvas.setContentsMargins(3, 0, 0, 0)
@@ -725,6 +692,55 @@ class BackgroundRemoverGUI(QMainWindow):
         self.statusBar().addPermanentWidget(self.zoom_label)
         
         self.toggle_splitter_orientation(initial_setup=True)
+    
+    def create_global_toolbar(self):
+        toolbar = QToolBar("Session Control")
+        toolbar.setMovable(False)
+        toolbar.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        self.addToolBar(toolbar)
+
+        open_img_act = QAction("Open Image(s)", self)
+        open_img_act.setToolTip("Open Image(s)")
+        open_img_act.triggered.connect(self.load_image_dialog)
+        toolbar.addAction(open_img_act)
+        open_clip_act = QAction("Open Clipboard", self)
+        open_clip_act.setToolTip("Open Clipboard")
+        open_clip_act.triggered.connect(self.load_clipboard)
+        toolbar.addAction(open_clip_act)
+        toolbar.addSeparator()
+        
+        load_mask_act = QAction("Import Saved Mask", self)
+        load_mask_act.setToolTip("Import an existing .png mask into the global working composite")
+        toolbar.addAction(load_mask_act)
+        load_mask_act.triggered.connect(self.load_mask_dialog)
+
+        toolbar.addSeparator()
+        undo_act = QAction("↶", self)
+        undo_act.setToolTip("Undo")
+        undo_act.triggered.connect(self.undo)
+        toolbar.addAction(undo_act)
+
+        redo_act = QAction("↷", self)
+        redo_act.setToolTip("Redo")
+        redo_act.triggered.connect(self.redo)
+        toolbar.addAction(redo_act)
+
+        toolbar.addSeparator()
+
+        # Global Toggle
+        self.chk_paint = QCheckBox("Paintbrush (P)")
+
+        toolbar.addWidget(self.chk_paint)
+        self.chk_paint.toggled.connect(self.toggle_paint_mode)
+        spacer = QWidget()
+        spacer.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        toolbar.addWidget(spacer)
+        edit_image_act = QAction("Edit Image (Curves/WB)", self)
+        edit_image_act.triggered.connect(self.open_image_editor)
+        toolbar.addAction(edit_image_act)
+        toolbar.addSeparator()
+
+        toolbar.addAction("Settings").triggered.connect(self.open_settings)
 
     def is_mask_modified(self):
         """Checks if the working mask has data or history."""
@@ -808,7 +824,7 @@ class BackgroundRemoverGUI(QMainWindow):
             dark_palette.setColor(QPalette.ColorGroup.Disabled, QPalette.ColorRole.HighlightedText, disabled_color)
             app.setPalette(dark_palette)
 
-            hatch_color = QColor(60, 60, 60)
+            hatch_color = QColor(40, 40, 40)
             self.view_input.setBackgroundBrush(QBrush(hatch_color, Qt.BrushStyle.DiagCrossPattern))
             self.view_output.setBackgroundBrush(QBrush(hatch_color, Qt.BrushStyle.DiagCrossPattern))
 
@@ -840,7 +856,7 @@ class BackgroundRemoverGUI(QMainWindow):
 
             app.setPalette(light_palette)
             
-            hatch_color = QColor(220, 220, 220)
+            hatch_color = QColor(230, 230, 230)
             self.view_input.setBackgroundBrush(QBrush(hatch_color, Qt.BrushStyle.DiagCrossPattern))
             self.view_output.setBackgroundBrush(QBrush(hatch_color, Qt.BrushStyle.DiagCrossPattern))
             
