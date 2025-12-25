@@ -2123,20 +2123,27 @@ class BackgroundRemoverGUI(QMainWindow):
             
             stroke_mask = Image.fromarray(stroke_mask_np, mode="L")
 
-            self.add_undo_step()
+            # Check preference for paint target
+            edits_working_directly = self.settings.value("paint_edits_working_mask", True, type=bool)
 
-            # Previously the app modified self.model_output_mask and used self.show_mask_overlay()
-            # 
-            # Changed to immediate editing of output image because can't think of a reason to
-            # paintbrush the model output mask, which is added/sub anyway
-            # When alpha matting, we can edit the trimap so editing the initial mask with paint 
-            # probably limited benefit
-            if self.is_erasing:
-                # Right Click: Remove from composite
-                self.working_mask = ImageChops.subtract(self.working_mask, stroke_mask)
+            if edits_working_directly:
+                self.add_undo_step()
+                if self.is_erasing:
+                    # Right Click: Remove from composite
+                    self.working_mask = ImageChops.subtract(self.working_mask, stroke_mask)
+                else:
+                    # Left Click: Add to composite (Paint from original image)
+                    self.working_mask = ImageChops.add(self.working_mask, stroke_mask)
+                
+                self.update_output_preview()
             else:
-                # Left Click: Add to composite (Paint from original image)
-                self.working_mask = ImageChops.add(self.working_mask, stroke_mask)
+                # Legacy behaviour: Edit the model output mask (blue overlay)
+                # This requires user to click 'Add' or 'Subtract' to commit to composite
+                if self.is_erasing:
+                    self.model_output_mask = ImageChops.subtract(self.model_output_mask, stroke_mask)
+                else:
+                    self.model_output_mask = ImageChops.add(self.model_output_mask, stroke_mask)
+                self.show_mask_overlay()
             
             self.update_output_preview()
             
