@@ -380,16 +380,11 @@ class BackgroundRemoverGUI(QMainWindow):
 
         self.btn_download = QPushButton("Download AI Models 📥")
         self.btn_download.setToolTip("Download Models...")
-        #self.btn_download.setFixedSize(120, 32)
         self.btn_download.clicked.connect(self.open_settings)
-        #h_models_header.addWidget(self.btn_download)
         layout.addWidget(self.btn_download)
         
-        # Add vertical space after the button
-        layout.addItem(QSpacerItem(20, 10, QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed))
-        #spacer = QWidget()
-        #spacer.setFixedHeight(10)
-        #layout.addWidget(spacer)
+        layout.addSpacing(20)
+
         
         lbl_sam = QLabel("<b>INTERACTIVE (SAM)<b>")
         lbl_sam.setToolTip("<b>Segment Anything Models</b><br>"
@@ -597,6 +592,11 @@ class BackgroundRemoverGUI(QMainWindow):
         matting_label.setToolTip(matting_tt)
         am_layout.addWidget(matting_label)
 
+        btn_refine_download = QPushButton("Download AI Models 📥")
+        btn_refine_download.setToolTip("Download Refinement Models. VitMatte Small is recommended")
+        btn_refine_download.clicked.connect(self.open_settings)
+        am_layout.addWidget(btn_refine_download)
+
         self.combo_matting_algorithm = QComboBox()
         self.combo_matting_algorithm.setToolTip(matting_tt)
         self.populate_matting_models()
@@ -679,9 +679,6 @@ class BackgroundRemoverGUI(QMainWindow):
         container = QWidget()
         layout = QVBoxLayout(container)
 
-        
-
-
 
         lbl_options = QLabel("<b>OUTPUT STYLING</b>")
         layout.addWidget(lbl_options)
@@ -748,13 +745,53 @@ class BackgroundRemoverGUI(QMainWindow):
 
         #layout.addStretch()
 
+        layout.addSpacing(20)
+        layout.addWidget(QLabel("<b>EXPORT SETTINGS</b>"))
+
+        # Format Combo
+        fmt_layout = QHBoxLayout()
+        fmt_layout.addWidget(QLabel("Format:"))
+        self.combo_export_fmt = QComboBox()
+        # Mapping display name to internal format keys
+        self.combo_export_fmt.addItem("PNG (Lossless)", "png")
+        self.combo_export_fmt.addItem("WebP (Lossless)", "webp_lossless")
+        self.combo_export_fmt.addItem("WebP (Lossy)", "webp_lossy")
+        self.combo_export_fmt.addItem("JPEG (No Transparency)", "jpeg")
+        self.combo_export_fmt.currentIndexChanged.connect(self.toggle_export_quality_visibility)
+        fmt_layout.addWidget(self.combo_export_fmt)
+        layout.addLayout(fmt_layout)
+
+        # Quality Slider
+        self.export_quality_frame = QFrame()
+        q_layout = QVBoxLayout(self.export_quality_frame)
+        q_layout.setContentsMargins(0, 5, 0, 5)
+        self.lbl_export_quality = QLabel("Quality: 90")
+        self.sl_export_quality = QSlider(Qt.Orientation.Horizontal)
+        self.sl_export_quality.setRange(1, 100)
+        self.sl_export_quality.setValue(90)
+        self.sl_export_quality.valueChanged.connect(lambda v: self.lbl_export_quality.setText(f"Quality: {v}"))
+        q_layout.addWidget(self.lbl_export_quality)
+        q_layout.addWidget(self.sl_export_quality)
+        layout.addWidget(self.export_quality_frame)
+
+        # Checkboxes
+        self.chk_export_mask = QCheckBox("Save Mask (appends _mask.png)")
+        layout.addWidget(self.chk_export_mask)
+
+        self.chk_export_trim = QCheckBox("Trim Transparent Pixels (Auto-Crop)")
+        layout.addWidget(self.chk_export_trim)
+
+        # Initialize visibility
+        self.toggle_export_quality_visibility()
+
+
 
         layout.addSpacing(40)
-        btn_qsave = QPushButton("Quick Save (JPG, White BG)"); btn_qsave.clicked.connect(self.quick_save_jpeg)
+        btn_qsave = QPushButton("Quick Save (JPG, White BG)"); btn_qsave.clicked.connect(lambda: self.save_image(quick_save=True))
         layout.addWidget(btn_qsave)
         btn_save = QPushButton("Export Final Image"); btn_save.clicked.connect(self.save_image)
         layout.addWidget(btn_save)
-        btn_save_clp = QPushButton("Save to Clipboard"); btn_save_clp.clicked.connect(self.save_image_clipboard)
+        btn_save_clp = QPushButton("Save to Clipboard"); btn_save_clp.clicked.connect(lambda: self.save_image(clipboard=True))
         layout.addWidget(btn_save_clp)
 
         
@@ -763,6 +800,12 @@ class BackgroundRemoverGUI(QMainWindow):
         scroll.setWidget(container)
         return scroll
     
+    def toggle_export_quality_visibility(self):
+        """Enables or disables the quality slider based on the selected file format."""
+        fmt = self.combo_export_fmt.currentData()
+        is_lossy = fmt in ["webp_lossy", "jpeg"]
+        self.export_quality_frame.setEnabled(is_lossy)
+
 
 
     def create_commit_widget(self):
@@ -1267,7 +1310,7 @@ class BackgroundRemoverGUI(QMainWindow):
         QShortcut(QKeySequence("Ctrl+O"), self).activated.connect(self.load_image_dialog)
         QShortcut(QKeySequence("P"), self).activated.connect(self.chk_paint.toggle)
         QShortcut(QKeySequence("Ctrl+S"), self).activated.connect(self.save_image)
-        QShortcut(QKeySequence("Ctrl+Shift+S"), self).activated.connect(self.quick_save_jpeg) # Quick Save JPG
+        QShortcut(QKeySequence("Ctrl+Shift+S"), self).activated.connect(lambda: self.save_image(quick_save=True)) # Quick Save JPG
         
         QShortcut(QKeySequence("U"), self).activated.connect(lambda: self.run_automatic_model("u2net"))
         QShortcut(QKeySequence("I"), self).activated.connect(lambda: self.run_automatic_model("isnet-general-use"))
@@ -1320,7 +1363,7 @@ class BackgroundRemoverGUI(QMainWindow):
         except Exception as e: QMessageBox.critical(self, "Error", str(e))
 
     def load_associated_mask(self, image_path):
-        mask_path = os.path.splitext(image_path)[0] + "_mask.png"
+        mask_path = os.path.splitext(image_path)[0] + "_nobg_mask.png"
         if os.path.exists(mask_path):
             try:
                 mask = Image.open(mask_path).convert("L")
@@ -2133,6 +2176,9 @@ class BackgroundRemoverGUI(QMainWindow):
         else:
             final = Image.new("RGBA", self.original_image.size, bg_txt.lower())
             final.alpha_composite(cutout)
+        
+        self.last_render = final.copy()
+        
         return final
 
     def update_output_preview(self):
@@ -2334,64 +2380,47 @@ class BackgroundRemoverGUI(QMainWindow):
                     self.update_input_view()
                     self.update_output_preview()
 
-    def quick_save_jpeg(self):
-        if not self.original_image or not self.image_paths: return
-        orig_path = self.image_paths[0] if self.image_paths[0] != "Clipboard" else "clipboard.png"
-        path = os.path.splitext(orig_path)[0] + "_nobg.jpg"
-
-        path = self._sanitise_filename_for_windows(path)
-
-        fname, _ = QFileDialog.getSaveFileName(self, "Quick Save", path, "JPG (*.jpg)")
-        if fname:
-
-            fname = self._sanitise_filename_for_windows(fname)
-
-            if not fname.lower().endswith(".jpg"): fname += ".jpg"
-            empty = Image.new("RGBA", self.original_image.size, 0)
-            cutout = Image.composite(self.original_image, empty, self.working_mask)
-            final = Image.new("RGB", self.original_image.size, "white")
-            final.paste(cutout, (0,0), cutout)
-        
-            save_params = {'quality': 95}
-            if self.image_exif: save_params['exif'] = self.image_exif
-        
-            final.save(fname, **save_params)
-            self.status_label.setText(f"Quick saved to {fname}")
-
-
-    def save_image(self):
+    def save_image(self, quick_save=False, clipboard = False):
         if not self.image_paths: return
         
-        dlg = SaveOptionsDialog(self)
-        if not dlg.exec(): return
-        data = dlg.get_data()
+        fmt = self.combo_export_fmt.currentData()
+        quality = self.sl_export_quality.value()
+        save_mask = self.chk_export_mask.isChecked()
+        trim = self.chk_export_trim.isChecked()
         
-        fmt = data['format']
         ext_map = {"png": "png", "webp_lossless": "webp", "webp_lossy": "webp", "jpeg": "jpg"}
         default_ext = ext_map[fmt]
         
-        initial_name = os.path.splitext(self.image_paths[0])[0] + "_nobg." + default_ext
+        if quick_save:
+            default_ext= "jpg"
+            quality = 95
+            fmt = "jpeg"
 
-        initial_name = self._sanitise_filename_for_windows(initial_name)
+        if not clipboard:
+            initial_name = os.path.splitext(self.image_paths[0])[0] + "_nobg." + default_ext
+            initial_name = self._sanitise_filename_for_windows(initial_name)
 
-        fname, _ = QFileDialog.getSaveFileName(self, "Save Image", initial_name, f"{default_ext.upper()} (*.{default_ext})")
-        if not fname: return
+            fname, _ = QFileDialog.getSaveFileName(self, "Export Image", initial_name, f"{default_ext.upper()} (*.{default_ext})")
+            if not fname: return
 
-        fname = self._sanitise_filename_for_windows(fname)
-        
-        if not fname.lower().endswith(f".{default_ext}"): fname += f".{default_ext}"
+            fname = self._sanitise_filename_for_windows(fname)
+            
+            if not fname.lower().endswith(f".{default_ext}"): fname += f".{default_ext}"
 
-
-        final_image = self.render_output_image()
+        self.set_loading(True, "Exporting...")
+        # use cached generated image for speed
+        final_image = self.last_render
 
         # Zero out RGB data in transparent areas for export.
+        # Do this now instead of in render_output_image to speed up display time
         # This prevents "ghost backgrounds" when re-loading the file.
+        # These ghost backgrounds can however make some interesting unexpected backgrounds!
         clean_canvas = Image.new("RGBA", final_image.size, (0, 0, 0, 0))
         clean_canvas.paste(final_image, (0, 0), final_image)
         final_image = clean_canvas
 
         # If trimming is enabled, calculate the crop box and apply it.
-        if data.get('trim', False):
+        if trim:
             bbox = self.working_mask.getbbox()
             if bbox:
                 min_x, min_y, max_x, max_y = bbox
@@ -2424,6 +2453,11 @@ class BackgroundRemoverGUI(QMainWindow):
                     final_image = final_image.crop((final_min_x, final_min_y, final_max_x, final_max_y))
                 # Else: no change, keep the empty image (which is what render_output_image returns if mask is empty)
 
+        if clipboard:
+            self.save_image_clipboard(final_image)
+            self.set_loading(False,"Saved to Clipboard")
+            return
+
         if fmt == "jpeg":
             background = Image.new("RGB", final_image.size, (255, 255, 255))
             # Ensure the image has an alpha channel to use as a mask
@@ -2434,31 +2468,26 @@ class BackgroundRemoverGUI(QMainWindow):
         
         save_params = {}
         if self.image_exif: save_params['exif'] = self.image_exif
-        if fmt == "jpeg": save_params['quality'] = data['quality']
-        elif fmt == "webp_lossy": save_params['quality'] = data['quality']
+        if fmt == "jpeg": save_params['quality'] = quality
+        elif fmt == "webp_lossy": save_params['quality'] = quality
         elif fmt == "webp_lossless": save_params['lossless'] = True
         elif fmt == "png": save_params['optimize'] = True
 
         try:
             final_image.save(fname, **save_params)
-            self.status_label.setText(f"Saved to {fname}")
+            lbl = f"Saved to {fname}"
         except Exception as e:
             QMessageBox.critical(self, "Save Error", str(e))
             
-        if data['save_mask']:
+        if save_mask:
             mname = os.path.splitext(fname)[0] + "_mask.png"
             self.working_mask.save(mname)
-            self.status_label.setText(f"Saved to {os.path.basename(fname)} and {os.path.basename(mname)}")
+            lbl = f"Saved to {os.path.basename(fname)} and {os.path.basename(mname)}"
 
-    def save_image_clipboard(self):
+        self.set_loading(False,lbl)
+
+    def save_image_clipboard(self, final_image):
         if not self.image_paths: return
-
-        final_image = self.render_output_image()
-        # Zero out RGB data in transparent areas for export.
-        # This prevents "ghost backgrounds" when re-loading the file.
-        clean_canvas = Image.new("RGBA", final_image.size, (0, 0, 0, 0))
-        clean_canvas.paste(final_image, (0, 0), final_image)
-        final_image = clean_canvas
 
         data = final_image.tobytes("raw", "RGBA")
         size = final_image.width * final_image.height * 4

@@ -12,7 +12,8 @@ import numpy as np
 from src.utils import sigmoid, pil2pixmap
 
 
-
+# not used now changed to tabbed UI
+# keeping for now incase required
 class SaveOptionsDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
