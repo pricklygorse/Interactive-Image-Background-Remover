@@ -251,8 +251,17 @@ class BackgroundRemoverGUI(QMainWindow):
             }
         """)
         
+        # the output image
         self.output_pixmap_item = QGraphicsPixmapItem()
         self.scene_output.addItem(self.output_pixmap_item)
+
+        # overlay when "trim transparent pixels" is selected
+        self.output_crop_overlay = QGraphicsPathItem()
+        self.output_crop_overlay.setBrush(QBrush(QColor(0, 0, 0, 160))) # Semi-transparent black
+        self.output_crop_overlay.setPen(QPen(QColor(255, 255, 255, 200), 1, Qt.PenStyle.DashLine)) # Thin dashed white border
+        self.output_crop_overlay.setZValue(1000) # Ensure it is above the image
+        self.output_crop_overlay.hide()
+        self.scene_output.addItem(self.output_crop_overlay)
 
         self.in_out_splitter.addWidget(self.view_output)
 
@@ -550,8 +559,13 @@ class BackgroundRemoverGUI(QMainWindow):
         container = QWidget()
         layout = QVBoxLayout(container)
 
+        lbl_desc = QLabel("Modifiers applied to the AI model's mask when adding or subtracting to the output image.")
+        lbl_desc.setWordWrap(True)
+        layout.addWidget(lbl_desc)
 
-        lbl_modifiers = QLabel("<b>MODEL OUTPUT MASK MODIFIERS</b>")
+        layout.addSpacing(20)
+
+        lbl_modifiers = QLabel("<b>Basic Modifers</b>")
         lbl_modifiers.setContentsMargins(3, 0, 0, 0)
         layout.addWidget(lbl_modifiers)
 
@@ -779,6 +793,8 @@ class BackgroundRemoverGUI(QMainWindow):
         layout.addWidget(self.chk_export_mask)
 
         self.chk_export_trim = QCheckBox("Trim Transparent Pixels (Auto-Crop)")
+        self.chk_export_trim.toggled.connect(self.update_output_preview)
+        self.chk_export_trim.setToolTip("If exporting the global mask with the image, the mask is <b>not<b> trimmed. This is to allow you to return to editing the original image.")
         layout.addWidget(self.chk_export_trim)
 
         # Initialize visibility
@@ -2191,6 +2207,31 @@ class BackgroundRemoverGUI(QMainWindow):
         self.output_pixmap_item.setPixmap(pil2pixmap(final))
         self.view_output.setSceneRect(self.view_input.sceneRect())
 
+        # Update the Auto-Trim visual overlay
+        if self.chk_export_trim.isChecked() and not self.chk_show_mask.isChecked():
+            bbox = self.get_current_crop_bbox()
+            if bbox:
+                # Create a path for the whole scene
+                full_rect = self.output_pixmap_item.boundingRect()
+                path = QPainterPath()
+                path.addRect(full_rect)
+                
+                # Create the "hole" for the crop area
+                crop_rect = QRectF(bbox[0], bbox[1], bbox[2] - bbox[0], bbox[3] - bbox[1])
+                
+                # Subtracting the crop_rect from the full_rect path creates the dimmed border effect
+                # We use the 'subtracted' method to ensure a clean cutout
+                hole_path = QPainterPath()
+                hole_path.addRect(crop_rect)
+                
+                final_path = path.subtracted(hole_path)
+                self.output_crop_overlay.setPath(final_path)
+                self.output_crop_overlay.show()
+            else:
+                self.output_crop_overlay.hide()
+        else:
+            self.output_crop_overlay.hide()
+
     def reset_all(self):
         self.clear_overlay()
 
@@ -2380,6 +2421,49 @@ class BackgroundRemoverGUI(QMainWindow):
                     self.update_input_view()
                     self.update_output_preview()
 
+    def get_current_crop_bbox(self):
+        """
+        Calculates the bounding box of the current mask, including shadows if enabled.
+        Returns (min_x, min_y, max_x, max_y) or None if the mask is empty.
+        """
+        if not self.working_mask:
+            return None
+            
+        bbox = self.working_mask.getbbox()
+        if not bbox:
+            return None
+            
+        min_x, min_y, max_x, max_y = bbox
+        
+        if self.chk_shadow.isChecked():
+            shadow_off_x = self.sl_s_x.value()
+            shadow_off_y = self.sl_s_y.value()
+            s_rad = self.sl_s_r.value()
+            
+            # Expand bounding box to include the shadow and its blur radius
+            s_min_x = min_x + shadow_off_x - s_rad
+            s_min_y = min_y + shadow_off_y - s_rad
+            s_max_x = max_x + shadow_off_x + s_rad
+            s_max_y = max_y + shadow_off_y + s_rad
+            
+            min_x = min(min_x, s_min_x)
+            min_y = min(min_y, s_min_y)
+            max_x = max(max_x, s_max_x)
+            max_y = max(max_y, s_max_y)
+
+        # Clamp to image boundaries
+        orig_w, orig_h = self.working_mask.size
+        final_min_x = max(0, int(min_x))
+        final_min_y = max(0, int(min_y))
+        final_max_x = min(orig_w, int(max_x))
+        final_max_y = min(orig_h, int(max_y))
+        
+        if final_max_x <= final_min_x or final_max_y <= final_min_y:
+            return None
+            
+        return (final_min_x, final_min_y, final_max_x, final_max_y)
+
+
     def save_image(self, quick_save=False, clipboard = False):
         if not self.image_paths: return
         
@@ -2421,37 +2505,9 @@ class BackgroundRemoverGUI(QMainWindow):
 
         # If trimming is enabled, calculate the crop box and apply it.
         if trim:
-            bbox = self.working_mask.getbbox()
+            bbox = self.get_current_crop_bbox()
             if bbox:
-                min_x, min_y, max_x, max_y = bbox
-                
-                # Expand bounding box to include shadow if enabled
-                if self.chk_shadow.isChecked():
-                    shadow_off_x, shadow_off_y = self.sl_s_x.value(), self.sl_s_y.value()
-                    s_rad = self.sl_s_r.value()
-                    s_min_x = min_x + shadow_off_x - s_rad
-                    s_min_y = min_y + shadow_off_y - s_rad
-                    s_max_x = max_x + shadow_off_x + s_rad
-                    s_max_y = max_y + shadow_off_y + s_rad
-                    
-                    min_x = min(min_x, s_min_x)
-                    min_y = min(min_y, s_min_y)
-                    max_x = max(max_x, s_max_x)
-                    max_y = max(max_y, s_max_y)
-
-                # Crop the fully rendered image to the calculated bounding box
-                # Clamp the calculated coordinates to the image boundaries
-                orig_w, orig_h = final_image.size
-                
-                final_min_x = max(0, int(min_x))
-                final_min_y = max(0, int(min_y))
-                final_max_x = min(orig_w, int(max_x))
-                final_max_y = min(orig_h, int(max_y))
-                # Check for empty crop after clamping (e.g., if shadow only extends outside)
-                if final_max_x > final_min_x and final_max_y > final_min_y:
-                    # Apply the crop to the fully rendered image
-                    final_image = final_image.crop((final_min_x, final_min_y, final_max_x, final_max_y))
-                # Else: no change, keep the empty image (which is what render_output_image returns if mask is empty)
+                final_image = final_image.crop(bbox)
 
         if clipboard:
             self.save_image_clipboard(final_image)
