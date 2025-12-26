@@ -20,10 +20,10 @@ from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QH
                              QSlider, QFrame, QSplitter, QDialog, QScrollArea, 
                              QGraphicsRectItem, QGraphicsEllipseItem, QGraphicsPathItem, 
                              QTextEdit, QSizePolicy, QRadioButton, QButtonGroup, QInputDialog, 
-                             QProgressBar, QStyle, QToolBar)
+                             QProgressBar, QStyle, QToolBar, QTabWidget, QSpacerItem)
 from PyQt6.QtCore import Qt, QTimer, QPointF, QRectF, QSettings, QPropertyAnimation, QEasingCurve, QThread, pyqtSignal, QEvent
 from PyQt6.QtGui import (QPixmap, QImage, QColor, QPainter, QPainterPath, QPen, QBrush,
-                         QKeySequence, QShortcut, QCursor, QIcon, QPalette, QAction)
+                         QKeySequence, QShortcut, QCursor, QIcon, QPalette, QAction, QGuiApplication)
 
 from PIL import Image, ImageOps, ImageDraw, ImageEnhance, ImageGrab, ImageFilter, ImageChops
 import onnxruntime as ort
@@ -180,33 +180,272 @@ class BackgroundRemoverGUI(QMainWindow):
 
     def init_ui(self):
         self.setAcceptDrops(True)
-        main = QWidget(); self.setCentralWidget(main)
-        layout = QHBoxLayout(main)
-        # remove gap above status bar
-        layout.setContentsMargins(6, 6, 6, 0) 
-        layout.setSpacing(6)
-
+        main = QWidget()
+        self.setCentralWidget(main)
+        main_layout = QHBoxLayout(main)
+        main_layout.setContentsMargins(0, 0, 0, 0)
+        main_layout.setSpacing(0)
+        
+        # Toolbar
         self.create_global_toolbar()
 
-        # --- Sidebar ---
-        sidebar_container = QFrame()
-        sidebar_container.setFixedWidth(320)
-        sidebar_layout = QVBoxLayout(sidebar_container)
-        sidebar_layout.setContentsMargins(0, 0, 0, 0)
+        # Sidebar
+        self.sidebar_container = QWidget()
+        self.sidebar_container.setFixedWidth(350)
+        sidebar_layout = QVBoxLayout(self.sidebar_container)
+        sidebar_layout.setContentsMargins(5, 5, 5, 5)
 
-        scroll_area = QScrollArea()
-        scroll_area.setWidgetResizable(True)
-        scroll_area.setFrameShape(QFrame.Shape.NoFrame)
-        scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.tabs = QTabWidget()
+
+        self.tabs.addTab(self.create_ai_mask_tab(), "Mask Gen.")
+        self.tabs.addTab(self.create_refine_tab(), "Refine")
+        self.tabs.addTab(self.create_export_tab(), "Export")
+
+        sidebar_layout.addWidget(self.tabs)
+
+        sidebar_layout.addWidget(self.create_commit_widget())
+
+             
+        # Input/Output Views
+
+        # Custom splitter with orientation toggle on the divider
+        self.in_out_splitter = OrientationSplitter(Qt.Orientation.Horizontal)
+        self.in_out_splitter.setChildrenCollapsible(False)
+
+        # Input view
+        self.scene_input = QGraphicsScene()
+        self.view_input = SynchronisedGraphicsView(self.scene_input, name="Input View") 
+        self.view_input.set_controller(self)
+        self.view_input.setAcceptDrops(True)
+
+        self.input_pixmap_item = QGraphicsPixmapItem()
+        self.scene_input.addItem(self.input_pixmap_item)
         
-        scroll_widget = QWidget()
-        controls_layout = QVBoxLayout(scroll_widget) # Main layout for controls
-        scroll_widget.setFixedWidth(sidebar_container.width()-8) # Constrain content width. -8 so scrollbar doesnt overlap buttons
-        scroll_area.setWidget(scroll_widget)
-        sidebar_layout.addWidget(scroll_area)
+        self.overlay_pixmap_item = QGraphicsPixmapItem()
+        self.overlay_pixmap_item.setOpacity(0.5)
+        self.scene_input.addItem(self.overlay_pixmap_item)
+        
+        self.trimap_overlay_item = QGraphicsPixmapItem()
+        self.trimap_overlay_item.setOpacity(0.7)
+        self.scene_input.addItem(self.trimap_overlay_item)
 
-        # --- Hardware Acceleration Dropdown ---
+        self.in_out_splitter.addWidget(self.view_input)
+
+
+        # Output View
+        self.scene_output = QGraphicsScene()
+        self.view_output = SynchronisedGraphicsView(self.scene_output, name="Output View")
+        self.view_output.set_controller(self) 
+        self.view_output.setAcceptDrops(True)
+        
+
+        self.chk_show_mask = QCheckBox("Show Global Mask", self.view_output)
+        self.chk_show_mask.toggled.connect(self.update_output_preview)
+        self.chk_show_mask.move(10, 10)
+        self.chk_show_mask.setStyleSheet("""
+            QCheckBox {
+                background-color: rgba(120, 120, 120, 120);
+                color: white;
+                padding: 4px;
+                border-radius: 4px;
+            }
+        """)
+        
+        self.output_pixmap_item = QGraphicsPixmapItem()
+        self.scene_output.addItem(self.output_pixmap_item)
+
+        self.in_out_splitter.addWidget(self.view_output)
+
+        self.in_out_splitter.toggle_button.clicked.connect(self.toggle_splitter_orientation)
+
+        self.view_input.set_sibling(self.view_output)
+        self.view_output.set_sibling(self.view_input)
+
+        # status bar help messages on view mouseover
+        self.view_input.viewport().installEventFilter(self)
+        self.view_output.viewport().installEventFilter(self)
+
+        # Holds the views (top) and the thumbnails (bottom)
+        views_thumbs_widget = QWidget()
+        views_thumbs_layout = QVBoxLayout(views_thumbs_widget)
+        views_thumbs_layout.setContentsMargins(0, 0, 0, 0)
+        views_thumbs_layout.setSpacing(2) # Can add small gap between views and thumbnails
+
+        # Initialise the thumbnail strip
+        self.thumbnail_strip = ThumbnailList()
+        self.thumbnail_strip.itemClicked.connect(self.on_thumbnail_clicked)
+
+        # Add the splitter to the top, thumbnails to the bottom
+        views_thumbs_layout.addWidget(self.in_out_splitter, 1) # '1' ensures views take most space
+        views_thumbs_layout.addWidget(self.thumbnail_strip)
+
+        # Assemble sidebar + views
+        main_layout.addWidget(self.sidebar_container)
+        main_layout.addWidget(views_thumbs_widget, 1) # Add the container instead of the splitter
+
+        # status bar 
+        self.status_label = QLabel("Ready")
+        self.zoom_label = QLabel("Zoom: 100%")
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setRange(0, 0)  # Sets "Indeterminate" (bouncing) mode
+        self.progress_bar.setTextVisible(False)
+        self.progress_bar.setFixedWidth(200)
+        self.progress_bar.hide()
+
+        self.statusBar().addWidget(self.status_label)
+        self.statusBar().addPermanentWidget(self.progress_bar) # Add to right side
+        self.statusBar().addPermanentWidget(self.zoom_label)
+
+        self.view_input.set_placeholder(
+            "<b>Input</b><br><br>"
+            "Generated masks from AI models will be displayed here.<br>"
+            "Models are run on the viewport. Zoom in/pan the image to focus<br>"
+            "on your subject or work on smaller areas in detail."
+        )
+        self.view_output.set_placeholder(
+            "<b>Output</b><br><br>"
+            "Use generated masks to build up an output image."
+        )
+        
+        self.toggle_splitter_orientation(initial_setup=True)
+    
+    def create_global_toolbar(self):
+        toolbar = QToolBar("Session Control")
+        toolbar.setMovable(False)
+        toolbar.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        self.addToolBar(toolbar)
+
+        open_img_act = QAction("Open Image(s)", self)
+        open_img_act.setToolTip("Open Image(s)")
+        open_img_act.triggered.connect(self.load_image_dialog)
+        toolbar.addAction(open_img_act)
+        open_clip_act = QAction("Open Clipboard", self)
+        open_clip_act.setToolTip("Open Clipboard")
+        open_clip_act.triggered.connect(self.load_clipboard)
+        toolbar.addAction(open_clip_act)
+        toolbar.addSeparator()
+        edit_image_act = QAction("Edit Image (Curves/WB)", self)
+        edit_image_act.triggered.connect(self.open_image_editor)
+        toolbar.addAction(edit_image_act)
+        
+        toolbar.addSeparator()
+
+        load_mask_act = QAction("Import Saved Mask", self)
+        load_mask_act.setToolTip("Import an existing .png mask into the global working composite")
+        toolbar.addAction(load_mask_act)
+        load_mask_act.triggered.connect(self.load_mask_dialog)
+
+        toolbar.addSeparator()
+        undo_act = QAction("↶", self)
+        undo_act.setToolTip("Undo")
+        undo_act.triggered.connect(self.undo)
+        toolbar.addAction(undo_act)
+
+        redo_act = QAction("↷", self)
+        redo_act.setToolTip("Redo")
+        redo_act.triggered.connect(self.redo)
+        toolbar.addAction(redo_act)
+
+        toolbar.addSeparator()
+
+        # Global Toggle
+        self.chk_paint = QCheckBox("Paintbrush (P)")
+
+        toolbar.addWidget(self.chk_paint)
+        self.chk_paint.toggled.connect(self.toggle_paint_mode)
+        spacer = QWidget()
+        spacer.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        toolbar.addWidget(spacer)
+        
+        toolbar.addSeparator()
+
+        toolbar.addAction("Settings ⚙️").triggered.connect(self.open_settings)
+
+        toolbar.addAction("Help/About").triggered.connect(self.show_help)
+
+    def create_ai_mask_tab(self):
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        container = QWidget()
+        layout = QVBoxLayout(container)
+
+
+        # Mask generation model selection
+
+        h_models_header = QHBoxLayout()
+        lbl_models = QLabel("")
+        lbl_models.setContentsMargins(3, 0, 0, 0)
+        h_models_header.addWidget(lbl_models)
+        h_models_header.addStretch()
+
+        self.btn_download = QPushButton("Download AI Models 📥")
+        self.btn_download.setToolTip("Download Models...")
+        #self.btn_download.setFixedSize(120, 32)
+        self.btn_download.clicked.connect(self.open_settings)
+        #h_models_header.addWidget(self.btn_download)
+        layout.addWidget(self.btn_download)
+        
+        # Add vertical space after the button
+        layout.addItem(QSpacerItem(20, 10, QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed))
+        #spacer = QWidget()
+        #spacer.setFixedHeight(10)
+        #layout.addWidget(spacer)
+        
+        lbl_sam = QLabel("<b>INTERACTIVE (SAM)<b>")
+        lbl_sam.setToolTip("<b>Segment Anything Models</b><br>"
+                           "These require you to interact with the image.<br>"
+                           "<i>Usage: Left-click to add points, right-click to add negative (avoid) points, or drag to draw boxes around the subject.</i><br><br>"
+                           "Disc drive icons show models that have saved optimised versions cached.")
+        layout.addWidget(lbl_sam)
+        lbl_sam_desc = QLabel("Point and click models that let you choose parts of the image to add/subtract")
+        lbl_sam_desc.setWordWrap(True)
+        layout.addWidget(lbl_sam_desc)
+
+        self.combo_sam = QComboBox()
+        self.combo_sam.setToolTip(lbl_sam.toolTip())
+        self.populate_sam_models()
+        self.combo_sam.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+        self.combo_sam.setMinimumContentsLength(1) 
+        layout.addWidget(self.combo_sam)
+
+        # Add vertical space after the SAM elements
+        layout.addItem(QSpacerItem(20, 10, QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed))
+
+
+        lbl_auto = QLabel("<b>AUTOMATIC (WHOLE IMAGE)<b>")
+        lbl_auto.setToolTip("<b>Automatic Models</b><br>"
+                             "These run automatically on the entire image.<br>"
+                             "<i>Usage: Select a model and click 'Run Automatic'. No points needed.</i><br><br>"
+                             "Disc drive icons show models that have saved optimised versions cached.")
+        layout.addWidget(lbl_auto)
+        lbl_auto_desc = QLabel("Models that perform their best guess bg removal for the image.")
+        lbl_auto_desc.setWordWrap(True)
+        layout.addWidget(lbl_auto_desc)
+
+        # Whole Image Combo
+        self.combo_whole = QComboBox()
+        self.combo_whole.setToolTip(lbl_auto.toolTip()) # Reuse the tooltip
+        self.populate_whole_models()
+        self.combo_whole.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+        self.combo_whole.setMinimumContentsLength(1)
+        layout.addWidget(self.combo_whole)
+        
+        # Run Model Button and layout adjustment
+        h_whole_model = QHBoxLayout()
+        self.btn_whole = QPushButton("Run Model (M)"); self.btn_whole.clicked.connect(lambda: self.run_automatic_model())
+        h_whole_model.addWidget(self.combo_whole)
+        h_whole_model.addWidget(self.btn_whole)
+        layout.addLayout(h_whole_model)
+
+        layout.addSpacing(20)
+
+
+        btn_clr = QPushButton("Clear SAM Clicks/ Model Masks (C)"); btn_clr.clicked.connect(self.clear_overlay)
+        layout.addWidget(btn_clr)
+
+        layout.addSpacing(20)
+
+        # Hardware Acceleration
         self.available_eps = ModelManager.get_available_ep_options()
         
         self.hw_options_frame = CollapsibleFrame("Hardware Acceleration Options", 
@@ -293,7 +532,7 @@ class BackgroundRemoverGUI(QMainWindow):
         self.auto_cache_group.buttonToggled.connect(self.on_auto_cache_changed)
 
         # Add all to layout
-        controls_layout.addWidget(self.hw_options_frame)
+        layout.addWidget(self.hw_options_frame)
         last_auto_cache_mode = self.settings.value("auto_ram_cache_mode", 1, type=int)
         self.auto_cache_group.blockSignals(True)
         self.auto_cache_group.button(last_auto_cache_mode).setChecked(True)
@@ -304,93 +543,49 @@ class BackgroundRemoverGUI(QMainWindow):
         self.trt_cache_option_visibility() # Initial check for TensorRT
 
         # End Hardware Acceleration
-       
-
-        # Mask generation model selection
-
-        h_models_header = QHBoxLayout()
-        lbl_models = QLabel("<b> Mask Generation:</b>")
-        lbl_models.setContentsMargins(3, 0, 0, 0)
-        h_models_header.addWidget(lbl_models)
-        h_models_header.addStretch()
-
-        self.btn_download = QPushButton("Download 📥")
-        self.btn_download.setToolTip("Download Models...")
-        self.btn_download.setFixedSize(120, 32)
-        self.btn_download.clicked.connect(self.open_settings)
-        h_models_header.addWidget(self.btn_download)
-        controls_layout.addLayout(h_models_header)
-        
-        lbl_sam = QLabel(" Interactive (SAM):")
-        lbl_sam.setToolTip("<b>Segment Anything Models</b><br>"
-                           "These require you to interact with the image.<br>"
-                           "<i>Usage: Left-click to add points, right-click to add negative (avoid) points, or drag to draw boxes around the subject.</i><br><br>"
-                           "Disc drive icons show models that have saved optimised versions cached.")
-        controls_layout.addWidget(lbl_sam)
-
-        self.combo_sam = QComboBox()
-        self.combo_sam.setToolTip(lbl_sam.toolTip())
-        self.populate_sam_models()
-        controls_layout.addWidget(self.combo_sam)
-        lbl_whole = QLabel(" Automatic (Whole Image):")
-        lbl_whole.setToolTip("<b>Automatic Models</b><br>"
-                             "These run automatically on the entire image.<br>"
-                             "<i>Usage: Select a model and click 'Run Automatic'. No points needed.</i><br><br>"
-                             "Disc drive icons show models that have saved optimised versions cached.")
-        controls_layout.addWidget(lbl_whole)
-
-        # Whole Image Combo
-        self.combo_whole = QComboBox()
-        self.combo_whole.setToolTip(lbl_whole.toolTip()) # Reuse the tooltip
-        self.populate_whole_models()
-        controls_layout.addWidget(self.combo_whole)
-        
-        # Run Model Button and layout adjustment
-        h_whole_model = QHBoxLayout()
-        self.btn_whole = QPushButton("Run Model"); self.btn_whole.clicked.connect(lambda: self.run_automatic_model())
-        h_whole_model.addWidget(self.combo_whole)
-        h_whole_model.addWidget(self.btn_whole)
-        controls_layout.addLayout(h_whole_model)
-
-        divider = QFrame()
-        divider.setFrameShape(QFrame.Shape.HLine)
-        divider.setFrameShadow(QFrame.Shadow.Sunken)
-        controls_layout.addWidget(divider)
-
-        h_clr_pnt = QHBoxLayout()
-        btn_clr = QPushButton("Clear Points/Masks"); btn_clr.clicked.connect(self.clear_overlay)
-        h_clr_pnt.addWidget(btn_clr)
-        controls_layout.addLayout(h_clr_pnt)
 
 
-        
+        layout.addStretch()
+        scroll.setWidget(container)
+        return scroll
+
+    def create_refine_tab(self):
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        container = QWidget()
+        layout = QVBoxLayout(container)
 
 
-        lbl_modifiers = QLabel("<b> Mask Modifiers:</b>")
+        lbl_modifiers = QLabel("<b>MODEL OUTPUT MASK MODIFIERS</b>")
         lbl_modifiers.setContentsMargins(3, 0, 0, 0)
-        controls_layout.addWidget(lbl_modifiers)
+        layout.addWidget(lbl_modifiers)
 
-        self.chk_post = QCheckBox("Binary Mask (no partial transparency)")
-        controls_layout.addWidget(self.chk_post)
+        self.chk_post = QCheckBox("Remove Mask Partial Transparency")
+        layout.addWidget(self.chk_post)
 
         self.chk_soften = QCheckBox("Soften Mask/Paintbrush Edges")
         soften_checked = self.settings.value("soften_mask", False, type=bool)
         self.chk_soften.setChecked(soften_checked)
         self.chk_soften.toggled.connect(lambda checked: self.settings.setValue("soften_mask", checked))
-        controls_layout.addWidget(self.chk_soften)
+        layout.addWidget(self.chk_soften)
         
-        self.chk_alpha_matting = QCheckBox("Alpha Matting (Slow, Experimental)")
-        self.chk_alpha_matting.setToolTip("Uses a matting algorithm to estimate the transparency of mask edges.\n"
-                                          "This can improve the quality of detailed edges such as hair, especially when using binary mask models like SAM.\n"
-                                          "This requires a trimap, either estimated from a SAM or automatic models, or manually drawn.\n"
-                                          "This is computationally expensive and is only applied when 'Add' or 'Subtract' is clicked. Undo if the effect is unsatisfactory")
-        controls_layout.addWidget(self.chk_alpha_matting)
+        layout.addSpacing(20)
 
-        self.chk_alpha_matting.toggled.connect(self.handle_alpha_matting_toggle)
-        controls_layout.addWidget(self.chk_alpha_matting)
 
+        matt_tt = "Uses a matting algorithm to estimate the transparency of mask edges.\n" + "This can improve the quality of detailed edges such as hair, especially when using binary mask models like SAM.\n" + "This requires a trimap (a foreground, unknown, background mask), either estimated from a SAM or automatic models, or manually drawn.\n" + "Alpha matting is computationally expensive and is only applied when 'Add' or 'Subtract' is clicked. Undo if the effect is unsatisfactory"
+        lbl_alpha = QLabel("<b>ALPHA MATTING</b>")
+        lbl_alpha.setToolTip(matt_tt)
+        layout.addWidget(lbl_alpha)
+        lbl_alpha_desc = QLabel("Uses specialised algorithms to refine difficult areas like hair and fur")
+        lbl_alpha_desc.setWordWrap(True)
+        lbl_alpha_desc.setToolTip(matt_tt)
+        layout.addWidget(lbl_alpha_desc)
+
+        self.chk_alpha_matting = QCheckBox("Enable Alpha Matting")
+        self.chk_alpha_matting.setToolTip(matt_tt)
         self.chk_alpha_matting.toggled.connect(self.handle_alpha_matting_toggle)
-        controls_layout.addWidget(self.chk_alpha_matting)
+        layout.addWidget(self.chk_alpha_matting)
+
 
         # --- Alpha Matting Options Frame ---
         self.alpha_matting_frame = QFrame()
@@ -405,10 +600,14 @@ class BackgroundRemoverGUI(QMainWindow):
         self.combo_matting_algorithm = QComboBox()
         self.combo_matting_algorithm.setToolTip(matting_tt)
         self.populate_matting_models()
+        self.combo_matting_algorithm.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+        self.combo_matting_algorithm.setMinimumContentsLength(1)
         am_layout.addWidget(self.combo_matting_algorithm)
 
         # --- Trimap Source Radio Buttons ---
-        am_layout.addWidget(QLabel("<b>Trimap Source:</b>"))
+        lbl_tri_src = QLabel("<b>Trimap Source:</b>")
+        lbl_tri_src.setToolTip("A trimap is a guidance mask that specifies what is definite foreground, definite background, and 'unknown/mixed' for the model to calculate")
+        am_layout.addWidget(lbl_tri_src)
         self.trimap_mode_group = QButtonGroup(self)
         self.rb_trimap_auto = QRadioButton("Automatic (from model mask + sliders)")
         self.rb_trimap_custom = QRadioButton("Custom (user-drawn)")
@@ -419,7 +618,6 @@ class BackgroundRemoverGUI(QMainWindow):
         self.rb_trimap_auto.setChecked(True)
 
         am_layout.addWidget(self.rb_trimap_auto)
-        am_layout.addWidget(self.rb_trimap_custom)
         
         self.trimap_mode_group.buttonToggled.connect(self.on_trimap_mode_changed)
         
@@ -449,6 +647,8 @@ class BackgroundRemoverGUI(QMainWindow):
         sliders_layout.addLayout(bg_layout)
 
         am_layout.addWidget(self.auto_trimap_sliders_widget)
+
+        am_layout.addWidget(self.rb_trimap_custom)
         
         self.btn_edit_trimap = QPushButton("Open Trimap Editor...")
         self.btn_edit_trimap.clicked.connect(self.open_trimap_editor)
@@ -462,49 +662,29 @@ class BackgroundRemoverGUI(QMainWindow):
         am_layout.addWidget(self.chk_show_trimap)
 
 
-        controls_layout.addWidget(self.alpha_matting_frame)
+        layout.addWidget(self.alpha_matting_frame)
         self.alpha_matting_frame.hide()
 
         # end alpha matting
 
 
 
-        lbl_actions = QLabel("<b> Output Image Actions:</b>")
-        lbl_actions.setContentsMargins(3, 0, 0, 0)
-        controls_layout.addWidget(lbl_actions)
-        h_act = QHBoxLayout()
-        btn_add = QPushButton("Add Mask (A)"); btn_add.clicked.connect(self.add_mask)
-        btn_add.setToolTip("Add the current model output mask to the composite output image." 
-                           "Mask refinement steps e.g. alpha matting are added at this step")
-        btn_sub = QPushButton("Sub Mask (S)"); btn_sub.clicked.connect(self.subtract_mask)
-        btn_sub.setToolTip("Subtract the current model output mask to the composite output image." 
-                           "Mask refinement steps e.g. alpha matting are added at this step")
-        h_act.addWidget(btn_add); h_act.addWidget(btn_sub)
-        controls_layout.addLayout(h_act)
-        
+        layout.addStretch()
+        scroll.setWidget(container)
+        return scroll
 
-        lbl_canvas = QLabel("<b> Canvas:</b>")
-        lbl_canvas.setContentsMargins(3, 0, 0, 0)
-        controls_layout.addWidget(lbl_canvas)
-
-
+    def create_export_tab(self):
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        container = QWidget()
+        layout = QVBoxLayout(container)
 
         
-        h_rs = QHBoxLayout()
-        btn_rst = QPushButton("Reset Img"); btn_rst.clicked.connect(self.reset_working_image)
-        btn_all = QPushButton("Reset All"); btn_all.clicked.connect(self.reset_all)
-        h_rs.addWidget(btn_rst); h_rs.addWidget(btn_all)
-        controls_layout.addLayout(h_rs)
-        
-        h_vs = QHBoxLayout()
-        btn_cp = QPushButton("Copy In->Out"); btn_cp.clicked.connect(self.copy_input_to_output)
-        btn_c_vis = QPushButton("Clear Viewport"); btn_c_vis.clicked.connect(self.clear_visible_area)
-        h_vs.addWidget(btn_cp); h_vs.addWidget(btn_c_vis) 
-        controls_layout.addLayout(h_vs)
 
-        lbl_options = QLabel("<b>Output Styling:</b>")
-        lbl_options.setContentsMargins(3, 0, 0, 0)
-        controls_layout.addWidget(lbl_options)
+
+
+        lbl_options = QLabel("<b>OUTPUT STYLING</b>")
+        layout.addWidget(lbl_options)
 
         bg_layout = QHBoxLayout()
         bg_label = QLabel("Background:")
@@ -516,19 +696,19 @@ class BackgroundRemoverGUI(QMainWindow):
                   "Lightgrey", "Brown", "Blurred (Slow)"])
         self.combo_bg_color.currentTextChanged.connect(self.handle_bg_change)
         bg_layout.addWidget(self.combo_bg_color)
-        controls_layout.addLayout(bg_layout)
+        layout.addLayout(bg_layout)
         
 
-        self.chk_estimate_foreground = QCheckBox("Mask Edge Colour Correction (Slow)")
+        self.chk_estimate_foreground = QCheckBox("Foreground Edge \nColour Correction (Slow)")
         self.chk_estimate_foreground.setToolTip("Recalculates edge colors to remove halos or fringes from the original background.\n"
                                                 "Recommended for soft edges such as hair")
-        controls_layout.addWidget(self.chk_estimate_foreground)
+        layout.addWidget(self.chk_estimate_foreground)
         self.chk_estimate_foreground.toggled.connect(self.update_output_preview)
 
 
         self.chk_shadow = QCheckBox("Drop Shadow")
         self.chk_shadow.toggled.connect(self.toggle_shadow_options)
-        controls_layout.addWidget(self.chk_shadow)
+        layout.addWidget(self.chk_shadow)
 
         self.shadow_frame = QFrame()
         sf_layout = QVBoxLayout(self.shadow_frame)
@@ -563,183 +743,74 @@ class BackgroundRemoverGUI(QMainWindow):
         sf_layout.addLayout(h_y_layout)
         sf_layout.addLayout(h_r_layout)
             
-        controls_layout.addWidget(self.shadow_frame)
+        layout.addWidget(self.shadow_frame)
         self.shadow_frame.hide()
 
-        controls_layout.addStretch()
-        btn_save = QPushButton("Save As..."); btn_save.clicked.connect(self.save_image)
-        controls_layout.addWidget(btn_save)
-        btn_qsave = QPushButton("Quick Save JPG"); btn_qsave.clicked.connect(self.quick_save_jpeg)
-        controls_layout.addWidget(btn_qsave)
-
-        bottom_buttons_layout = QHBoxLayout()
-
-        btn_help = QPushButton("Help / About"); btn_help.clicked.connect(self.show_help)
-        bottom_buttons_layout.addWidget(btn_help)
-
-        self.btn_settings = QPushButton("⚙️")
-        self.btn_settings.setToolTip("Settings / Model Manager")
-        self.btn_settings.clicked.connect(self.open_settings)
-        self.btn_settings.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Preferred)
-        bottom_buttons_layout.addWidget(self.btn_settings)
-        controls_layout.addLayout(bottom_buttons_layout)
-
-        # end Sidebar
+        #layout.addStretch()
 
 
-        self.in_out_splitter = OrientationSplitter(Qt.Orientation.Horizontal)
-        self.in_out_splitter.setChildrenCollapsible(False)
+        layout.addSpacing(40)
+        btn_qsave = QPushButton("Quick Save (JPG, White BG)"); btn_qsave.clicked.connect(self.quick_save_jpeg)
+        layout.addWidget(btn_qsave)
+        btn_save = QPushButton("Export Final Image"); btn_save.clicked.connect(self.save_image)
+        layout.addWidget(btn_save)
+        btn_save_clp = QPushButton("Save to Clipboard"); btn_save_clp.clicked.connect(self.save_image_clipboard)
+        layout.addWidget(btn_save_clp)
+
         
-        is_light_mode = QApplication.styleHints().colorScheme() != Qt.ColorScheme.Dark
-        hatch_color = QColor(220, 220, 220) if is_light_mode else QColor(60, 60, 60)
 
-        w_in = QWidget(); l_in = QVBoxLayout(w_in)
-        w_in.setMinimumWidth(150)
-        l_in.setContentsMargins(0, 0, 0, 0)
-        l_in.setSpacing(2)
-
-        # Add invisible widget to match the splitter toggle widget to keep layout spacing correct
-        h_in_header = QHBoxLayout()
-        h_in_header.addWidget(QLabel("Interactive Input. Models are run on the current viewport. Zoom for greater detail"))
-        h_in_header.addStretch()
-        header_spacer = QWidget()
-        header_spacer.setFixedSize(24, 24)
-        h_in_header.addWidget(header_spacer)
-        
-        l_in.addLayout(h_in_header)
-        self.scene_input = QGraphicsScene()
-        self.view_input = SynchronisedGraphicsView(self.scene_input, name="Input View") 
-        self.view_input.set_controller(self)
-        self.view_input.setBackgroundBrush(QBrush(hatch_color, Qt.BrushStyle.DiagCrossPattern))
-        self.view_input.setAcceptDrops(True)
-
-
-        self.input_pixmap_item = QGraphicsPixmapItem(); self.scene_input.addItem(self.input_pixmap_item)
-        self.overlay_pixmap_item = QGraphicsPixmapItem(); self.overlay_pixmap_item.setOpacity(0.5); self.scene_input.addItem(self.overlay_pixmap_item)
-        
-        self.trimap_overlay_item = QGraphicsPixmapItem(); self.trimap_overlay_item.setOpacity(0.7); self.scene_input.addItem(self.trimap_overlay_item)
-
-        l_in.addWidget(self.view_input)
-        self.in_out_splitter.addWidget(w_in)
-        
-        w_out = QWidget(); l_out = QVBoxLayout(w_out)
-        w_out.setMinimumWidth(150)
-        l_out.setContentsMargins(0, 0, 0, 0)
-        l_out.setSpacing(2)
-
-        # Output header with split orientation change button
-        h_out_header = QHBoxLayout()
-        h_out_header.addWidget(QLabel("Output Composite"))
-        h_out_header.addStretch()
-        self.chk_show_mask = QCheckBox("Show Mask"); self.chk_show_mask.toggled.connect(self.update_output_preview)
-        h_out_header.addWidget(self.chk_show_mask)
-        l_out.addLayout(h_out_header)
-
-        self.scene_output = QGraphicsScene()
-        self.view_output = SynchronisedGraphicsView(self.scene_output, name="Output View")
-        self.view_output.set_controller(self) 
-        self.view_output.setBackgroundBrush(QBrush(hatch_color, Qt.BrushStyle.DiagCrossPattern))
-        self.view_output.setAcceptDrops(True)
-        
-        self.output_pixmap_item = QGraphicsPixmapItem()
-        self.scene_output.addItem(self.output_pixmap_item)
-
-        l_out.addWidget(self.view_output)
-        self.in_out_splitter.addWidget(w_out)
-
-        self.in_out_splitter.toggle_button.clicked.connect(self.toggle_splitter_orientation)
-
-        self.view_input.set_sibling(self.view_output)
-        self.view_output.set_sibling(self.view_input)
-
-        # status bar help messages on view mouseover
-        self.view_input.viewport().installEventFilter(self)
-        self.view_output.viewport().installEventFilter(self)
-
-        # Holds the views (top) and the thumbnails (bottom)
-        views_thumbs_widget = QWidget()
-        views_thumbs_layout = QVBoxLayout(views_thumbs_widget)
-        views_thumbs_layout.setContentsMargins(0, 0, 0, 0)
-        views_thumbs_layout.setSpacing(2) # Small gap between views and thumbnails
-
-        # Initialise the thumbnail strip
-        self.thumbnail_strip = ThumbnailList()
-        self.thumbnail_strip.itemClicked.connect(self.on_thumbnail_clicked)
-
-        # Add the splitter to the top, thumbnails to the bottom
-        views_thumbs_layout.addWidget(self.in_out_splitter, 1) # '1' ensures views take most space
-        views_thumbs_layout.addWidget(self.thumbnail_strip)
-
-
-
-
-        # Assemble sidebar + views
-        layout.addWidget(sidebar_container)
-        layout.addWidget(views_thumbs_widget, 1) # Add the container instead of the splitter
-
-        # status bar 
-        self.status_label = QLabel("Ready")
-        self.zoom_label = QLabel("Zoom: 100%")
-        self.progress_bar = QProgressBar()
-        self.progress_bar.setRange(0, 0)  # Sets "Indeterminate" (bouncing) mode
-        self.progress_bar.setTextVisible(False)
-        self.progress_bar.setFixedWidth(200)
-        self.progress_bar.hide()
-
-        self.statusBar().addWidget(self.status_label)
-        self.statusBar().addPermanentWidget(self.progress_bar) # Add to right side
-        self.statusBar().addPermanentWidget(self.zoom_label)
-        
-        self.toggle_splitter_orientation(initial_setup=True)
+        layout.addStretch()
+        scroll.setWidget(container)
+        return scroll
     
-    def create_global_toolbar(self):
-        toolbar = QToolBar("Session Control")
-        toolbar.setMovable(False)
-        toolbar.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
-        self.addToolBar(toolbar)
 
-        open_img_act = QAction("Open Image(s)", self)
-        open_img_act.setToolTip("Open Image(s)")
-        open_img_act.triggered.connect(self.load_image_dialog)
-        toolbar.addAction(open_img_act)
-        open_clip_act = QAction("Open Clipboard", self)
-        open_clip_act.setToolTip("Open Clipboard")
-        open_clip_act.triggered.connect(self.load_clipboard)
-        toolbar.addAction(open_clip_act)
-        toolbar.addSeparator()
+
+    def create_commit_widget(self):
+        self.commit_zone = QFrame()
+        self.commit_zone.setFrameStyle(QFrame.Shape.Box | QFrame.Shadow.Sunken)
+        layout = QVBoxLayout(self.commit_zone)
         
-        load_mask_act = QAction("Import Saved Mask", self)
-        load_mask_act.setToolTip("Import an existing .png mask into the global working composite")
-        toolbar.addAction(load_mask_act)
-        load_mask_act.triggered.connect(self.load_mask_dialog)
+        lbl = QLabel("COMMIT MASK TO OUTPUT")
+        #lbl.setFont(QFont("Segoe UI", 9, QFont.Weight.Bold))
+        lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(lbl)
 
-        toolbar.addSeparator()
-        undo_act = QAction("↶", self)
-        undo_act.setToolTip("Undo")
-        undo_act.triggered.connect(self.undo)
-        toolbar.addAction(undo_act)
+        h_btns = QHBoxLayout()
+        self.btn_add = QPushButton("ADD (A)")
+        self.btn_add.clicked.connect(self.add_mask)
+        self.btn_add.setToolTip("Add the current model output mask to the composite output image.\n" 
+                           "Mask refinement steps e.g. alpha matting are added at this step")
+        self.btn_add.setMinimumHeight(50)
+        
+        self.btn_sub = QPushButton("SUBTRACT (S)")
+        self.btn_sub.clicked.connect(self.subtract_mask)
+        self.btn_sub.setToolTip("Subtract the current model output mask to the composite output image.\n" 
+                           "Mask refinement steps e.g. alpha matting are added at this step")
+        self.btn_sub.setMinimumHeight(50)
 
-        redo_act = QAction("↷", self)
-        redo_act.setToolTip("Redo")
-        redo_act.triggered.connect(self.redo)
-        toolbar.addAction(redo_act)
+        self.btn_add.setStyleSheet("background-color: #2e7d32; color: white; font-weight: bold; border: 1px solid #aaa;")
+        self.btn_sub.setStyleSheet("background-color: #c62828; color: white; font-weight: bold; border: 1px solid #aaa;")
+        
+        h_btns.addWidget(self.btn_add)
+        h_btns.addWidget(self.btn_sub)
+        layout.addLayout(h_btns)
+        
+        # Global Canvas Actions
+        h_canvas = QHBoxLayout()
+        btn_in_out = QPushButton("Copy In->Out")
+        btn_in_out.clicked.connect(self.copy_input_to_output)
+        h_canvas.addWidget(btn_in_out)
+        btn_clr_view = QPushButton("Clear View")
+        btn_clr_view.clicked.connect(self.clear_visible_area)
+        btn_clr_view.setToolTip("Clears the current viewport of the output image, but not the whole image"
+                                "\nUseful for refining areas when using automatic models")
+        h_canvas.addWidget(btn_clr_view)
+        btn_reset_img = QPushButton("Reset Img")
+        btn_reset_img.clicked.connect(self.reset_working_image)
+        h_canvas.addWidget(btn_reset_img)
+        layout.addLayout(h_canvas)
 
-        toolbar.addSeparator()
-
-        # Global Toggle
-        self.chk_paint = QCheckBox("Paintbrush (P)")
-
-        toolbar.addWidget(self.chk_paint)
-        self.chk_paint.toggled.connect(self.toggle_paint_mode)
-        spacer = QWidget()
-        spacer.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
-        toolbar.addWidget(spacer)
-        edit_image_act = QAction("Edit Image (Curves/WB)", self)
-        edit_image_act.triggered.connect(self.open_image_editor)
-        toolbar.addAction(edit_image_act)
-        toolbar.addSeparator()
-
-        toolbar.addAction("Settings").triggered.connect(self.open_settings)
+        return self.commit_zone
 
     def is_mask_modified(self):
         """Checks if the working mask has data or history."""
@@ -827,6 +898,13 @@ class BackgroundRemoverGUI(QMainWindow):
             self.view_input.setBackgroundBrush(QBrush(hatch_color, Qt.BrushStyle.DiagCrossPattern))
             self.view_output.setBackgroundBrush(QBrush(hatch_color, Qt.BrushStyle.DiagCrossPattern))
 
+            self.commit_zone.setStyleSheet("""
+                QFrame { background-color: rgba(255, 255, 255, 0.05); border: 1px solid #555; border-radius: 4px; }
+                QLabel { color: white; background: transparent; border: none; }
+            """)
+            
+            
+
             self.settings.setValue("theme", "dark")
         else: # light mode
             # manually set because windows sets default as black when system is black. opposite to linux....
@@ -858,6 +936,12 @@ class BackgroundRemoverGUI(QMainWindow):
             hatch_color = QColor(230, 230, 230)
             self.view_input.setBackgroundBrush(QBrush(hatch_color, Qt.BrushStyle.DiagCrossPattern))
             self.view_output.setBackgroundBrush(QBrush(hatch_color, Qt.BrushStyle.DiagCrossPattern))
+
+            self.commit_zone.setStyleSheet("""
+                QFrame { background-color: rgba(0, 0, 0, 0.05); border: 1px solid #ccc; border-radius: 4px; }
+                QLabel { color: black; background: transparent; border: none; }
+            """)
+            
             
             self.settings.setValue("theme", "light")
 
@@ -1180,6 +1264,7 @@ class BackgroundRemoverGUI(QMainWindow):
         QShortcut(QKeySequence("V"), self).activated.connect(self.clear_visible_area)
         QShortcut(QKeySequence("Ctrl+Z"), self).activated.connect(self.undo)
         QShortcut(QKeySequence("Ctrl+Y"), self).activated.connect(self.redo)
+        QShortcut(QKeySequence("Ctrl+O"), self).activated.connect(self.load_image_dialog)
         QShortcut(QKeySequence("P"), self).activated.connect(self.chk_paint.toggle)
         QShortcut(QKeySequence("Ctrl+S"), self).activated.connect(self.save_image)
         QShortcut(QKeySequence("Ctrl+Shift+S"), self).activated.connect(self.quick_save_jpeg) # Quick Save JPG
@@ -1188,6 +1273,7 @@ class BackgroundRemoverGUI(QMainWindow):
         QShortcut(QKeySequence("I"), self).activated.connect(lambda: self.run_automatic_model("isnet-general-use"))
         QShortcut(QKeySequence("O"), self).activated.connect(lambda: self.run_automatic_model("rmbg1_4"))
         QShortcut(QKeySequence("B"), self).activated.connect(lambda: self.run_automatic_model("ben2_base"))
+        QShortcut(QKeySequence("M"), self).activated.connect(lambda: self.run_automatic_model("")) # run whatever is selected in the combobox
 
     def handle_bg_change(self, text):
         if "Blur" in text:
@@ -1223,6 +1309,9 @@ class BackgroundRemoverGUI(QMainWindow):
             self.update_output_preview()
             self.status_label.setText(f"Loaded: {os.path.basename(path)} [{self.current_image_index + 1}/{len(self.image_paths)}] {"Loaded transparency as global mask" if initial_mask else ''}")
             self.update_window_title()
+
+            self.view_input.set_placeholder(None)
+            self.view_output.set_placeholder(None)
 
             self.thumbnail_strip.blockSignals(True)
             self.thumbnail_strip.setCurrentRow(self.current_image_index)
@@ -1275,6 +1364,10 @@ class BackgroundRemoverGUI(QMainWindow):
             self.update_thumbnail_strip()
             self.status_label.setText("Loaded from Clipboard [1/1]")
             self.update_window_title()
+
+            self.view_input.set_placeholder(None)
+            self.view_output.set_placeholder(None)
+            
             return
 
         QMessageBox.information(self, "Clipboard Empty", 
@@ -1752,6 +1845,7 @@ class BackgroundRemoverGUI(QMainWindow):
         self.alpha_matting_frame.setVisible(checked)
         if checked:
             self.update_trimap_preview()
+            self.chk_show_trimap.setChecked(True)
         else:
             # If unchecked, also uncheck the trimap view so it's off if re-enabled
             self.chk_show_trimap.setChecked(False)
@@ -1764,6 +1858,8 @@ class BackgroundRemoverGUI(QMainWindow):
             self.trimap_overlay_item.show()
         else:
             self.trimap_overlay_item.hide()
+            self.view_input.hide_legend()
+
 
     #@line_profiler.profile
     def update_trimap_preview(self):
@@ -2354,6 +2450,32 @@ class BackgroundRemoverGUI(QMainWindow):
             self.working_mask.save(mname)
             self.status_label.setText(f"Saved to {os.path.basename(fname)} and {os.path.basename(mname)}")
 
+    def save_image_clipboard(self):
+        if not self.image_paths: return
+
+        final_image = self.render_output_image()
+        # Zero out RGB data in transparent areas for export.
+        # This prevents "ghost backgrounds" when re-loading the file.
+        clean_canvas = Image.new("RGBA", final_image.size, (0, 0, 0, 0))
+        clean_canvas.paste(final_image, (0, 0), final_image)
+        final_image = clean_canvas
+
+        data = final_image.tobytes("raw", "RGBA")
+        size = final_image.width * final_image.height * 4
+
+        qimage = QImage(
+            final_image.width,
+            final_image.height,
+            QImage.Format.Format_RGBA8888
+        )
+
+        ptr = qimage.bits()
+        ptr.setsize(size)
+        ptr[:] = data
+
+        QGuiApplication.clipboard().setImage(qimage)
+
+
     def show_help(self):
         d = QDialog(self)
         d.setWindowTitle("Help / About")
@@ -2389,6 +2511,7 @@ Shortcuts:
 - I: Run isnet
 - O: Run rmbg1_4
 - B: Run ben2_base
+- M: Run automatic model selected in the menu
 - Ctrl+S: Save As
 - Ctrl+Shift+S: Quick Save JPG (White BG)
 - Ctrl+Z: Undo

@@ -200,6 +200,12 @@ class SynchronisedGraphicsView(QGraphicsView):
         self.scene().addItem(self.brush_cursor_item)
         self.brush_cursor_item.hide()
 
+        # If no image loaded, intro text
+        self.placeholder_label = QLabel(self)
+        self.placeholder_label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self.placeholder_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.placeholder_label.hide()
+
         # Overlay Legend Widget
         self.legend_label = QLabel(self)
         self.legend_label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
@@ -209,17 +215,19 @@ class SynchronisedGraphicsView(QGraphicsView):
     def update_legend_style(self, is_dark):
         bg = "rgba(0, 0, 0, 150)" if is_dark else "rgba(255, 255, 255, 180)"
         text = "white" if is_dark else "black"
-        self.legend_label.setStyleSheet(f"""
+        style = f"""
             QLabel {{
                 background-color: {bg};
                 color: {text};
-                padding: 8px;
-                border-radius: 4px;
+                padding: 12px;
+                border-radius: 8px;
                 border: 1px solid #888;
                 font-family: sans-serif;
-                font-size: 10pt;
+                font-size: 11pt;
             }}
-        """)
+        """
+        self.legend_label.setStyleSheet(style)
+        self.placeholder_label.setStyleSheet(style)
 
     def update_legend_position(self):
         if self.legend_label.isVisible():
@@ -238,9 +246,26 @@ class SynchronisedGraphicsView(QGraphicsView):
     def hide_legend(self):
         self.legend_label.hide()
     
+    def update_placeholder_position(self):
+        if self.placeholder_label.isVisible():
+            self.placeholder_label.adjustSize()
+            # Perfectly centered in the viewport
+            x = (self.viewport().width() - self.placeholder_label.width()) // 2
+            y = (self.viewport().height() - self.placeholder_label.height()) // 2
+            self.placeholder_label.move(x, y)
+
+    def set_placeholder(self, text):
+        if text:
+            self.placeholder_label.setText(text)
+            self.placeholder_label.show()
+            self.update_placeholder_position()
+        else:
+            self.placeholder_label.hide()
+    
     def resizeEvent(self, event):
         super().resizeEvent(event)
         self.update_legend_position()
+        self.update_placeholder_position()
 
     def drawBackground(self, painter, rect):
         """
@@ -569,9 +594,10 @@ class ThumbnailList(QListWidget):
 
     def update_style(self, is_dark=False):
         text_color = "white" if is_dark else "black"
+        border_col = "#444" if is_dark else "#AAA"
         self.setStyleSheet(f"""
             QListWidget {{
-                border: 1px solid #888;
+                border: 1px solid {border_col};
                 background-color: transparent;
                 color: {text_color};
             }}
