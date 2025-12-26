@@ -108,7 +108,6 @@ class BackgroundRemoverGUI(QMainWindow):
 
         
         self.original_image = None
-        self.working_image = None
         self.working_mask = None
         self.last_trimap = None
 
@@ -1203,12 +1202,26 @@ class BackgroundRemoverGUI(QMainWindow):
         try:
             img = Image.open(path)
             img = ImageOps.exif_transpose(img)
+            
+            # if image has transparency already, use this as the initial working_mask, otherwise we get a black background
+            has_alpha = 'A' in img.mode or (img.mode == 'P' and 'transparency' in img.info)
+            initial_mask = None
+            if has_alpha:
+                alpha = img.getchannel('A')
+                # Check if there are actually any transparent pixels. 
+                # getextrema() returns (min, max). If min is 255, the alpha is solid white.
+                extrema = alpha.getextrema()
+                if extrema and extrema[0] < 255:
+                    initial_mask = alpha
+                else:
+                    initial_mask = None
+
             self.original_image = img.convert("RGBA")
             self.image_exif = img.info.get('exif')
-            self.init_working_buffers()
+            self.init_working_buffers(initial_mask)
             self.update_input_view()
             self.update_output_preview()
-            self.status_label.setText(f"Loaded: {os.path.basename(path)} [{self.current_image_index + 1}/{len(self.image_paths)}]")
+            self.status_label.setText(f"Loaded: {os.path.basename(path)} [{self.current_image_index + 1}/{len(self.image_paths)}] {"Loaded transparency as global mask" if initial_mask else ''}")
             self.update_window_title()
 
             self.thumbnail_strip.blockSignals(True)
@@ -1241,9 +1254,22 @@ class BackgroundRemoverGUI(QMainWindow):
         img = ImageGrab.grabclipboard()
 
         if isinstance(img, Image.Image):
+
+            has_alpha = 'A' in img.mode or (img.mode == 'P' and 'transparency' in img.info)
+            initial_mask = None
+            if has_alpha:
+                alpha = img.getchannel('A')
+                # Check if there are actually any transparent pixels. 
+                # getextrema() returns (min, max). If min is 255, the alpha is solid white.
+                extrema = alpha.getextrema()
+                if extrema and extrema[0] < 255:
+                    initial_mask = alpha
+                else:
+                    initial_mask = None
+
             self.original_image = img.convert("RGBA")
             self.image_paths = ["Clipboard"]
-            self.init_working_buffers()
+            self.init_working_buffers(initial_mask)
             self.update_input_view()
             self.update_output_preview()
             self.update_thumbnail_strip()
@@ -1322,10 +1348,14 @@ class BackgroundRemoverGUI(QMainWindow):
         return os.path.join(directory, cleaned)
 
 
-    def init_working_buffers(self):
+    def init_working_buffers(self, initial_mask=None):
         size = self.original_image.size 
-        self.working_image = Image.new("RGBA", size, (0,0,0,0))
-        self.working_mask = Image.new("L", size, 0)
+        if initial_mask:
+            self.working_mask = initial_mask.convert("L").copy()
+            self.status_label.setText("Loaded image transparency as global mask")
+        else:
+            self.working_mask = Image.new("L", size, 0)
+
         self.model_output_mask = Image.new("L", size, 0)
         self.undo_history = [self.working_mask.copy()]
         self.redo_history = []
