@@ -1732,7 +1732,7 @@ class BackgroundRemoverGUI(QMainWindow):
 
             self.update_input_view()
             self.update_output_preview()
-            self.status_label.setText(f"Loaded: {os.path.basename(path)} [{self.current_image_index + 1}/{len(self.image_paths)}] {"Loaded transparency as global mask" if initial_mask else ''}")
+            self.status_label.setText(f"Loaded: {os.path.basename(path)} [{self.current_image_index + 1}/{len(self.image_paths)}] {'Loaded transparency as global mask' if initial_mask else ''}")
             self.update_window_title()
 
             self.view_input.set_placeholder(None)
