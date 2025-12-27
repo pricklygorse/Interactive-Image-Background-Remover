@@ -107,8 +107,8 @@ class BackgroundRemoverGUI(QMainWindow):
         self.blur_radius = 30
 
         
-        self.original_image = None
-        self.actual_original_image = None # raw unedited source image. needs better naming
+        self.working_orig_image = None
+        self.raw_original_image = None # raw unedited source image. needs better naming
 
         self.adjustment_source_np = None  # adjustment source as BGRA NumPy array for performance
          # Timer for debouncing adjustment updates
@@ -526,7 +526,7 @@ class BackgroundRemoverGUI(QMainWindow):
         self.model_manager.clear_sam_cache(clear_loaded_models=False)
         
         # inefficient, but until I remove all legacy PIL image operations, it is necessary
-        self.original_image = Image.fromarray(cv2.cvtColor(processed_np, cv2.COLOR_BGRA2RGBA))
+        self.working_orig_image = Image.fromarray(cv2.cvtColor(processed_np, cv2.COLOR_BGRA2RGBA))
         
         self.update_input_view()
         
@@ -580,7 +580,7 @@ class BackgroundRemoverGUI(QMainWindow):
         if w <= 0 or h <= 0: return
         
         # Clamp to image size
-        img_w, img_h = self.actual_original_image.size
+        img_w, img_h = self.raw_original_image.size
         x = max(0, x)
         y = max(0, y)
         w = min(w, img_w - x)
@@ -592,11 +592,11 @@ class BackgroundRemoverGUI(QMainWindow):
         box = (x, y, x+w, y+h)
         
         # Crop the Master (the raw, unadjusted image)
-        self.original_image = self.actual_original_image.crop(box)
+        self.working_orig_image = self.raw_original_image.crop(box)
         
         # Update the NumPy buffer from the cropped raw image, so no adjustments are baked in
         self.adjustment_source_np = np.ascontiguousarray(
-            cv2.cvtColor(np.array(self.original_image), cv2.COLOR_RGBA2BGRA)
+            cv2.cvtColor(np.array(self.working_orig_image), cv2.COLOR_RGBA2BGRA)
         )
         
         if self.working_mask:
@@ -615,7 +615,7 @@ class BackgroundRemoverGUI(QMainWindow):
         self.labels = []
 
         # Re-initialise the paint scratchpad
-        new_size = self.original_image.size
+        new_size = self.working_orig_image.size
         self.paint_image = QImage(new_size[0], new_size[1], QImage.Format.Format_ARGB32_Premultiplied)
         self.paint_image.fill(Qt.GlobalColor.transparent)
         
@@ -634,7 +634,7 @@ class BackgroundRemoverGUI(QMainWindow):
         self.status_label.setText(f"Image Cropped to {w}x{h}")
 
     def rotate_image(self, direction):
-        if not self.actual_original_image:
+        if not self.raw_original_image:
             return
 
         QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
@@ -646,7 +646,7 @@ class BackgroundRemoverGUI(QMainWindow):
                 pil_transpose = Image.Transpose.ROTATE_270
                 cv2_code = cv2.ROTATE_90_CLOCKWISE
 
-            self.actual_original_image = self.actual_original_image.transpose(pil_transpose)
+            self.raw_original_image = self.raw_original_image.transpose(pil_transpose)
 
             self.adjustment_source_np = cv2.rotate(self.adjustment_source_np, cv2_code)
 
@@ -658,7 +658,7 @@ class BackgroundRemoverGUI(QMainWindow):
                 self.user_trimap = self.user_trimap.transpose(pil_transpose)
 
             # Re-initialise paint scratchpad for new orientation
-            new_size = self.actual_original_image.size
+            new_size = self.raw_original_image.size
             self.paint_image = QImage(new_size[0], new_size[1], QImage.Format.Format_ARGB32_Premultiplied)
             self.paint_image.fill(Qt.GlobalColor.transparent)
 
@@ -1670,15 +1670,15 @@ class BackgroundRemoverGUI(QMainWindow):
                 else:
                     initial_mask = None
 
-            self.actual_original_image = img.convert("RGBA")
+            self.raw_original_image = img.convert("RGBA")
 
             # NumPy buffer for the adjustment pipeline
             self.adjustment_source_np = np.ascontiguousarray(
-                cv2.cvtColor(np.array(self.actual_original_image), cv2.COLOR_RGBA2BGRA)
+                cv2.cvtColor(np.array(self.raw_original_image), cv2.COLOR_RGBA2BGRA)
             )
 
 
-            self.original_image = self.actual_original_image.copy()
+            self.working_orig_image = self.raw_original_image.copy()
 
             self.image_exif = img.info.get('exif')
             self.init_working_buffers(initial_mask)
@@ -1705,7 +1705,7 @@ class BackgroundRemoverGUI(QMainWindow):
         if os.path.exists(mask_path):
             try:
                 mask = Image.open(mask_path).convert("L")
-                if mask.size == self.original_image.size:
+                if mask.size == self.working_orig_image.size:
                     self.add_undo_step()
                     self.working_mask = mask
                     self.update_output_preview()
@@ -1716,7 +1716,7 @@ class BackgroundRemoverGUI(QMainWindow):
                 QMessageBox.critical(self, "Error Loading Mask", f"Could not load the associated mask:\n{e}")
 
     def load_blank_image(self):
-        self.original_image = Image.new("RGBA", (800, 600), (0,0,0,0))
+        self.working_orig_image = Image.new("RGBA", (800, 600), (0,0,0,0))
         self.init_working_buffers()
         self.update_input_view()
 
@@ -1737,11 +1737,11 @@ class BackgroundRemoverGUI(QMainWindow):
                 else:
                     initial_mask = None
 
-            self.actual_original_image = img.convert("RGBA")
+            self.raw_original_image = img.convert("RGBA")
             self.adjustment_source_np = np.ascontiguousarray(
-                cv2.cvtColor(np.array(self.actual_original_image), cv2.COLOR_RGBA2BGRA)
+                cv2.cvtColor(np.array(self.raw_original_image), cv2.COLOR_RGBA2BGRA)
             )
-            self.original_image = self.actual_original_image.copy()
+            self.working_orig_image = self.raw_original_image.copy()
 
             self.image_paths = ["Clipboard"]
             self.init_working_buffers(initial_mask)
@@ -1773,7 +1773,7 @@ class BackgroundRemoverGUI(QMainWindow):
         fname, _ = QFileDialog.getOpenFileName(self, "Open Mask", "", "Images (*.png)")
         if fname:
             mask = Image.open(fname).convert("L")
-            if mask.size == self.original_image.size:
+            if mask.size == self.working_orig_image.size:
                 self.add_undo_step()
                 self.working_mask = mask
                 self.update_output_preview()
@@ -1829,7 +1829,7 @@ class BackgroundRemoverGUI(QMainWindow):
 
 
     def init_working_buffers(self, initial_mask=None):
-        size = self.original_image.size 
+        size = self.working_orig_image.size 
         if initial_mask:
             self.working_mask = initial_mask.convert("L").copy()
             self.status_label.setText("Loaded image transparency as global mask")
@@ -1860,9 +1860,9 @@ class BackgroundRemoverGUI(QMainWindow):
         self.clear_overlay()
 
     def update_input_view(self):
-        if self.original_image:
+        if self.working_orig_image:
             # 1. Update the Pixmap
-            self.input_pixmap_item.setPixmap(pil2pixmap(self.original_image))
+            self.input_pixmap_item.setPixmap(pil2pixmap(self.working_orig_image))
             rect = self.input_pixmap_item.boundingRect()
             self.view_input.setSceneRect(rect)
 
@@ -1903,11 +1903,11 @@ class BackgroundRemoverGUI(QMainWindow):
     def get_viewport_crop(self):
         vp = self.view_input.viewport().rect()
         sr = self.view_input.mapToScene(vp).boundingRect()
-        ir = QRectF(0, 0, self.original_image.width, self.original_image.height)
+        ir = QRectF(0, 0, self.working_orig_image.width, self.working_orig_image.height)
         cr = sr.intersected(ir)
         x, y, w, h = int(cr.x()), int(cr.y()), int(cr.width()), int(cr.height())
-        if w <= 0 or h <= 0: return self.original_image, 0, 0
-        return self.original_image.crop((x, y, x+w, y+h)), x, y
+        if w <= 0 or h <= 0: return self.working_orig_image, 0, 0
+        return self.working_orig_image.crop((x, y, x+w, y+h)), x, y
 
     
 
@@ -1979,7 +1979,7 @@ class BackgroundRemoverGUI(QMainWindow):
                     valid_labels.append(label)
 
         if not valid_coords or not valid_labels:
-            self.model_output_mask = Image.new("L", self.original_image.size, 0)
+            self.model_output_mask = Image.new("L", self.working_orig_image.size, 0)
             self.overlay_pixmap_item.setPixmap(QPixmap())
             self.status_label.setText("Ready (No points in view)")
             return None
@@ -2088,7 +2088,7 @@ class BackgroundRemoverGUI(QMainWindow):
         status_msg = result["status"]
 
         # Paste the viewport mask into the correct place
-        self.model_output_mask = Image.new("L", self.original_image.size, 0)
+        self.model_output_mask = Image.new("L", self.working_orig_image.size, 0)
         self.model_output_mask.paste(Image.fromarray(mask_arr, mode="L"), (x_off, y_off))
         
         # Update UI
@@ -2100,7 +2100,7 @@ class BackgroundRemoverGUI(QMainWindow):
 
     def show_mask_overlay(self):
         if self.model_output_mask:
-            blue = Image.new("RGB", self.original_image.size, (0, 0, 255))
+            blue = Image.new("RGB", self.working_orig_image.size, (0, 0, 255))
             overlay = blue.convert("RGBA")
             overlay.putalpha(self.model_output_mask)
             self.overlay_pixmap_item.setPixmap(pil2pixmap(overlay))
@@ -2110,7 +2110,7 @@ class BackgroundRemoverGUI(QMainWindow):
     def clear_overlay(self):
         self.coordinates = []
         self.labels = []
-        self.model_output_mask = Image.new("L", self.original_image.size, 0)
+        self.model_output_mask = Image.new("L", self.working_orig_image.size, 0)
         self.overlay_pixmap_item.setPixmap(QPixmap())
         self.trimap_overlay_item.setPixmap(QPixmap())
 
@@ -2147,7 +2147,7 @@ class BackgroundRemoverGUI(QMainWindow):
         if not self.model_output_mask: return
         self.add_undo_step()
         crop, x, y = self.get_viewport_crop()
-        vis_mask = Image.new("L", self.original_image.size, 0)
+        vis_mask = Image.new("L", self.working_orig_image.size, 0)
         draw = ImageDraw.Draw(vis_mask)
         draw.rectangle([x, y, x+crop.width, y+crop.height], fill=255)
         self.working_mask = ImageChops.subtract(self.working_mask, vis_mask)
@@ -2194,7 +2194,7 @@ class BackgroundRemoverGUI(QMainWindow):
         self.update_trimap_preview()
 
     def open_trimap_editor(self):
-        if not self.original_image:
+        if not self.working_orig_image:
             QMessageBox.warning(self, "No Image", "Please load an image first.")
             return
 
@@ -2210,9 +2210,9 @@ class BackgroundRemoverGUI(QMainWindow):
             initial_trimap = Image.fromarray(trimap_np)
         else:
             # If there's no mask at all, start with a blank (all unknown) trimap.
-            initial_trimap = Image.new("L", self.original_image.size, 128)
+            initial_trimap = Image.new("L", self.working_orig_image.size, 128)
 
-        dialog = TrimapEditorDialog(self.original_image, initial_trimap, self)
+        dialog = TrimapEditorDialog(self.working_orig_image, initial_trimap, self)
         if dialog.exec():
             # If the user clicked OK, store the result
             self.user_trimap = dialog.final_trimap
@@ -2405,7 +2405,7 @@ class BackgroundRemoverGUI(QMainWindow):
 
     #@profile
     def render_output_image(self, shadow_downscale=0.125):
-        if not self.original_image: return
+        if not self.working_orig_image: return
 
         # check if image has been adjusted using adjustment tab
         # if it has, we need to re-calculate cutout and bg blur
@@ -2423,7 +2423,7 @@ class BackgroundRemoverGUI(QMainWindow):
 
                     self.set_loading(True, "Estimating foreground colour correction")
 
-                    cutout = self.model_manager.estimate_foreground(self.original_image, self.working_mask)
+                    cutout = self.model_manager.estimate_foreground(self.working_orig_image, self.working_mask)
 
                     self.set_loading(False)
                     self.working_mask_hash = current_state_key
@@ -2434,11 +2434,11 @@ class BackgroundRemoverGUI(QMainWindow):
             except Exception as e:
                 print(f"Error during foreground estimation: {e}")
                 # Fallback to the standard method if something goes wrong
-                cutout = self.original_image.convert("RGBA")
+                cutout = self.working_orig_image.convert("RGBA")
                 cutout.putalpha(self.working_mask)
         else:
             # Quick enough to not need caching
-            cutout = self.original_image.convert("RGBA")
+            cutout = self.working_orig_image.convert("RGBA")
             cutout.putalpha(self.working_mask)
         
         if self.chk_shadow.isChecked():
@@ -2492,7 +2492,7 @@ class BackgroundRemoverGUI(QMainWindow):
             else:
                 self.set_loading(True, "Blurring Background")
                 
-                orig_np = np.array(self.original_image)
+                orig_np = np.array(self.working_orig_image)
                 rgb = orig_np[:, :, :3]
                 m_np = np.array(self.working_mask)
 
@@ -2527,7 +2527,7 @@ class BackgroundRemoverGUI(QMainWindow):
 
             final.alpha_composite(cutout)
         else:
-            final = Image.new("RGBA", self.original_image.size, bg_txt.lower())
+            final = Image.new("RGBA", self.working_orig_image.size, bg_txt.lower())
             final.alpha_composite(cutout)
         
         self.last_render = final.copy()
@@ -2579,17 +2579,17 @@ class BackgroundRemoverGUI(QMainWindow):
         self.rb_trimap_auto.setChecked(True)
 
         self.add_undo_step()
-        self.working_mask = Image.new("L", self.original_image.size, 0)
+        self.working_mask = Image.new("L", self.working_orig_image.size, 0)
         self.update_output_preview()
         
     def reset_working_image(self):
         self.add_undo_step()
-        self.working_mask = Image.new("L", self.original_image.size, 0)
+        self.working_mask = Image.new("L", self.working_orig_image.size, 0)
         self.update_output_preview()
         
     def copy_input_to_output(self):
         self.add_undo_step()
-        self.working_mask = Image.new("L", self.original_image.size, 255)
+        self.working_mask = Image.new("L", self.working_orig_image.size, 255)
         self.update_output_preview()
 
     def toggle_paint_mode(self, enabled):
@@ -2745,7 +2745,7 @@ class BackgroundRemoverGUI(QMainWindow):
             QApplication.restoreOverrideCursor()
 
     def open_image_editor(self):
-        if not self.original_image: return
+        if not self.working_orig_image: return
         
         reply = QMessageBox.question(self, "Edit Image", 
                                      "Editing the original image will reset the progress on your output image.\n\n"
@@ -2753,10 +2753,10 @@ class BackgroundRemoverGUI(QMainWindow):
                                      QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
         
         if reply == QMessageBox.StandardButton.Yes:
-            dlg = ImageEditorDialog(self, self.original_image)
+            dlg = ImageEditorDialog(self, self.working_orig_image)
             if dlg.exec():
                 if dlg.final_image:
-                    self.original_image = dlg.final_image.convert("RGBA")
+                    self.working_orig_image = dlg.final_image.convert("RGBA")
                     self.init_working_buffers()
                     self.update_input_view()
                     self.update_output_preview()
