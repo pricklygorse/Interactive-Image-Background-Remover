@@ -3,13 +3,17 @@ from PyQt6.QtWidgets import (QApplication, QWidget, QVBoxLayout, QHBoxLayout,
                              QSlider, QFrame, QDialog, QScrollArea, 
                              QGraphicsRectItem, QRadioButton, QButtonGroup)
 from PyQt6.QtCore import Qt, QTimer, QRectF
-from PyQt6.QtGui import (QColor, QPen, QBrush)
+from PyQt6.QtGui import (QColor, QPen, QBrush,QImage, QPixmap)
 
-from PIL import Image, ImageEnhance, ImageFilter
+from PIL import Image
 import math
 import numpy as np
 
-from src.utils import sigmoid, pil2pixmap
+from timeit import default_timer as timer
+import cv2
+
+
+from src.utils import numpy_bgra_to_pixmap, apply_tone_sharpness
 
 
 # not used now changed to tabbed UI
@@ -104,15 +108,22 @@ class ImageEditorDialog(QDialog):
         self.total_rotation = 0
         
         # Create a small preview for real-time editing (Max 1000px dimension)
-        w, h = image.size
-        scale = min(1.0, 1000.0 / max(w, h))
-        if scale < 1.0:
-            self.preview_base = image.resize((int(w * scale), int(h * scale)), Image.Resampling.BILINEAR)
-        else:
-            self.preview_base = image.copy()
+        # w, h = image.size
+        # scale = min(1.0, 1000.0 / max(w, h))
+        # if scale < 1.0:
+        #     self.preview_base = image.resize((int(w * scale), int(h * scale)), Image.Resampling.BILINEAR)
+        # else:
+        #     self.preview_base = image.copy()
+        
+        # dont need smaller preview any more now it is so optimised
+        self.preview_base = image.copy()
+        self.preview_base_np = np.ascontiguousarray(
+            cv2.cvtColor(np.array(self.preview_base.convert("RGBA")), cv2.COLOR_RGBA2BGRA)
+        )
             
         # The current state of the preview
         self.display_image = self.preview_base
+        self.display_image_np = self.preview_base_np.copy()
         
         # --- UI Setup ---
         self.crop_start = None
@@ -140,31 +151,53 @@ class ImageEditorDialog(QDialog):
         
         self.sliders = {}
         self.slider_params = {
-            'highlight': (0.1, 2.0, 1.0), 'midtone': (0.1, 2.0, 1.0), 'shadow': (0.1, 3.0, 1.0),
-            'tone_curve': (0.01, 0.5, 0.1), 'brightness': (0.1, 2.0, 1.0), 'contrast': (0.1, 2.0, 1.0),
-            'saturation': (0.1, 2.0, 1.0), 'white_balance': (2000, 10000, 6500), 'unsharp_radius': (0.1, 50, 1.0),
-            'unsharp_amount': (0, 500, 0), 'unsharp_threshold': (0, 255, 0)
+            # (Min, Max, Default)
+            # uses integers for simplicity, converted to float as required later
+            'highlight': (10, 200, 100), 
+            'midtone': (10, 200, 100), 
+            'shadow': (10, 300, 100),
+            'tone_curve': (1, 50, 10),     
+            'brightness': (10, 200, 100), 
+            'contrast': (10, 200, 100),
+            'saturation': (0, 200, 100), # Min 0 for grayscale
+            'white_balance': (2000, 10000, 6500), 
+            'unsharp_radius': (1, 100, 1), 
+            'unsharp_amount': (0, 500, 0), 
+            'unsharp_threshold': (0, 255, 0)
         }
         
         # Update timer to prevent lag while dragging
         self.update_timer = QTimer()
         self.update_timer.setSingleShot(True)
-        self.update_timer.setInterval(50) # 50ms 
+        self.update_timer.setInterval(20) 
         self.update_timer.timeout.connect(self.update_preview)
 
         for param, (min_v, max_v, default) in self.slider_params.items():
+            # Main label for the parameter name
             lbl = QLabel(param.replace("_", " ").capitalize())
-            slider = QSlider(Qt.Orientation.Horizontal)
-            slider.setRange(0, 100)
-            val_norm = (default - min_v) / (max_v - min_v)
-            slider.setValue(int(val_norm * 100))
-            
-            # Connect to timer instead of function directly
-            slider.valueChanged.connect(self.update_timer.start)
-            
             self.sliders_layout.addWidget(lbl)
-            self.sliders_layout.addWidget(slider)
-            self.sliders[param] = {'widget': slider, 'min': min_v, 'max': max_v}
+
+            # Horizontal layout to hold slider + value label
+            h_row_layout = QHBoxLayout()
+            
+            slider = QSlider(Qt.Orientation.Horizontal)
+            slider.setRange(min_v, max_v)
+            slider.setValue(default)
+            
+            # Value label to show the current integer
+            val_display = QLabel(str(default))
+            val_display.setFixedWidth(35) # Prevents layout jumping when digits change
+            val_display.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            
+            # Update label and start processing timer on change
+            slider.valueChanged.connect(lambda v, l=val_display: l.setText(str(v)))
+            slider.valueChanged.connect(lambda _: self.update_timer.start())
+            
+            h_row_layout.addWidget(slider)
+            h_row_layout.addWidget(val_display)
+            
+            self.sliders_layout.addLayout(h_row_layout)
+            self.sliders[param] = slider
             
         scroll.setWidget(scroll_widget)
         scroll.setWidgetResizable(True)
@@ -209,117 +242,64 @@ class ImageEditorDialog(QDialog):
                 return True
         return super().eventFilter(source, event)
 
-    def get_val(self, param):
-        s = self.sliders[param]
-        return s['min'] + (s['widget'].value() / 100.0 * (s['max'] - s['min']))
-    
+   
     def reset_sliders(self):
         self.update_timer.stop()
-        for param, (min_v, max_v, default) in self.slider_params.items():
-            val_norm = (default - min_v) / (max_v - min_v)
-            self.sliders[param]['widget'].setValue(int(val_norm * 100))
+        for param, (_, _, default) in self.slider_params.items():
+            self.sliders[param].setValue(default)
+        
         self.total_rotation = 0
+        # Re-fetch the clean base numpy array
+        self.preview_base_np = np.ascontiguousarray(
+            cv2.cvtColor(np.array(self.preview_base.convert("RGBA")), cv2.COLOR_RGBA2BGRA)
+        )
         self.update_preview()
 
     def rotate_image(self, angle):
         self.total_rotation = (self.total_rotation + angle) % 360
-        # We don't rotate the PIL images here to avoid quality loss. 
-        # We just store the rotation and apply it during the pipeline.
+        
+        if angle == 90:
+            self.preview_base_np = cv2.rotate(self.preview_base_np, cv2.ROTATE_90_COUNTERCLOCKWISE)
+        elif angle == -90:
+            self.preview_base_np = cv2.rotate(self.preview_base_np, cv2.ROTATE_90_CLOCKWISE)
+
         self.update_preview()
 
-    def process_image_pipeline(self, input_img):
-        """Applies all current filters to the given input_img"""
-        
-        # 1. Rotate
-        if self.total_rotation != 0:
-            img = input_img.rotate(self.total_rotation, expand=True)
-        else:
-            img = input_img
-            
-        img_array = np.array(img)
-        
-        # 2. White Balance
-        wb = self.get_val('white_balance')
-        if wb != 6500: img_array = self.adjust_white_balance(img_array, wb)
-        
-        # 3. Tone Curves (LUT)
-        x = np.arange(256, dtype=np.float32)
-        tone = self.get_val('tone_curve')
-        hl_mask = sigmoid((x - 192) / (255 * tone))
-        sh_mask = 1 - sigmoid((x - 64) / (255 * tone))
-        mt_mask = 1 - hl_mask - sh_mask
-        lut = (x * self.get_val('highlight') * hl_mask + x * self.get_val('midtone') * mt_mask + x * self.get_val('shadow') * sh_mask).clip(0, 255).astype(np.uint8)
-        
-        if len(img_array.shape) == 3:
-            # If RGBA, only apply to RGB
-            if img_array.shape[2] >= 3:
-                img_array[:,:,:3] = lut[img_array[:,:,:3]]
-        else: 
-            img_array = lut[img_array]
-        
-        img = Image.fromarray(img_array)
-        
-        # Pillow Enhancements
-        if self.get_val('brightness') != 1.0: img = ImageEnhance.Brightness(img).enhance(self.get_val('brightness'))
-        if self.get_val('contrast') != 1.0: img = ImageEnhance.Contrast(img).enhance(self.get_val('contrast'))
-        if self.get_val('saturation') != 1.0: img = ImageEnhance.Color(img).enhance(self.get_val('saturation'))
-        
-        # Unsharp Mask
-        amt = self.get_val('unsharp_amount')
-        if amt > 0: 
-            img = img.filter(ImageFilter.UnsharpMask(
-                radius=int(self.get_val('unsharp_radius')), 
-                percent=int(amt), 
-                threshold=int(self.get_val('unsharp_threshold'))
-            ))
-            
-        return img
+    def get_current_params(self):
+        return {param: slider.value() for param, slider in self.sliders.items()}
+    
+    
 
     def update_preview(self):
-        self.display_image = self.process_image_pipeline(self.preview_base)
+        params = self.get_current_params()
+        self.display_image_np = apply_tone_sharpness(self.preview_base_np, params)
+        
+        q_img = numpy_bgra_to_pixmap(self.display_image_np)
         
         # Update View
-        self.pixmap_item.setPixmap(pil2pixmap(self.display_image))
+        self.pixmap_item.setPixmap(q_img)
         self.view.setSceneRect(self.pixmap_item.boundingRect())
-        # Only fit in view if it's the first load or rotation changed significantly
+        
         if not self.view.sceneRect().isEmpty():
-             self.view.fitInView(self.pixmap_item, Qt.AspectRatioMode.KeepAspectRatio)
+            self.view.fitInView(self.pixmap_item, Qt.AspectRatioMode.KeepAspectRatio)
 
-    def adjust_white_balance(self, img_array, temp):
-        t = temp / 100
-        if t <= 66:
-            r, g, b = 255, 99.47 * math.log(t) - 161.1, (0 if t<=19 else 138.5 * math.log(t-10) - 305)
-        else:
-            r, g, b = 329.7 * math.pow(t-60, -0.133), 288.1 * math.pow(t-60, -0.075), 255
-        
-        r, g, b = max(0, min(255, r)), max(0, min(255, g)), max(0, min(255, b))
-        
-        # Using numpy vectorized operations for speed
-        if img_array.shape[2] >= 3:
-            rgb = img_array[:,:,:3].astype(float)
-            avg = np.mean(rgb)
-            
-            # Avoid division by zero
-            r_scale = 255/max(1, r)
-            g_scale = 255/max(1, g)
-            b_scale = 255/max(1, b)
-            
-            rgb[:,:,0] *= r_scale
-            rgb[:,:,1] *= g_scale
-            rgb[:,:,2] *= b_scale
-            
-            current_avg = np.mean(rgb)
-            if current_avg > 0:
-                rgb *= (avg / current_avg)
-                
-            img_array[:,:,:3] = np.clip(rgb, 0, 255).astype(np.uint8)
-            
-        return img_array
-
+    
     def apply_full_res_and_accept(self):
         QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
         try:
-            full_res_processed = self.process_image_pipeline(self.original_image)
+            full_res_bgra = cv2.cvtColor(np.array(self.original_image.convert("RGBA")), cv2.COLOR_RGBA2BGRA)
+
+            if self.total_rotation == 90:
+                full_res_bgra = cv2.rotate(full_res_bgra, cv2.ROTATE_90_COUNTERCLOCKWISE)
+            elif self.total_rotation == 180:
+                full_res_bgra = cv2.rotate(full_res_bgra, cv2.ROTATE_180)
+            elif self.total_rotation == 270 or self.total_rotation == -90:
+                full_res_bgra = cv2.rotate(full_res_bgra, cv2.ROTATE_90_CLOCKWISE)
+
+            params = self.get_current_params()
+            processed_np = apply_tone_sharpness(full_res_bgra, params)
+            
+            full_res_processed = Image.fromarray(cv2.cvtColor(processed_np, cv2.COLOR_BGRA2RGBA))
             
             if self.crop_rect_item:
                 rect = self.crop_rect_item.rect().normalized()
