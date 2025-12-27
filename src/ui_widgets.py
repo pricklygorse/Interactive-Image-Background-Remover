@@ -212,6 +212,18 @@ class SynchronisedGraphicsView(QGraphicsView):
         self.legend_label.hide()
         self.update_legend_style(is_dark=False)
 
+        # Crop Mode Rectangle
+        self.crop_rect_item = QGraphicsRectItem()
+        # Cosmetic pen, constant regardless of zoom
+        crop_pen = QPen(Qt.GlobalColor.white, 2, Qt.PenStyle.DashLine)
+        crop_pen.setCosmetic(True) 
+        self.crop_rect_item.setPen(crop_pen)
+        self.crop_rect_item.setZValue(1001) # Above overlays
+        self.scene().addItem(self.crop_rect_item)
+        self.crop_rect_item.hide()
+        
+        self.crop_start = None
+
     def update_legend_style(self, is_dark):
         bg = "rgba(0, 0, 0, 150)" if is_dark else "rgba(255, 255, 255, 180)"
         text = "white" if is_dark else "black"
@@ -470,6 +482,13 @@ class SynchronisedGraphicsView(QGraphicsView):
                     self.controller.handle_paint_start(scene_pos)
                     event.accept()
                     return
+            elif self.controller.crop_mode:
+                if event.button() == Qt.MouseButton.LeftButton:
+                    self.crop_start = scene_pos
+                    self.crop_rect_item.setRect(QRectF(scene_pos, scene_pos))
+                    self.crop_rect_item.show()
+                    event.accept()
+                    return
             else:
                 if event.button() == Qt.MouseButton.LeftButton:
                     self.box_start = scene_pos
@@ -507,6 +526,12 @@ class SynchronisedGraphicsView(QGraphicsView):
             self.last_paint_pos = scene_pos
             event.accept()
             return
+        
+        if self.crop_start and self.controller and self.controller.crop_mode:
+            rect = QRectF(self.crop_start, scene_pos).normalized()
+            self.crop_rect_item.setRect(rect)
+            event.accept()
+            return
             
         if self.box_start and self.temp_box_item:
             rect = QRectF(self.box_start, scene_pos).normalized()
@@ -539,6 +564,11 @@ class SynchronisedGraphicsView(QGraphicsView):
                 self.is_painting = False
                 self.last_paint_pos = None
                 self.controller.handle_paint_end()
+
+        if self.crop_start and self.controller and self.controller.crop_mode:
+             if event.button() == Qt.MouseButton.LeftButton:
+                 self.crop_start = None # Just stop dragging, don't trigger anything yet
+                 return
                 
         # Handle Box Selection Release (Left Only)
         if self.box_start and event.button() == Qt.MouseButton.LeftButton:
