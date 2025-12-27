@@ -95,7 +95,7 @@ class SaveOptionsDialog(QDialog):
     
 
 
-
+# not used anymore but keeping just incase
 class ImageEditorDialog(QDialog):
     def __init__(self, parent, image):
         super().__init__(parent)

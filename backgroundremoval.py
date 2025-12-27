@@ -34,7 +34,7 @@ except: pass
 
 import src.settings_download_manager as settings_download_manager
 from src.ui_widgets import CollapsibleFrame, SynchronisedGraphicsView, ThumbnailList, OrientationSplitter
-from src.ui_dialogs import SaveOptionsDialog, ImageEditorDialog
+#from src.ui_dialogs import SaveOptionsDialog, ImageEditorDialog
 from src.trimap_editor import TrimapEditorDialog
 from src.utils import pil2pixmap, numpy_to_pixmap, apply_tone_sharpness
 from src.constants import PAINT_BRUSH_SCREEN_SIZE, UNDO_STEPS, SOFTEN_RADIUS
@@ -351,10 +351,10 @@ class BackgroundRemoverGUI(QMainWindow):
         open_clip_act.setToolTip("Open Clipboard")
         open_clip_act.triggered.connect(self.load_clipboard)
         toolbar.addAction(open_clip_act)
-        toolbar.addSeparator()
-        edit_image_act = QAction("Edit Image (Curves/WB)", self)
-        edit_image_act.triggered.connect(self.open_image_editor)
-        toolbar.addAction(edit_image_act)
+        # toolbar.addSeparator()
+        # edit_image_act = QAction("Edit Image (Curves/WB)", self)
+        # edit_image_act.triggered.connect(self.open_image_editor)
+        # toolbar.addAction(edit_image_act)
         
         toolbar.addSeparator()
 
@@ -874,7 +874,7 @@ class BackgroundRemoverGUI(QMainWindow):
 
         layout.addSpacing(20)
 
-        lbl_modifiers = QLabel("<b>Basic Modifers</b>")
+        lbl_modifiers = QLabel("<b>BASIC MODIFIERS</b>")
         lbl_modifiers.setContentsMargins(3, 0, 0, 0)
         layout.addWidget(lbl_modifiers)
 
@@ -2744,22 +2744,6 @@ class BackgroundRemoverGUI(QMainWindow):
                 del self.current_path
             QApplication.restoreOverrideCursor()
 
-    def open_image_editor(self):
-        if not self.working_orig_image: return
-        
-        reply = QMessageBox.question(self, "Edit Image", 
-                                     "Editing the original image will reset the progress on your output image.\n\n"
-                                     "Consider saving the current mask first. Continue?",
-                                     QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
-        
-        if reply == QMessageBox.StandardButton.Yes:
-            dlg = ImageEditorDialog(self, self.working_orig_image)
-            if dlg.exec():
-                if dlg.final_image:
-                    self.working_orig_image = dlg.final_image.convert("RGBA")
-                    self.init_working_buffers()
-                    self.update_input_view()
-                    self.update_output_preview()
 
     def get_current_crop_bbox(self):
         """
