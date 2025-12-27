@@ -71,7 +71,7 @@ def apply_tone_sharpness(input_img_np, params):
     Expects (H, W, 4) BGRA.
     Returns (H, W, 4) BGRA.
     """
-    s = timer()
+    #s = timer()
     img_np = input_img_np
     
     # 1. Apply LUT (Includes Alpha identity if 4ch)
@@ -116,7 +116,7 @@ def apply_tone_sharpness(input_img_np, params):
             
             cv2.copyTo(sharpened, mask, img_np)
 
-    print(timer()-s)
+    #print(timer()-s)
     return img_np
 
 def calculate_global_lut(params):

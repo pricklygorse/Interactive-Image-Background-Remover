@@ -377,7 +377,8 @@ class BackgroundRemoverGUI(QMainWindow):
         toolbar.addSeparator()
 
         # Global Toggle
-        self.chk_paint = QCheckBox("Paintbrush (P)")
+        self.chk_paint = QCheckBox("Paintbrush/Smart Refine (P)")
+        self.chk_paint.setToolTip("Manually draw to touch-up areas. Hold CTRL while painting for Smart Refinement of that area")
 
         toolbar.addWidget(self.chk_paint)
         self.chk_paint.toggled.connect(self.toggle_paint_mode)
@@ -891,15 +892,39 @@ class BackgroundRemoverGUI(QMainWindow):
 
 
         matt_tt = "Uses a matting algorithm to estimate the transparency of mask edges.\n" + "This can improve the quality of detailed edges such as hair, especially when using binary mask models like SAM.\n" + "This requires a trimap (a foreground, unknown, background mask), either estimated from a SAM or automatic models, or manually drawn.\n" + "Alpha matting is computationally expensive and is only applied when 'Add' or 'Subtract' is clicked. Undo if the effect is unsatisfactory"
-        lbl_alpha = QLabel("<b>ALPHA MATTING</b>")
+        lbl_alpha = QLabel("<b>SMART REFINE (Alpha Matting)</b>")
         lbl_alpha.setToolTip(matt_tt)
         layout.addWidget(lbl_alpha)
-        lbl_alpha_desc = QLabel("Uses specialised algorithms to refine difficult areas like hair and fur")
+        lbl_alpha_desc = QLabel("Uses specialised algorithms to refine difficult areas like hair and fur. VitMatte is recommended")
         lbl_alpha_desc.setWordWrap(True)
         lbl_alpha_desc.setToolTip(matt_tt)
         layout.addWidget(lbl_alpha_desc)
 
-        self.chk_alpha_matting = QCheckBox("Enable Alpha Matting")
+        btn_refine_download = QPushButton("Download Refinement Models 📥")
+        btn_refine_download.setToolTip("Download Refinement Models. VitMatte Small is recommended")
+        btn_refine_download.clicked.connect(self.open_settings)
+        layout.addWidget(btn_refine_download)
+
+
+        ma_layout = QHBoxLayout()
+
+
+        matting_label = QLabel("Algorithm:")
+        matting_tt = "Additional models can be downloaded using the model manager.\nThe default included PyMatting algo can be very slow on large images.\nViTMatte (model downloader) can be much faster and far more accurate"
+        matting_label.setToolTip(matting_tt)
+        ma_layout.addWidget(matting_label)
+
+
+        self.combo_matting_algorithm = QComboBox()
+        self.combo_matting_algorithm.setToolTip(matting_tt)
+        self.populate_matting_models()
+        self.combo_matting_algorithm.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+        self.combo_matting_algorithm.setMinimumContentsLength(1)
+        ma_layout.addWidget(self.combo_matting_algorithm)
+
+        layout.addLayout(ma_layout)
+
+        self.chk_alpha_matting = QCheckBox("Apply to Model Output Mask")
         self.chk_alpha_matting.setToolTip(matt_tt)
         self.chk_alpha_matting.toggled.connect(self.handle_alpha_matting_toggle)
         layout.addWidget(self.chk_alpha_matting)
@@ -910,22 +935,7 @@ class BackgroundRemoverGUI(QMainWindow):
         am_layout = QVBoxLayout(self.alpha_matting_frame)
         am_layout.setContentsMargins(15, 5, 0, 5) # Indent options slightly
 
-        matting_label = QLabel("<b>Matting Algorithm:</b>")
-        matting_tt = "Additional models can be downloaded using the model manager.\nThe default included PyMatting algo can be very slow on large images.\nViTMatte (model downloader) can be much faster and far more accurate"
-        matting_label.setToolTip(matting_tt)
-        am_layout.addWidget(matting_label)
-
-        btn_refine_download = QPushButton("Download AI Models 📥")
-        btn_refine_download.setToolTip("Download Refinement Models. VitMatte Small is recommended")
-        btn_refine_download.clicked.connect(self.open_settings)
-        am_layout.addWidget(btn_refine_download)
-
-        self.combo_matting_algorithm = QComboBox()
-        self.combo_matting_algorithm.setToolTip(matting_tt)
-        self.populate_matting_models()
-        self.combo_matting_algorithm.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
-        self.combo_matting_algorithm.setMinimumContentsLength(1)
-        am_layout.addWidget(self.combo_matting_algorithm)
+        
 
         # --- Trimap Source Radio Buttons ---
         lbl_tri_src = QLabel("<b>Trimap Source:</b>")
@@ -990,11 +1000,42 @@ class BackgroundRemoverGUI(QMainWindow):
 
         # end alpha matting
 
+        def make_brush_refine_slider(label_text, min_v, max_v, def_v, callback=None):
+            h_layout = QHBoxLayout()
+            label = QLabel(f"{label_text}: {def_v}")
+            label.setMinimumWidth(120)
+            slider = QSlider(Qt.Orientation.Horizontal)
+            slider.setRange(min_v, max_v)
+            slider.setValue(def_v)
+            
+            def update_val(val):
+                label.setText(f"{label_text}: {val}")
+                if callback:
+                    callback()
 
+            slider.valueChanged.connect(update_val)
+            h_layout.addWidget(label)
+            h_layout.addWidget(slider)
+            return label, slider, h_layout
+        
+        layout.addSpacing(10)
+
+        lbl_brush_refine = QLabel("<b>Smart Refine Brush</b>")
+        layout.addWidget(lbl_brush_refine)
+        
+        lbl_brush_hint = QLabel("Hold <b>Ctrl + Paint</b> to locally refine edges.")
+        #lbl_brush_hint.setStyleSheet("color: #2a82da;")
+        layout.addWidget(lbl_brush_hint)
+
+        self.lbl_smart_padding, self.sl_smart_padding, pad_l = make_brush_refine_slider(
+            "Context Padding", 0, 5, 1)
+        self.sl_smart_padding.setToolTip("Determines how much 'Definite' background and foreground the AI sees around your brush stroke.\nCan have small impact on output quality")
+        layout.addLayout(pad_l)
 
         layout.addStretch()
         scroll.setWidget(container)
         return scroll
+        
 
     def create_export_tab(self):
         scroll = QScrollArea()
@@ -1634,6 +1675,7 @@ class BackgroundRemoverGUI(QMainWindow):
         QShortcut(QKeySequence("Ctrl+Y"), self).activated.connect(self.redo)
         QShortcut(QKeySequence("Ctrl+O"), self).activated.connect(self.load_image_dialog)
         QShortcut(QKeySequence("P"), self).activated.connect(self.chk_paint.toggle)
+        QShortcut(QKeySequence("Ctrl+P"), self).activated.connect(self.chk_paint.toggle)
         QShortcut(QKeySequence("Ctrl+S"), self).activated.connect(self.save_image)
         QShortcut(QKeySequence("Ctrl+Shift+S"), self).activated.connect(lambda: self.save_image(quick_save=True)) # Quick Save JPG
         
@@ -2621,8 +2663,10 @@ class BackgroundRemoverGUI(QMainWindow):
         # If a path is already being drawn, do nothing.
         if hasattr(self, 'current_path'): return
 
+        modifiers = QApplication.keyboardModifiers()
         buttons = QApplication.mouseButtons()
         self.is_erasing = bool(buttons & Qt.MouseButton.RightButton)
+        self.is_smart_refine = bool(modifiers & Qt.KeyboardModifier.ControlModifier) and not self.is_erasing
         
         zoom = self.view_input.transform().m11()
         if zoom == 0: zoom = 1
@@ -2640,7 +2684,10 @@ class BackgroundRemoverGUI(QMainWindow):
         self.temp_path_item.setPath(self.current_path)
         
         # Red for Paint, White for Erase
-        color = QColor(255, 0, 0, 150) if not self.is_erasing else QColor(255, 255, 255, 150)
+        if self.is_smart_refine:
+            color = QColor(0, 255, 255, 200) # Cyan
+        else:
+            color = QColor(255, 0, 0, 150) if not self.is_erasing else QColor(255, 255, 255, 150)
         pen = QPen(color, self.brush_width, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin)
         self.temp_path_item.setPen(pen)
         self.temp_path_item.setZValue(100) 
@@ -2709,6 +2756,52 @@ class BackgroundRemoverGUI(QMainWindow):
             arr = np.array(ptr, copy=False).reshape(h, w, 4)
             stroke_mask_np = arr[:, :, 0].copy()
 
+            if self.is_smart_refine:
+                coords = np.column_stack(np.where(stroke_mask_np > 0))
+                if coords.size == 0: return
+                
+                # padding to ensure the AI sees enough 'definite' FG/BG pixels
+                padding = int(self.brush_width * self.sl_smart_padding.value())
+
+                y1, x1 = np.min(coords, axis=0) - padding
+                y2, x2 = np.max(coords, axis=0) + padding
+                
+                x1, y1 = max(0, x1), max(0, y1)
+                x2, y2 = min(w, x2), min(h, y2)
+
+                image_patch = self.working_orig_image.crop((x1, y1, x2, y2))
+                mask_patch_np = np.array(self.working_mask.crop((x1, y1, x2, y2)))
+                local_stroke_np = stroke_mask_np[y1:y2, x1:x2]
+
+                # 128 for brush area. Anything over 220 assi,e os foreground
+                trimap_np = np.where(mask_patch_np > 220, 255, 0).astype(np.uint8)
+                trimap_np[local_stroke_np > 0] = 128
+                
+                self.set_loading(True, "Smart Refining...")
+                
+                matting_params = {
+                    'image_crop': image_patch,
+                    'trimap_np': trimap_np,
+                    'x_off': x1, 'y_off': y1,
+                    'algorithm': self.combo_matting_algorithm.currentText(),
+                    'provider_data': self.combo_auto_model_EP.currentData(),
+                    'local_stroke_np': local_stroke_np # Pass this to the handler
+                }
+
+                def _do_smart_refine_work(model_manager, m_params):
+                    refined_patch = model_manager.run_matting(
+                        m_params['algorithm'], 
+                        m_params['image_crop'], 
+                        m_params['trimap_np'], 
+                        m_params['provider_data']
+                    )
+                    return refined_patch, m_params
+
+                self.worker = InferenceWorker(_do_smart_refine_work, self.model_manager, matting_params)
+                self.worker.finished.connect(self._on_smart_refine_finished)
+                self.worker.start()
+                return 
+
             if self.chk_soften.isChecked():
                 # ksize (0,0) allows OpenCV to compute the kernel size automatically from sigma
                 stroke_mask_np = cv2.GaussianBlur(stroke_mask_np, (0, 0), sigmaX=SOFTEN_RADIUS)
@@ -2744,6 +2837,20 @@ class BackgroundRemoverGUI(QMainWindow):
                 del self.current_path
             QApplication.restoreOverrideCursor()
 
+    def _on_smart_refine_finished(self, result):
+        refined_alpha, m_params = result
+        x, y = m_params['x_off'], m_params['y_off']
+        local_stroke_np = m_params['local_stroke_np']
+
+        # stroke to mask
+        stencil = Image.fromarray(local_stroke_np, mode="L")
+
+        self.add_undo_step()
+        
+        self.working_mask.paste(refined_alpha, (x, y), mask=stencil)
+        
+        self.set_loading(False, "Smart Refine applied to stroke.")
+        self.update_output_preview()
 
     def get_current_crop_bbox(self):
         """
@@ -2908,7 +3015,7 @@ Controls:
 - Middle Click: Pan
 - Scroll: Zoom 
 - Ctrl: Zoom with touchpad
-- P: Toggle Paintbrush (draw manually on mask). Right click - Add, Left click - Erase
+- P: Toggle Paintbrush (draw manually on mask). Left click - Add, Right click - Erase, Ctrl+Left Click - Smart Refine
 
 Shortcuts:
 - A: Add current mask to output

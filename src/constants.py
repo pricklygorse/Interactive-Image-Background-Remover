@@ -1,6 +1,6 @@
 # Paint brush is fixed screen size for simplicity, user zooms into image to use the paint brush
 # as a 'relative' smaller brush
-PAINT_BRUSH_SCREEN_SIZE = 30 
+PAINT_BRUSH_SCREEN_SIZE = 50 
 
 # for mask edge refinement
 SOFTEN_RADIUS = 2 
