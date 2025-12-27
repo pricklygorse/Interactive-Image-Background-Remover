@@ -2172,9 +2172,9 @@ class BackgroundRemoverGUI(QMainWindow):
                 ksize = (rad, rad)
 
                 # normalised convolution
-                weighted_blur = cv2.blur(rgb * weight_map[..., None], ksize)
+                weighted_blur = cv2.stackBlur(rgb * weight_map[..., None], ksize)
                 
-                blurred_weights = cv2.blur(weight_map, ksize)
+                blurred_weights = cv2.stackBlur(weight_map, ksize)
 
                 result = weighted_blur / (blurred_weights[..., None] + 1e-8)
                 
