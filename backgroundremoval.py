@@ -1678,6 +1678,8 @@ class BackgroundRemoverGUI(QMainWindow):
         QShortcut(QKeySequence("Ctrl+P"), self).activated.connect(self.chk_paint.toggle)
         QShortcut(QKeySequence("Ctrl+S"), self).activated.connect(self.save_image)
         QShortcut(QKeySequence("Ctrl+Shift+S"), self).activated.connect(lambda: self.save_image(quick_save=True)) # Quick Save JPG
+        QShortcut(QKeySequence("Ctrl+C"), self).activated.connect(lambda: self.save_image(clipboard=True))
+        QShortcut(QKeySequence("Ctrl+V"), self).activated.connect(self.load_clipboard)
         
         QShortcut(QKeySequence("U"), self).activated.connect(lambda: self.run_automatic_model("u2net"))
         QShortcut(QKeySequence("I"), self).activated.connect(lambda: self.run_automatic_model("isnet-general-use"))
@@ -2630,8 +2632,15 @@ class BackgroundRemoverGUI(QMainWindow):
         self.update_output_preview()
         
     def copy_input_to_output(self):
-        self.add_undo_step()
-        self.working_mask = Image.new("L", self.working_orig_image.size, 255)
+        if self.working_orig_image:
+            self.add_undo_step()
+            # Use the alpha channel of the image as the mask (e.g. PNG files)
+            # JPG will gain an alpha of 255 when converted to RGBA in load_image
+            self.working_mask = self.working_orig_image.split()[3]
+        else:
+            self.add_undo_step()
+            self.working_mask = Image.new("L", self.working_orig_image.size, 255)
+        
         self.update_output_preview()
 
     def toggle_paint_mode(self, enabled):
