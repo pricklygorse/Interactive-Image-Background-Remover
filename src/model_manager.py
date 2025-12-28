@@ -5,7 +5,7 @@ import numpy as np
 import onnxruntime as ort
 from PIL import Image
 from timeit import default_timer as timer
-from pymatting import estimate_alpha_cf, estimate_foreground_ml
+from pymatting import estimate_alpha_cf, estimate_foreground_ml, estimate_foreground_cf
 
 from .constants import SAM_TRT_WARMUP_POINTS
 
@@ -547,105 +547,102 @@ class ModelManager:
             self.loaded_matting_models[cache_key] = session
         return session
     
-    def run_matting(self, algorithm_name, image_pil, trimap_np, provider_data):
+    def run_matting(self, algorithm_name, image_pil, trimap_np, provider_data, longest_edge_limit=1024):
+
+        orig_w, orig_h = image_pil.size
+        
+        # Calculate Target Dimensions constrained to longest edge, without upscaling
+        current_longest_edge = max(orig_w, orig_h)
+        effective_limit = min(current_longest_edge, longest_edge_limit)
+        
+        if orig_w >= orig_h:
+            target_w = effective_limit
+            target_h = int(effective_limit * (orig_h / orig_w))
+        else:
+            target_h = effective_limit
+            target_w = int(effective_limit * (orig_w / orig_h))
+
+        # Force to nearest multiple of 32 (Requirement for ViTMatte/IndexNet, will make little difference to pymatting)
+        target_w = max(32, (target_w // 32) * 32)
+        target_h = max(32, (target_h // 32) * 32)
+        target_size = (target_w, target_h)
+        
+        img_resized = np.array(image_pil.convert("RGB").resize(target_size, Image.BILINEAR))
+        tri_resized = cv2.resize(trimap_np, target_size, interpolation=cv2.INTER_NEAREST)
+
         name_lower = algorithm_name.lower()
         if "vitmatte" in name_lower:
             session = self.get_matting_session(algorithm_name, provider_data)
-            return self._run_vitmatte_inference(session, image_pil, trimap_np)
+            return self._run_vitmatte_inference(session, img_resized, tri_resized, image_pil.size)
         elif "indexnet" in name_lower:
             session = self.get_matting_session(algorithm_name, provider_data)
-            return self._run_indexnet_inference(session, image_pil, trimap_np)
+            return self._run_indexnet_inference(session, img_resized, tri_resized, image_pil.size)
         else:
-            return self._run_pymatting(image_pil, trimap_np)
+            return self._run_pymatting(img_resized, tri_resized, image_pil.size)
 
-    def _run_pymatting(self, image_crop_pil, trimap_np):
+    def _run_pymatting(self, img_resized, tri_resized, original_size):
         """
         Calculates the alpha matte using the PyMatting library.
         Returns the alpha matte as a PIL Image.
         """
-        img_normalized = np.array(image_crop_pil.convert("RGB")) / 255.0
-        trimap_normalized = trimap_np / 255.0
+        s = timer()
+        img_normalised = img_resized / 255.0
+        trimap_normalised = tri_resized / 255.0
 
-        alpha = estimate_alpha_cf(img_normalized, trimap_normalized)
+        alpha = estimate_alpha_cf(img_normalised, trimap_normalised)
         alpha = np.clip(alpha * 255, 0, 255).astype(np.uint8)
-        
+
+        if alpha.shape[::-1] != original_size:
+            alpha = cv2.resize(alpha, original_size, interpolation=cv2.INTER_LINEAR)
+            
+        print(f"PyMatting CF | Size: {img_resized.shape[::-1]} | Time: {timer()-s:.1f}s")
         return Image.fromarray(alpha, mode="L")
 
-    def _run_vitmatte_inference(self, session, image_crop_pil, trimap_np):
+    def _run_vitmatte_inference(self, session, img_resized, tri_resized, original_size):
         """
         Runs inference with a ViTMatte ONNX model.
         Returns the alpha matte as a PIL Image.
         """
         
-        # Preprocess
-        original_size = image_crop_pil.size
-        trimap_pil = Image.fromarray(trimap_np)
+        image_np = (img_resized.astype(np.float32) / 255.0 - np.array([0.485, 0.456, 0.406])) / np.array([0.229, 0.224, 0.225])
+        trimap_np = np.expand_dims(tri_resized.astype(np.float32) / 255.0, axis=-1)
         
-        # use 1024 for performance, but any multiple of 32 will work
-        # TODO maybe let user choose size. On GPU no reason to restrict users
-        target_size = (1024,1024)
-
-        image_resized = image_crop_pil.convert("RGB").resize(target_size, Image.BILINEAR)
-        trimap_resized = trimap_pil.convert("L").resize(target_size, Image.NEAREST)
-
-        image_np = (np.array(image_resized, dtype=np.float32) / 255.0 - np.array([0.485, 0.456, 0.406])) / np.array([0.229, 0.224, 0.225])
-        trimap_np_resized = np.expand_dims(np.array(trimap_resized, dtype=np.float32) / 255.0, axis=-1)
-        
-        combined = np.concatenate((image_np, trimap_np_resized), axis=2)
+        combined = np.concatenate((image_np, trimap_np), axis=2)
         combined = np.transpose(combined, (2, 0, 1))[np.newaxis, ...].astype(np.float32)
 
-        # Inference
         input_name = session.get_inputs()[0].name
         outputs = session.run(None, {input_name: combined})
 
-        # Postprocess
         alpha = outputs[0][0][0]
         alpha_image = Image.fromarray((alpha * 255).astype(np.uint8), mode='L')
-        
         return alpha_image.resize(original_size, Image.LANCZOS)
     
-    def _run_indexnet_inference(self, session, image_pil, trimap_np):
-        # 1. Prepare dimensions (Multiples of 32)
-        orig_w, orig_h = image_pil.size
-        target_w = (orig_w + 31) // 32 * 32
-        target_h = (orig_h + 31) // 32 * 32
-
-        # 2. Resize and Preprocess
-        # Using BILINEAR for image, NEAREST for trimap to preserve the 0, 128, 255 values
-        img_resized = np.array(image_pil.convert("RGB").resize((target_w, target_h), Image.BILINEAR))
-        tri_resized = np.array(Image.fromarray(trimap_np).resize((target_w, target_h), Image.NEAREST))
-
-        # Combine to 4 channels and normalize to 0.0 - 1.0
-        # IndexNet does NOT use ImageNet stats, just a simple divide by 255
-        input_data = np.zeros((1, 4, target_h, target_w), dtype=np.float32)
+    def _run_indexnet_inference(self, session, img_resized, tri_resized, original_size):
+        h, w = img_resized.shape[:2]
+        input_data = np.zeros((1, 4, h, w), dtype=np.float32)
         input_data[0, 0:3, :, :] = img_resized.transpose(2, 0, 1)
         input_data[0, 3, :, :] = tri_resized
         input_data /= 255.0
 
-        # 3. Inference
         input_name = session.get_inputs()[0].name
         result = session.run(None, {input_name: input_data})[0]
 
-        # 4. Post-process
-        alpha = result[0][0] # IndexNet output is usually [1, 1, H, W]
+        alpha = result[0][0]
+        alpha_resized = cv2.resize(alpha, original_size, interpolation=cv2.INTER_LINEAR)
         
-        # Resize back to original
-        alpha_resized = cv2.resize(alpha, (orig_w, orig_h), interpolation=cv2.INTER_LINEAR)
-        
-        # Apply the IndexNet "Final Output" logic: 
-        # Force pixels where trimap was 0 to 0, and 255 to 255
         alpha_final = np.clip(alpha_resized * 255, 0, 255).astype(np.uint8)
-        alpha_final[trimap_np == 0] = 0
-        alpha_final[trimap_np == 255] = 255
-
+        # Final resize and trimap constraint
         return Image.fromarray(alpha_final, mode="L")
 
-    def estimate_foreground(self, image_pil, alpha_mask_pil):
+    def estimate_foreground(self, image_pil, alpha_mask_pil, algorithm='ml'):
         """Refines foreground colors to remove background halos."""
         img_rgb = np.array(image_pil.convert("RGB")) / 255.0
         alpha = np.array(alpha_mask_pil.convert("L")) / 255.0
         
-        fg_rgb = estimate_foreground_ml(img_rgb, alpha)
+        if algorithm == 'cf':
+            fg_rgb = estimate_foreground_cf(img_rgb, alpha)
+        else:
+            fg_rgb = estimate_foreground_ml(img_rgb, alpha)
         fg_rgb = np.clip(fg_rgb * 255, 0, 255).astype(np.uint8)
         
         # Return as RGBA PIL image

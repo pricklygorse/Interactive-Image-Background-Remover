@@ -250,6 +250,19 @@ class BackgroundRemoverGUI(QMainWindow):
 
         self.in_out_splitter.addWidget(self.view_input)
 
+        # Input view UI additions
+        self.chk_input_mask_only = QCheckBox("Show Only Model Ouput", self.view_input)
+        self.chk_input_mask_only.toggled.connect(self.show_mask_overlay)
+        self.chk_input_mask_only.move(10, 10)
+        self.chk_input_mask_only.setStyleSheet("""
+            QCheckBox {
+                background-color: rgba(120, 120, 120, 120);
+                color: white;
+                padding: 4px;
+                border-radius: 4px;
+            }
+        """)
+
 
         # Output View
         self.scene_output = QGraphicsScene()
@@ -924,7 +937,7 @@ class BackgroundRemoverGUI(QMainWindow):
 
         layout.addLayout(ma_layout)
 
-        self.chk_alpha_matting = QCheckBox("Apply to Model Output Mask")
+        self.chk_alpha_matting = QCheckBox("Enable Alpha Matting")
         self.chk_alpha_matting.setToolTip(matt_tt)
         self.chk_alpha_matting.toggled.connect(self.handle_alpha_matting_toggle)
         layout.addWidget(self.chk_alpha_matting)
@@ -1020,10 +1033,11 @@ class BackgroundRemoverGUI(QMainWindow):
         
         layout.addSpacing(10)
 
-        lbl_brush_refine = QLabel("<b>Smart Refine Brush</b>")
+        lbl_brush_refine = QLabel("<b>Smart Refine Brush (Experimental)</b>")
         layout.addWidget(lbl_brush_refine)
         
-        lbl_brush_hint = QLabel("Hold <b>Ctrl + Paint</b> to locally refine edges.")
+        lbl_brush_hint = QLabel("Hold <b>Ctrl + Paint</b> to locally refine edges such as hair in the output image.")
+        lbl_brush_hint.setWordWrap(True)
         #lbl_brush_hint.setStyleSheet("color: #2a82da;")
         layout.addWidget(lbl_brush_hint)
 
@@ -1680,6 +1694,11 @@ class BackgroundRemoverGUI(QMainWindow):
         QShortcut(QKeySequence("Ctrl+Shift+S"), self).activated.connect(lambda: self.save_image(quick_save=True)) # Quick Save JPG
         QShortcut(QKeySequence("Ctrl+C"), self).activated.connect(lambda: self.save_image(clipboard=True))
         QShortcut(QKeySequence("Ctrl+V"), self).activated.connect(self.load_clipboard)
+
+        QShortcut(QKeySequence("1"), self).activated.connect(lambda: self.tabs.setCurrentIndex(0))
+        QShortcut(QKeySequence("2"), self).activated.connect(lambda: self.tabs.setCurrentIndex(1))
+        QShortcut(QKeySequence("3"), self).activated.connect(lambda: self.tabs.setCurrentIndex(2))
+        QShortcut(QKeySequence("4"), self).activated.connect(lambda: self.tabs.setCurrentIndex(3))
         
         QShortcut(QKeySequence("U"), self).activated.connect(lambda: self.run_automatic_model("u2net"))
         QShortcut(QKeySequence("I"), self).activated.connect(lambda: self.run_automatic_model("isnet-general-use"))
@@ -2143,7 +2162,15 @@ class BackgroundRemoverGUI(QMainWindow):
 
 
     def show_mask_overlay(self):
-        if self.model_output_mask:
+        if self.chk_input_mask_only.isChecked():
+            # Show mask as grayscale, hiding original image
+            self.overlay_pixmap_item.setOpacity(1.0)
+            self.overlay_pixmap_item.setPixmap(pil2pixmap(self.model_output_mask))
+            self.input_pixmap_item.hide()
+        else:
+            # Show blue overlay on top of original image
+            self.overlay_pixmap_item.setOpacity(0.5)
+            self.input_pixmap_item.show()
             blue = Image.new("RGB", self.working_orig_image.size, (0, 0, 255))
             overlay = blue.convert("RGBA")
             overlay.putalpha(self.model_output_mask)
@@ -2363,6 +2390,7 @@ class BackgroundRemoverGUI(QMainWindow):
             try:
                 image_crop, x_off, y_off = self.get_viewport_crop()
                 trimap_np = None
+                limit = int(self.settings.value("matting_longest_edge", 1024))
 
                 # Get the correct trimap based on UI selection
                 if self.rb_trimap_custom.isChecked() and hasattr(self, 'user_trimap'):
@@ -2383,7 +2411,8 @@ class BackgroundRemoverGUI(QMainWindow):
                     'algorithm': self.combo_matting_algorithm.currentText(),
                     # For now use the provider we have selected in automatic models combobox
                     # Unsure if worth giving user the option to select EP, since VitMatte is essentially a automatic model
-                    'provider_data': self.combo_auto_model_EP.currentData()
+                    'provider_data': self.combo_auto_model_EP.currentData(),
+                    'longest_edge_limit': limit
                 }
             except Exception as e:
                 QMessageBox.critical(self, "Alpha Matting Prep Error", str(e))
@@ -2398,7 +2427,8 @@ class BackgroundRemoverGUI(QMainWindow):
                     m_params['algorithm'], 
                     m_params['image_crop'], 
                     m_params['trimap_np'], 
-                    m_params['provider_data']
+                    m_params['provider_data'],
+                    longest_edge_limit=m_params['longest_edge_limit']
                 )
 
                 if matted_alpha_crop:
@@ -2460,14 +2490,14 @@ class BackgroundRemoverGUI(QMainWindow):
             
             try:
                 current_mask_hash = hash(self.working_mask.tobytes())
-                
-                current_state_key = (current_mask_hash, adj_hash)
+                fg_algo = self.settings.value("fg_correction_algo", "ml")
+                current_state_key = (current_mask_hash, adj_hash, fg_algo)
 
                 if current_state_key != self.working_mask_hash:
 
-                    self.set_loading(True, "Estimating foreground colour correction")
+                    self.set_loading(True, f"Estimating foreground colour correction ({fg_algo.upper()})")
 
-                    cutout = self.model_manager.estimate_foreground(self.working_orig_image, self.working_mask)
+                    cutout = self.model_manager.estimate_foreground(self.working_orig_image, self.working_mask, fg_algo)
 
                     self.set_loading(False)
                     self.working_mask_hash = current_state_key
