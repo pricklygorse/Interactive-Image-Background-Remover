@@ -186,6 +186,9 @@ class BackgroundRemoverGUI(QMainWindow):
             
             if cli_args.load_mask:
                 QTimer.singleShot(60, lambda: self.load_associated_mask(self.image_paths[0]))
+
+            if cli_args.load_trimap:
+                QTimer.singleShot(70, lambda: self.load_associated_trimap(self.image_paths[0]))
         
         saved_theme = self.settings.value("theme", "light")
         self.set_theme(saved_theme)
@@ -1694,6 +1697,30 @@ class BackgroundRemoverGUI(QMainWindow):
                      QMessageBox.warning(self, "Mask Size Mismatch", "The associated mask's dimensions do not match the base image.")
             except Exception as e:
                 QMessageBox.critical(self, "Error Loading Mask", f"Could not load the associated mask:\n{e}")
+    
+    def load_associated_trimap(self, image_path):
+        """
+        Looks for a file named [image_name]_trimap.png and loads it into 
+        the custom trimap buffer without enabling alpha matting.
+        """
+        trimap_path = os.path.splitext(image_path)[0] + "_trimap.png"
+        if os.path.exists(trimap_path):
+            try:
+                trimap = Image.open(trimap_path).convert("L")
+                if trimap.size == self.working_orig_image.size:
+                    self.user_trimap = trimap
+                    
+                    # Set UI to Custom mode but don't enable alpha matting or display yet
+                    # This is so it doesnt get overwritten by automatic trimap editing
+                    self.rb_trimap_custom.blockSignals(True)
+                    self.rb_trimap_custom.setChecked(True)
+                    self.rb_trimap_custom.blockSignals(False)
+                    
+                    self.status_label.setText(f"Loaded associated trimap: {os.path.basename(trimap_path)}")
+                else:
+                    print(f"Trimap error: size mismatch for {trimap_path}")
+            except Exception as e:
+                print(f"Error loading associated trimap: {e}")
 
     def load_blank_image(self):
         self.working_orig_image = Image.new("RGBA", (800, 600), (0,0,0,0))
@@ -2893,6 +2920,7 @@ if __name__ == "__main__":
     parser.add_argument("images", nargs="*", help="Paths to images")
     
     parser.add_argument("--alpha-matting", action="store_true", help="Start with Alpha Matting enabled")
+    parser.add_argument("--load-trimap", action="store_true", help="Load associated _trimap.png file if present")
     parser.add_argument("--bg-colour", type=str)
     parser.add_argument("--binary", action="store_true", help="Start with Binary Mask enabled")
     parser.add_argument("--soften", action="store_true", help="Start with Soften Mask enabled")
