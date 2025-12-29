@@ -2818,12 +2818,14 @@ class BackgroundRemoverGUI(QMainWindow):
                 
                 self.set_loading(True, "Smart Refining...")
                 
+                limit = int(self.settings.value("matting_longest_edge", 1024))
                 matting_params = {
                     'image_crop': image_patch,
                     'trimap_np': trimap_np,
                     'x_off': x1, 'y_off': y1,
                     'algorithm': self.combo_matting_algorithm.currentText(),
                     'provider_data': self.combo_auto_model_EP.currentData(),
+                    'longest_edge_limit': limit,
                     'local_stroke_np': local_stroke_np # Pass this to the handler
                 }
 
@@ -2832,7 +2834,8 @@ class BackgroundRemoverGUI(QMainWindow):
                         m_params['algorithm'], 
                         m_params['image_crop'], 
                         m_params['trimap_np'], 
-                        m_params['provider_data']
+                        m_params['provider_data'],
+                        m_params['longest_edge_limit']
                     )
                     return refined_patch, m_params
 
