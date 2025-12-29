@@ -3,6 +3,9 @@ import numpy as np
 import cv2
 import math
 from timeit import default_timer as timer
+import os
+from PIL import Image
+
 
 
 
@@ -186,3 +189,155 @@ def calculate_saturation_matrix(sat):
     ], dtype=np.float32)
     
     return matrix
+
+
+def generate_drop_shadow(mask_pil, opacity, blur_radius, offset_x, offset_y, shadow_downscale=0.125):
+    """
+    Generates a shadow layer based on a mask. 
+    Optimised using numpy and downscaling for performance
+    """
+    w, h = mask_pil.size
+    if isinstance(mask_pil, np.ndarray):
+        m_np = mask_pil
+    else:
+        m_np = np.array(mask_pil)
+
+    # Scale down for fast blur processing
+    small_w = max(1, int(w * shadow_downscale))
+    small_h = max(1, int(h * shadow_downscale))
+    
+    m_small = cv2.resize(m_np, (small_w, small_h), interpolation=cv2.INTER_NEAREST)
+    
+    #blur_size = max(1, int(blur_radius * shadow_downscale))
+
+    rad = int(blur_radius  * shadow_downscale)
+    if rad % 2 == 0: rad += 1
+    ksize = (rad, rad)
+
+    # GaussianBlur on the downscaled mask
+    m_blur_small = cv2.stackBlur(m_small, ksize)
+    m_blur_small = cv2.convertScaleAbs(m_blur_small, alpha=opacity / 255.0)
+    
+    # Scale back up to original resolution
+    m_full = cv2.resize(m_blur_small, (w, h), interpolation=cv2.INTER_LINEAR)
+    
+    # Create the RGBA shadow layer
+    shadow_layer_np = np.zeros((h, w, 4), dtype=np.uint8)
+    # The shadow is black (0,0,0), we only populate the Alpha channel
+    shifted_alpha = np.zeros((h, w), dtype=np.uint8)
+    
+    # Calculate slice boundaries for the offset translation
+    src_y1, src_y2 = max(0, -offset_y), min(h, h - offset_y)
+    src_x1, src_x2 = max(0, -offset_x), min(w, w - offset_x)
+    dst_y1, dst_y2 = max(0, offset_y), min(h, h + offset_y)
+    dst_x1, dst_x2 = max(0, offset_x), min(w, w + offset_x)
+
+    if dst_y2 > dst_y1 and dst_x2 > dst_x1:
+        shifted_alpha[dst_y1:dst_y2, dst_x1:dst_x2] = m_full[src_y1:src_y2, src_x1:src_x2]
+    
+    shadow_layer_np[:, :, 3] = shifted_alpha
+    return Image.fromarray(shadow_layer_np)
+
+
+def generate_blurred_background(image, mask, blur_radius):
+    """
+    Uses a weighted/normalised convolution technique to blur the background 
+    without the subject's colours bleeding into the blur.
+    """
+    if isinstance(image, np.ndarray):
+        orig_np = image
+    else:
+        orig_np = np.array(image)
+
+    rgb = orig_np[:, :, :3]
+    
+    if isinstance(mask, np.ndarray):
+        m_np = mask
+    else:
+        m_np = np.array(mask)
+
+    # Expand mask slightly to ensure the subject edges are fully excluded from the blur source
+    dilation_size = 7 
+    kernel = np.ones((dilation_size, dilation_size), np.uint8)
+    dilated_mask = cv2.dilate(m_np, kernel, iterations=1)
+    
+    # Create weight map (Background = 1.0, Dilated Subject = 0.0)
+    weight_map = (255 - dilated_mask).astype(np.float32) / 255.0
+              
+    rad = blur_radius
+    if rad % 2 == 0: rad += 1
+    ksize = (rad, rad)
+
+    # Apply weighted stackBlur (Normalised Convolution)
+    # stackBlur for nearly gaussian blur at much faster speed
+    weighted_blur = cv2.stackBlur(rgb * weight_map[..., None], ksize)
+    blurred_weights = cv2.stackBlur(weight_map, ksize)
+
+    # Divide by blurred weights to normalise intensity
+    result = weighted_blur / (blurred_weights[..., None] + 1e-8)
+    
+    blur_final_np = cv2.convertScaleAbs(result)
+    return Image.fromarray(blur_final_np).convert("RGBA")
+
+
+def sanitise_filename_for_windows(path: str) -> str:
+
+    """
+    On Windows, strip invalid filename characters from the basename:
+    \\/:*?"<>|
+    Directory part (e.g. C:\\folder) is left intact.
+    """
+    if os.name != "nt":
+        return path
+
+    directory, basename = os.path.split(path)
+    invalid_chars = r'\/:*?"<>|'
+    cleaned = ''.join(c for c in basename if c not in invalid_chars)
+
+    if not cleaned:
+        cleaned = "output"
+
+    return os.path.join(directory, cleaned)
+
+
+def get_current_crop_bbox(working_mask, drop_shadow, sl_s_x, sl_s_y, sl_s_r):
+    """
+    Calculates the bounding box of the current mask, including shadows if enabled.
+    Returns (min_x, min_y, max_x, max_y) or None if the mask is empty.
+    """
+    if not working_mask:
+        return None
+
+    bbox = working_mask.getbbox()
+    if not bbox:
+        return None
+
+    min_x, min_y, max_x, max_y = bbox
+
+    if drop_shadow:
+        shadow_off_x = sl_s_x
+        shadow_off_y = sl_s_y
+        s_rad = sl_s_r
+
+        # Expand bounding box to include the shadow and its blur radius
+        s_min_x = min_x + shadow_off_x - s_rad
+        s_min_y = min_y + shadow_off_y - s_rad
+        s_max_x = max_x + shadow_off_x + s_rad
+        s_max_y = max_y + shadow_off_y + s_rad
+
+        min_x = min(min_x, s_min_x)
+        min_y = min(min_y, s_min_y)
+        max_x = max(max_x, s_max_x)
+        max_y = max(max_y, s_max_y)
+
+    # Clamp to image boundaries
+    orig_w, orig_h = working_mask.size
+    final_min_x = max(0, int(min_x))
+    final_min_y = max(0, int(min_y))
+    final_max_x = min(orig_w, int(max_x))
+    final_max_y = min(orig_h, int(max_y))
+
+    if final_max_x <= final_min_x or final_max_y <= final_min_y:
+        return None
+
+    return (final_min_x, final_min_y, final_max_x, final_max_y)

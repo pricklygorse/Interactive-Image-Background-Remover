@@ -33,10 +33,12 @@ try: pyi_splash.update_text("Loading App Scripts")
 except: pass
 
 import src.settings_download_manager as settings_download_manager
+from src.ui_styles import apply_theme
 from src.ui_widgets import CollapsibleFrame, SynchronisedGraphicsView, ThumbnailList, OrientationSplitter
 #from src.ui_dialogs import SaveOptionsDialog, ImageEditorDialog
 from src.trimap_editor import TrimapEditorDialog
-from src.utils import pil2pixmap, numpy_to_pixmap, apply_tone_sharpness
+from src.utils import pil2pixmap, numpy_to_pixmap, apply_tone_sharpness, generate_drop_shadow, \
+    generate_blurred_background, sanitise_filename_for_windows, get_current_crop_bbox
 from src.constants import PAINT_BRUSH_SCREEN_SIZE, UNDO_STEPS, SOFTEN_RADIUS
 
 try: pyi_splash.update_text("Loading pymatting (Compiles on first run, approx 1-2 minutes)")
@@ -1111,7 +1113,7 @@ class BackgroundRemoverGUI(QMainWindow):
         self.lbl_s_op, self.sl_s_op, h_op_layout = make_slider_row("Opacity", 0, 255, 128)
         self.lbl_s_x, self.sl_s_x, h_x_layout = make_slider_row("X Offset", -100, 100, 30)
         self.lbl_s_y, self.sl_s_y, h_y_layout = make_slider_row("Y Offset", -100, 100, 30)
-        self.lbl_s_r, self.sl_s_r, h_r_layout = make_slider_row("Blur Rad", 1, 50, 10)
+        self.lbl_s_r, self.sl_s_r, h_r_layout = make_slider_row("Blur Rad", 1, 200, 10)
         
         sf_layout.addLayout(h_op_layout)
         sf_layout.addLayout(h_x_layout)
@@ -1284,94 +1286,9 @@ class BackgroundRemoverGUI(QMainWindow):
             self.thumbnail_strip.setCurrentRow(self.current_image_index)
 
     def set_theme(self, mode):
-        """Applies light or dark mode and saves the preference.
-        Unfortunately QApplication.StyleHints.setStylesheet(Qt.Color.Dark)
-        doesn't change the theme after widgets are drawn (outside of if name==main)
-        So manual theming is required
-        """
-        app = QApplication.instance()
-        if not app: return
+        apply_theme(self, mode)
 
-        if mode == 'dark':
-            app.setStyle("Fusion")
-            dark_palette = QPalette()
-            dark_color = QColor(45, 45, 45)
-            disabled_color = QColor(127, 127, 127)
-            dark_palette.setColor(QPalette.ColorRole.Window, dark_color)
-            dark_palette.setColor(QPalette.ColorRole.WindowText, Qt.GlobalColor.white)
-            dark_palette.setColor(QPalette.ColorRole.Base, QColor(25, 25, 25))
-            dark_palette.setColor(QPalette.ColorRole.AlternateBase, dark_color)
-            dark_palette.setColor(QPalette.ColorRole.ToolTipBase, Qt.GlobalColor.white)
-            dark_palette.setColor(QPalette.ColorRole.ToolTipText, Qt.GlobalColor.white)
-            dark_palette.setColor(QPalette.ColorRole.Text, Qt.GlobalColor.white)
-            dark_palette.setColor(QPalette.ColorRole.Button, dark_color)
-            dark_palette.setColor(QPalette.ColorRole.ButtonText, Qt.GlobalColor.white)
-            dark_palette.setColor(QPalette.ColorRole.BrightText, Qt.GlobalColor.red)
-            dark_palette.setColor(QPalette.ColorRole.Link, QColor(42, 130, 218))
-            dark_palette.setColor(QPalette.ColorRole.Highlight, QColor(42, 130, 218))
-            dark_palette.setColor(QPalette.ColorRole.HighlightedText, Qt.GlobalColor.black)
-            dark_palette.setColor(QPalette.ColorGroup.Disabled, QPalette.ColorRole.WindowText, disabled_color)
-            dark_palette.setColor(QPalette.ColorGroup.Disabled, QPalette.ColorRole.Text, disabled_color)
-            dark_palette.setColor(QPalette.ColorGroup.Disabled, QPalette.ColorRole.ButtonText, disabled_color)
-            dark_palette.setColor(QPalette.ColorGroup.Disabled, QPalette.ColorRole.Highlight, QColor(80, 80, 80))
-            dark_palette.setColor(QPalette.ColorGroup.Disabled, QPalette.ColorRole.HighlightedText, disabled_color)
-            app.setPalette(dark_palette)
-
-            hatch_color = QColor(40, 40, 40)
-            self.view_input.setBackgroundBrush(QBrush(hatch_color, Qt.BrushStyle.DiagCrossPattern))
-            self.view_output.setBackgroundBrush(QBrush(hatch_color, Qt.BrushStyle.DiagCrossPattern))
-
-            self.commit_zone.setStyleSheet("""
-                QFrame { background-color: rgba(255, 255, 255, 0.05); border: 1px solid #555; border-radius: 4px; }
-                QLabel { color: white; background: transparent; border: none; }
-            """)
-            
-            
-
-            self.settings.setValue("theme", "dark")
-        else: # light mode
-            # manually set because windows sets default as black when system is black. opposite to linux....
-            app.setStyle("Fusion")
-            light_palette = QPalette()
-            light_color = QColor(240, 240, 240)            
-            light_palette.setColor(QPalette.ColorRole.Window, light_color)
-            light_palette.setColor(QPalette.ColorRole.WindowText, Qt.GlobalColor.black)
-            light_palette.setColor(QPalette.ColorRole.Base, Qt.GlobalColor.white)
-            light_palette.setColor(QPalette.ColorRole.AlternateBase, QColor(233, 233, 233))
-            light_palette.setColor(QPalette.ColorRole.ToolTipBase, Qt.GlobalColor.white)
-            light_palette.setColor(QPalette.ColorRole.ToolTipText, Qt.GlobalColor.black)
-            light_palette.setColor(QPalette.ColorRole.Text, Qt.GlobalColor.black)
-            light_palette.setColor(QPalette.ColorRole.Button, light_color)
-            light_palette.setColor(QPalette.ColorRole.ButtonText, Qt.GlobalColor.black)
-            light_palette.setColor(QPalette.ColorRole.BrightText, Qt.GlobalColor.red)
-            light_palette.setColor(QPalette.ColorRole.Link, QColor(0, 0, 255))
-            light_palette.setColor(QPalette.ColorRole.Highlight, QColor(0, 120, 215))
-            light_palette.setColor(QPalette.ColorRole.HighlightedText, Qt.GlobalColor.white)
-            disabled_text = QColor(120, 120, 120)
-            light_palette.setColor(QPalette.ColorGroup.Disabled, QPalette.ColorRole.WindowText, disabled_text)
-            light_palette.setColor(QPalette.ColorGroup.Disabled, QPalette.ColorRole.Text, disabled_text)
-            light_palette.setColor(QPalette.ColorGroup.Disabled, QPalette.ColorRole.ButtonText, disabled_text)
-            light_palette.setColor(QPalette.ColorGroup.Disabled, QPalette.ColorRole.Highlight, QColor(150, 150, 150))
-            light_palette.setColor(QPalette.ColorGroup.Disabled, QPalette.ColorRole.HighlightedText, Qt.GlobalColor.white)
-
-            app.setPalette(light_palette)
-            
-            hatch_color = QColor(230, 230, 230)
-            self.view_input.setBackgroundBrush(QBrush(hatch_color, Qt.BrushStyle.DiagCrossPattern))
-            self.view_output.setBackgroundBrush(QBrush(hatch_color, Qt.BrushStyle.DiagCrossPattern))
-
-            self.commit_zone.setStyleSheet("""
-                QFrame { background-color: rgba(0, 0, 0, 0.05); border: 1px solid #ccc; border-radius: 4px; }
-                QLabel { color: black; background: transparent; border: none; }
-            """)
-            
-            
-            self.settings.setValue("theme", "light")
-
-        # update widgets that require overrides
-        self.hw_options_frame.collapsible_set_light_dark()
-        self.toggle_splitter_orientation(initial_setup=True)
-        self.thumbnail_strip.update_style(mode == 'dark')
+        self.settings.setValue("theme", mode)
 
 
     def toggle_splitter_orientation(self, initial_setup=False):
@@ -1869,27 +1786,6 @@ class BackgroundRemoverGUI(QMainWindow):
                 provider_data = self.combo_auto_model_EP.currentData()
                 self.model_manager.get_auto_session(self.combo_whole.currentText(), provider_data)
                 self.set_loading(False, f"Pre-loaded Automatic Model")
-
-        
-    def _sanitise_filename_for_windows(self, path: str) -> str:
-
-        """
-        On Windows, strip invalid filename characters from the basename:
-        \\/:*?"<>|
-        Directory part (e.g. C:\\folder) is left intact.
-        """
-        if os.name != "nt":
-            return path
-
-        directory, basename = os.path.split(path)
-        invalid_chars = r'\/:*?"<>|'
-        cleaned = ''.join(c for c in basename if c not in invalid_chars)
-
-        if not cleaned:
-            cleaned = "output"
-
-        return os.path.join(directory, cleaned)
-
 
     def init_working_buffers(self, initial_mask=None):
         size = self.working_orig_image.size 
@@ -2516,41 +2412,15 @@ class BackgroundRemoverGUI(QMainWindow):
             cutout.putalpha(self.working_mask)
         
         if self.chk_shadow.isChecked():
-            # work in numpy for speed to avoid requiring caching
-            op = self.sl_s_op.value()
-            rad = self.sl_s_r.value()
-            off_x, off_y = self.sl_s_x.value(), self.sl_s_y.value()
-            
-            w, h = self.working_mask.size
-            
-            m_np = np.array(self.working_mask)
-            small_w = max(1, int(w * shadow_downscale))
-            small_h = max(1, int(h * shadow_downscale))
-            
-            m_small = cv2.resize(m_np, (small_w, small_h), interpolation=cv2.INTER_NEAREST)
-            
-            blur_size = max(1, int(rad * shadow_downscale))
-
-            m_blur_small = cv2.GaussianBlur(m_small, (0, 0), sigmaX=blur_size)
-            m_blur_small = cv2.convertScaleAbs(m_blur_small, alpha=op/255.0)
-            
-            m_full = cv2.resize(m_blur_small, (w, h), interpolation=cv2.INTER_LINEAR)
-            
-            # Create a black background and use the shifted mask as Alpha
-            shifted_alpha = np.zeros((h, w), dtype=np.uint8)
-            
-            # Calculate slice boundaries for the offset
-            src_y1, src_y2 = max(0, -off_y), min(h, h - off_y)
-            src_x1, src_x2 = max(0, -off_x), min(w, w - off_x)
-            dst_y1, dst_y2 = max(0, off_y), min(h, h + off_y)
-            dst_x1, dst_x2 = max(0, off_x), min(w, w + off_x)
-
-            if dst_y2 > dst_y1 and dst_x2 > dst_x1:
-                shifted_alpha[dst_y1:dst_y2, dst_x1:dst_x2] = m_full[src_y1:src_y2, src_x1:src_x2]
-            
-            shadow_layer_np = np.zeros((h, w, 4), dtype=np.uint8)
-            shadow_layer_np[:, :, 3] = shifted_alpha
-            cutout = Image.alpha_composite(Image.fromarray(shadow_layer_np), cutout)
+            shadow_layer = generate_drop_shadow(
+                self.working_mask,
+                opacity=self.sl_s_op.value(),
+                blur_radius=self.sl_s_r.value(),
+                offset_x=self.sl_s_x.value(),
+                offset_y=self.sl_s_y.value(),
+                shadow_downscale=shadow_downscale
+            )
+            cutout = Image.alpha_composite(shadow_layer, cutout)
 
         bg_txt = self.combo_bg_color.currentText()
         if bg_txt == "Transparent": 
@@ -2566,32 +2436,7 @@ class BackgroundRemoverGUI(QMainWindow):
             else:
                 self.set_loading(True, "Blurring Background")
                 
-                orig_np = np.array(self.working_orig_image)
-                rgb = orig_np[:, :, :3]
-                m_np = np.array(self.working_mask)
-
-                # expand mask to reduce halo effects
-                dilation_size = 7 
-                kernel = np.ones((dilation_size, dilation_size), np.uint8)
-                dilated_mask = cv2.dilate(m_np, kernel, iterations=1)
-                
-                # create weight map from the dilated mask
-                # 1.0 = background (keep), 0.0 = dilated cutout (ignore)
-                weight_map = (255 - dilated_mask).astype(np.float32) / 255.0
-                          
-                if rad % 2 == 0: rad += 1
-                ksize = (rad, rad)
-
-                # normalised convolution
-                weighted_blur = cv2.stackBlur(rgb * weight_map[..., None], ksize)
-                
-                blurred_weights = cv2.stackBlur(weight_map, ksize)
-
-                result = weighted_blur / (blurred_weights[..., None] + 1e-8)
-                
-                blur_final = cv2.convertScaleAbs(result)
-                final = Image.fromarray(blur_final).convert("RGBA")
-                
+                final = generate_blurred_background(self.working_orig_image, self.working_mask, rad)
                 final.alpha_composite(cutout)
                 self.set_loading(False,"")
 
@@ -2620,7 +2465,10 @@ class BackgroundRemoverGUI(QMainWindow):
 
         # Update the Auto-Trim visual overlay
         if self.chk_export_trim.isChecked() and not self.chk_show_mask.isChecked():
-            bbox = self.get_current_crop_bbox()
+            bbox = get_current_crop_bbox(self.working_mask, self.chk_shadow.isChecked(),
+                                         self.sl_s_x.value(),
+                                         self.sl_s_y.value(),
+                                         self.sl_s_r.value())
             if bbox:
                 # Create a path for the whole scene
                 full_rect = self.output_pixmap_item.boundingRect()
@@ -2899,49 +2747,6 @@ class BackgroundRemoverGUI(QMainWindow):
         self.set_loading(False, "Smart Refine applied to stroke.")
         self.update_output_preview()
 
-    def get_current_crop_bbox(self):
-        """
-        Calculates the bounding box of the current mask, including shadows if enabled.
-        Returns (min_x, min_y, max_x, max_y) or None if the mask is empty.
-        """
-        if not self.working_mask:
-            return None
-            
-        bbox = self.working_mask.getbbox()
-        if not bbox:
-            return None
-            
-        min_x, min_y, max_x, max_y = bbox
-        
-        if self.chk_shadow.isChecked():
-            shadow_off_x = self.sl_s_x.value()
-            shadow_off_y = self.sl_s_y.value()
-            s_rad = self.sl_s_r.value()
-            
-            # Expand bounding box to include the shadow and its blur radius
-            s_min_x = min_x + shadow_off_x - s_rad
-            s_min_y = min_y + shadow_off_y - s_rad
-            s_max_x = max_x + shadow_off_x + s_rad
-            s_max_y = max_y + shadow_off_y + s_rad
-            
-            min_x = min(min_x, s_min_x)
-            min_y = min(min_y, s_min_y)
-            max_x = max(max_x, s_max_x)
-            max_y = max(max_y, s_max_y)
-
-        # Clamp to image boundaries
-        orig_w, orig_h = self.working_mask.size
-        final_min_x = max(0, int(min_x))
-        final_min_y = max(0, int(min_y))
-        final_max_x = min(orig_w, int(max_x))
-        final_max_y = min(orig_h, int(max_y))
-        
-        if final_max_x <= final_min_x or final_max_y <= final_min_y:
-            return None
-            
-        return (final_min_x, final_min_y, final_max_x, final_max_y)
-
-
     def save_image(self, quick_save=False, clipboard = False):
         if not self.image_paths: return
         
@@ -2960,12 +2765,12 @@ class BackgroundRemoverGUI(QMainWindow):
 
         if not clipboard:
             initial_name = os.path.splitext(self.image_paths[0])[0] + "_nobg." + default_ext
-            initial_name = self._sanitise_filename_for_windows(initial_name)
+            initial_name = sanitise_filename_for_windows(initial_name)
 
             fname, _ = QFileDialog.getSaveFileName(self, "Export Image", initial_name, f"{default_ext.upper()} (*.{default_ext})")
             if not fname: return
 
-            fname = self._sanitise_filename_for_windows(fname)
+            fname = sanitise_filename_for_windows(fname)
             
             if not fname.lower().endswith(f".{default_ext}"): fname += f".{default_ext}"
 
@@ -2983,7 +2788,7 @@ class BackgroundRemoverGUI(QMainWindow):
 
         # If trimming is enabled, calculate the crop box and apply it.
         if trim:
-            bbox = self.get_current_crop_bbox()
+            bbox = get_current_crop_bbox(self.working_mask, self.chk_shadow, self.sl_s_x, self.sl_s_y, self.sl_s_r)
             if bbox:
                 final_image = final_image.crop(bbox)
 
