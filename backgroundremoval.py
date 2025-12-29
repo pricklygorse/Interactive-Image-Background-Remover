@@ -542,7 +542,7 @@ class BackgroundRemoverGUI(QMainWindow):
         # inefficient, but until I remove all legacy PIL image operations, it is necessary
         self.working_orig_image = Image.fromarray(cv2.cvtColor(processed_np, cv2.COLOR_BGRA2RGBA))
         
-        self.update_input_view()
+        self.update_input_view(reset_zoom=False)
         
         # Delay the output view because some operations in render_output_image are slow
         self.output_refresh_timer.start()
@@ -1922,23 +1922,23 @@ class BackgroundRemoverGUI(QMainWindow):
         
         self.clear_overlay()
 
-    def update_input_view(self):
+    def update_input_view(self, reset_zoom=True):
         if self.working_orig_image:
             # 1. Update the Pixmap
             self.input_pixmap_item.setPixmap(pil2pixmap(self.working_orig_image))
             rect = self.input_pixmap_item.boundingRect()
             self.view_input.setSceneRect(rect)
 
-            self.view_input.resetTransform()
-
-            self.view_input.fitInView(self.input_pixmap_item, Qt.AspectRatioMode.KeepAspectRatio)
-
-            # Set to fill the screen, but could add small padding if preferred
-            self.view_input.scale(1, 1)
+            if reset_zoom:
+                self.view_input.resetTransform()
+                self.view_input.fitInView(self.input_pixmap_item, Qt.AspectRatioMode.KeepAspectRatio)
+                # Set to fill the screen, but could add small padding if preferred
+                self.view_input.scale(1, 1)
 
             if self.view_output:
                 self.view_output.setSceneRect(rect)
-                self.view_output.setTransform(self.view_input.transform())
+                if reset_zoom:
+                    self.view_output.setTransform(self.view_input.transform())
             
             self.update_zoom_label()
 
@@ -2884,8 +2884,13 @@ class BackgroundRemoverGUI(QMainWindow):
         x, y = m_params['x_off'], m_params['y_off']
         local_stroke_np = m_params['local_stroke_np']
 
-        # stroke to mask
-        stencil = Image.fromarray(local_stroke_np, mode="L")
+        feather_radius = max(3, int(self.brush_width * 0.3))
+        if feather_radius % 2 == 0:
+            feather_radius += 1
+            
+        # Apply blur to the stroke patch to create the soft transition
+        soft_stencil_np = cv2.stackBlur(local_stroke_np, (feather_radius, feather_radius), 0)
+        stencil = Image.fromarray(soft_stencil_np, mode="L")
 
         self.add_undo_step()
         
