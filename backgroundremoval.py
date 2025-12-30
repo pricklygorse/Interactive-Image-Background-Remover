@@ -960,7 +960,7 @@ class BackgroundRemoverGUI(QMainWindow):
         lbl_tri_src.setToolTip("A trimap is a guidance mask that specifies what is definite foreground, definite background, and 'unknown/mixed' for the model to calculate")
         am_layout.addWidget(lbl_tri_src)
         self.trimap_mode_group = QButtonGroup(self)
-        self.rb_trimap_auto = QRadioButton("Automatic (from model mask + sliders)")
+        self.rb_trimap_auto = QRadioButton("Automatic (model output border expand)")
         self.rb_trimap_custom = QRadioButton("Custom (user-drawn)")
         
         self.trimap_mode_group.addButton(self.rb_trimap_auto)
@@ -1003,7 +1003,7 @@ class BackgroundRemoverGUI(QMainWindow):
         
         self.btn_edit_trimap = QPushButton("Open Trimap Editor...")
         self.btn_edit_trimap.clicked.connect(self.open_trimap_editor)
-        self.btn_edit_trimap.setVisible(False)
+        self.btn_edit_trimap.setEnabled(False)
         am_layout.addWidget(self.btn_edit_trimap)
         
         self.chk_show_trimap = QCheckBox("Show Trimap on Input")
@@ -1621,6 +1621,7 @@ class BackgroundRemoverGUI(QMainWindow):
         QShortcut(QKeySequence("4"), self).activated.connect(lambda: self.tabs.setCurrentIndex(3))
         
         QShortcut(QKeySequence("U"), self).activated.connect(lambda: self.run_automatic_model("u2net"))
+        QShortcut(QKeySequence("CTRL+U"), self).activated.connect(lambda: self.run_automatic_model("u2netp"))
         QShortcut(QKeySequence("I"), self).activated.connect(lambda: self.run_automatic_model("isnet-general-use"))
         QShortcut(QKeySequence("O"), self).activated.connect(lambda: self.run_automatic_model("rmbg1_4"))
         QShortcut(QKeySequence("B"), self).activated.connect(lambda: self.run_automatic_model("ben2_base"))
@@ -2181,9 +2182,9 @@ class BackgroundRemoverGUI(QMainWindow):
         """Shows or hides UI elements based on the selected trimap mode."""
         is_auto = self.rb_trimap_auto.isChecked()
         
-        self.auto_trimap_sliders_widget.setVisible(is_auto)
+        self.auto_trimap_sliders_widget.setEnabled(is_auto)
         
-        self.btn_edit_trimap.setVisible(not is_auto)
+        self.btn_edit_trimap.setEnabled(not is_auto)
         
         self.update_trimap_preview()
 
