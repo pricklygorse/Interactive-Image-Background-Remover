@@ -280,6 +280,48 @@ class ModelManager:
         
         return final_mask, status
     
+
+    def run_auto_inference_2step(self, session, image_pil, model_name, load_time, prov_code, padding_percent=0.15):
+        """
+        Chains two inference passes. 
+        Pass 1: Entire image to find the subject.
+        Pass 2: Zoomed crop of the subject for higher detail.
+        """
+        # Full imag epass
+        mask_full, status_p1 = self.run_auto_inference(session, image_pil, model_name, load_time, prov_code)
+        
+        # Find Bounding Box of the first mask, filtering out nearly transparent pixels
+        coords = np.column_stack(np.where(mask_full > 50))
+        
+        if coords.size == 0:
+            return mask_full, f"{status_p1} (No subject detected in Pass 1)"
+
+        y1, x1 = coords.min(axis=0)
+        y2, x2 = coords.max(axis=0)
+        
+        orig_w, orig_h = image_pil.size
+        
+        # Add padding to give the model context
+        w_pad = int((x2 - x1) * padding_percent)
+        h_pad = int((y2 - y1) * padding_percent)
+        
+        x1 = max(0, x1 - w_pad)
+        y1 = max(0, y1 - h_pad)
+        x2 = min(orig_w, x2 + w_pad)
+        y2 = min(orig_h, y2 + h_pad)
+        
+        # Pass 2
+        crop_pil = image_pil.crop((x1, y1, x2, y2))
+        
+        mask_crop_arr, status_p2 = self.run_auto_inference(session, crop_pil, model_name, load_time, prov_code)
+        
+        final_mask_np = np.zeros((orig_h, orig_w), dtype=np.uint8)
+        
+        final_mask_np[y1:y2, x1:x2] = mask_crop_arr
+        
+        combined_status = f"{status_p2} [2-Step Refined]"
+        return final_mask_np, combined_status
+    
     # --- SAM Models ---
 
     def clear_sam_cache(self, clear_loaded_models=True):

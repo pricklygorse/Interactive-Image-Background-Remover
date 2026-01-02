@@ -749,9 +749,9 @@ class BackgroundRemoverGUI(QMainWindow):
         layout.addItem(QSpacerItem(20, 10, QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed))
 
 
-        lbl_auto = QLabel("<b>AUTOMATIC (WHOLE IMAGE)<b>")
+        lbl_auto = QLabel("<b>AUTOMATIC<b>")
         lbl_auto.setToolTip("<b>Automatic Models</b><br>"
-                             "These run automatically on the entire image.<br>"
+                             "These run automatically on the image/current zoomed view.<br>"
                              "<i>Usage: Select a model and click 'Run Automatic'. No points needed.</i><br><br>"
                              "Disc drive icons show models that have saved optimised versions cached.")
         layout.addWidget(lbl_auto)
@@ -773,6 +773,16 @@ class BackgroundRemoverGUI(QMainWindow):
         h_whole_model.addWidget(self.combo_whole)
         h_whole_model.addWidget(self.btn_whole)
         layout.addLayout(h_whole_model)
+
+        self.chk_2step_auto = QCheckBox("2-Step (Find -> Re-run)")
+        self.chk_2step_auto.setToolTip("Runs the model twice: first on the entire image to find the subject,\n "
+                                       "then a second time on a zoomed crop of the subject for maximum detail."
+                                       "\n\nNOTE: This is different to typical usage, where the model is run on what you are currently zoomed in to,\n"
+                                       "which may instead be the optimal way to get a higher quality mask")
+        layout.addWidget(self.chk_2step_auto)
+
+        layout.addSpacing(20)
+
 
         layout.addSpacing(20)
 
@@ -2087,27 +2097,40 @@ class BackgroundRemoverGUI(QMainWindow):
         
         # clear any previous mask or sam points
         # ideally would be after inference, but on_inference_finished is shared by sam and auto models
-        self.clear_overlay()
+        # self.clear_overlay()
 
-        crop, x_off, y_off = self.get_viewport_crop()
-        if crop.width == 0 or crop.height == 0:
+        use_2step = self.chk_2step_auto.isChecked()
+        
+        if use_2step:
+            # use the full size original image first
+            image_to_process = self.working_orig_image
+            x_off, y_off = 0, 0
+        else:
+            image_to_process, x_off, y_off = self.get_viewport_crop()
+
+        if image_to_process.width == 0 or image_to_process.height == 0:
             return
 
         provider_data = self.combo_auto_model_EP.currentData()
         self.set_loading(True, f"Processing {model_name}...")
 
-        def _do_auto_work(model_manager, model_name, provider_data, crop):
+        def _do_auto_work(model_manager, model_name, provider_data, img, is_2step):
             prov_str, prov_opts, prov_code = provider_data
             session, load_t = model_manager.get_auto_session(model_name, provider_data)
             # Send prov_code to generate the status message
-            mask_arr, status = model_manager.run_auto_inference(session, crop, model_name, load_t, prov_code)
+            if is_2step:
+                mask_arr, status = model_manager.run_auto_inference_2step(session, img, model_name, load_t, prov_code)
+            else:
+                mask_arr, status = model_manager.run_auto_inference(session, img, model_name, load_t, prov_code)
+                
             return {"mask": mask_arr, "status": status}
 
         self.worker = InferenceWorker(_do_auto_work, 
                                       self.model_manager, 
                                       model_name, 
                                       provider_data, 
-                                      crop)
+                                      image_to_process, use_2step)
+        self.worker.finished.connect(self.clear_overlay)
         self.worker.finished.connect(lambda res: self._on_inference_finished(res, x_off, y_off))
         self.worker.error.connect(lambda msg: (self.set_loading(False), QMessageBox.critical(self, "Error", msg)))
         self.worker.start()
@@ -2151,7 +2174,7 @@ class BackgroundRemoverGUI(QMainWindow):
                 self.overlay_pixmap_item.setPixmap(pil2pixmap(active_mask))
             else:
                 # image cutout over dimmed background
-                self.input_pixmap_item.setOpacity(0.3) # Dim the original
+                self.input_pixmap_item.setOpacity(0.2) # Dim the original
                 self.overlay_pixmap_item.setOpacity(1.0)
                 
                 cutout = self.working_orig_image.convert("RGBA")
