@@ -628,6 +628,10 @@ class ModelManager:
         result = session.run(None, {input_name: input_data})[0]
 
         alpha = result[0][0]
+        
+        alpha[tri_resized == 0] = 0
+        alpha[tri_resized == 255] = 255
+        
         alpha_resized = cv2.resize(alpha, original_size, interpolation=cv2.INTER_LINEAR)
         
         alpha_final = np.clip(alpha_resized * 255, 0, 255).astype(np.uint8)
