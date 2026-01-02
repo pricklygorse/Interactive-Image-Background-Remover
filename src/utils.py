@@ -341,3 +341,78 @@ def get_current_crop_bbox(working_mask, drop_shadow, sl_s_x, sl_s_y, sl_s_r):
         return None
 
     return (final_min_x, final_min_y, final_max_x, final_max_y)
+
+
+
+
+
+def guided_filter(guide, src, radius, eps):
+    """
+    Numpy/OpenCV Guided Filter.
+    guide: (H, W, C) or (H, W) float32 [0, 1]
+    src:   (H, W) float32 [0, 1]
+    """
+    if guide.dtype != np.float32: guide = guide.astype(np.float32)
+    if src.dtype != np.float32: src = src.astype(np.float32)
+
+    # Convert to grayscale for matting-style refinement
+    if len(guide.shape) == 3:
+        guide = cv2.cvtColor(guide, cv2.COLOR_RGB2GRAY)
+
+    mean_I = cv2.boxFilter(guide, -1, (radius, radius))
+    mean_p = cv2.boxFilter(src, -1, (radius, radius))
+    mean_Ip = cv2.boxFilter(guide * src, -1, (radius, radius))
+    
+    cov_Ip = mean_Ip - mean_I * mean_p
+    
+    mean_II = cv2.boxFilter(guide * guide, -1, (radius, radius))
+    var_I = mean_II - mean_I * mean_I
+    
+    a = cov_Ip / (var_I + eps)
+    b = mean_p - a * mean_I
+    
+    mean_a = cv2.boxFilter(a, -1, (radius, radius))
+    mean_b = cv2.boxFilter(b, -1, (radius, radius))
+    
+    q = mean_a * guide + mean_b
+    return np.clip(q, 0, 1)
+
+
+def generate_trimap_from_mask(mask_pil, fg_erode_size, bg_erode_size):
+    """
+    Generates a three-tone trimap from a binary mask using erosion.
+    Returns the trimap as a NumPy array (0=BG, 128=Unknown, 255=FG).
+    """
+    #mask_np = np.array(mask_pil)
+
+    if isinstance(mask_pil, np.ndarray):
+        mask_np = mask_pil
+    else:
+        mask_np = np.array(mask_pil)
+
+
+    foreground_threshold = 240
+    background_threshold = 10
+
+    is_foreground = mask_np > foreground_threshold
+    is_background = mask_np < background_threshold
+
+    # Erode foreground
+    if fg_erode_size > 0:
+        fg_kernel = np.ones((fg_erode_size, fg_erode_size), np.uint8)
+        is_foreground_eroded = cv2.erode(is_foreground.astype(np.uint8), fg_kernel, iterations=1)
+    else:
+        is_foreground_eroded = is_foreground
+
+    # Erode background
+    if bg_erode_size > 0:
+        bg_kernel = np.ones((bg_erode_size, bg_erode_size), np.uint8)
+        is_background_eroded = cv2.erode(is_background.astype(np.uint8), bg_kernel, iterations=1)
+    else:
+        is_background_eroded = is_background
+
+    trimap = np.full(mask_np.shape, dtype=np.uint8, fill_value=128)
+    trimap[is_foreground_eroded.astype(bool)] = 255
+    trimap[is_background_eroded.astype(bool)] = 0
+
+    return trimap

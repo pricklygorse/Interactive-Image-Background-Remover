@@ -38,7 +38,7 @@ from src.ui_widgets import CollapsibleFrame, SynchronisedGraphicsView, Thumbnail
 #from src.ui_dialogs import SaveOptionsDialog, ImageEditorDialog
 from src.trimap_editor import TrimapEditorDialog
 from src.utils import pil2pixmap, numpy_to_pixmap, apply_tone_sharpness, generate_drop_shadow, \
-    generate_blurred_background, sanitise_filename_for_windows, get_current_crop_bbox
+    generate_blurred_background, sanitise_filename_for_windows, get_current_crop_bbox, generate_trimap_from_mask
 from src.constants import PAINT_BRUSH_SCREEN_SIZE, UNDO_STEPS, SOFTEN_RADIUS
 
 try: pyi_splash.update_text("Loading pymatting (Compiles on first run, approx 1-2 minutes)")
@@ -167,6 +167,11 @@ class BackgroundRemoverGUI(QMainWindow):
         self.trimap_timer.setSingleShot(True)
         self.trimap_timer.setInterval(100) 
         self.trimap_timer.timeout.connect(self.update_trimap_preview)
+
+        self.refinement_timer = QTimer()
+        self.refinement_timer.setSingleShot(True)
+        self.refinement_timer.setInterval(500) # 500ms delay to prevent spamming ONNX models
+        self.refinement_timer.timeout.connect(lambda: self.modify_mask(op="live_preview"))
 
         # Let the UI build before loading image, so the correct display zoom is shown
         # 50ms seems long enough on my PC
@@ -891,19 +896,28 @@ class BackgroundRemoverGUI(QMainWindow):
         lbl_desc.setWordWrap(True)
         layout.addWidget(lbl_desc)
 
-        layout.addSpacing(20)
+        layout.addSpacing(10)
+
+        self.chk_live_preview = QCheckBox("Live Preview Refinements on Input")
+        self.chk_live_preview.setToolTip("Automatically run softening and alpha matting on the model output for previewing before committing.")
+        self.chk_live_preview.toggled.connect(self.handle_live_preview_toggle)
+        layout.addWidget(self.chk_live_preview)
+
+        layout.addSpacing(10)
 
         lbl_modifiers = QLabel("<b>BASIC MODIFIERS</b>")
         lbl_modifiers.setContentsMargins(3, 0, 0, 0)
         layout.addWidget(lbl_modifiers)
 
         self.chk_post = QCheckBox("Remove Mask Partial Transparency")
+        self.chk_post.toggled.connect(self.trigger_refinement_update)
         layout.addWidget(self.chk_post)
 
         self.chk_soften = QCheckBox("Soften Mask/Paintbrush Edges")
         soften_checked = self.settings.value("soften_mask", False, type=bool)
         self.chk_soften.setChecked(soften_checked)
         self.chk_soften.toggled.connect(lambda checked: self.settings.setValue("soften_mask", checked))
+        self.chk_soften.toggled.connect(self.trigger_refinement_update) 
         layout.addWidget(self.chk_soften)
         
         layout.addSpacing(20)
@@ -913,7 +927,7 @@ class BackgroundRemoverGUI(QMainWindow):
         lbl_alpha = QLabel("<b>SMART REFINE (Alpha Matting)</b>")
         lbl_alpha.setToolTip(matt_tt)
         layout.addWidget(lbl_alpha)
-        lbl_alpha_desc = QLabel("Uses specialised algorithms to refine difficult areas like hair and fur. VitMatte is recommended")
+        lbl_alpha_desc = QLabel("Uses specialised algorithms to refine difficult areas like hair and fur. ViTMatte is recommended")
         lbl_alpha_desc.setWordWrap(True)
         lbl_alpha_desc.setToolTip(matt_tt)
         layout.addWidget(lbl_alpha_desc)
@@ -938,6 +952,7 @@ class BackgroundRemoverGUI(QMainWindow):
         self.populate_matting_models()
         self.combo_matting_algorithm.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
         self.combo_matting_algorithm.setMinimumContentsLength(1)
+        self.combo_matting_algorithm.currentIndexChanged.connect(self.trigger_refinement_update)
         ma_layout.addWidget(self.combo_matting_algorithm)
 
         layout.addLayout(ma_layout)
@@ -945,6 +960,7 @@ class BackgroundRemoverGUI(QMainWindow):
         self.chk_alpha_matting = QCheckBox("Enable Alpha Matting")
         self.chk_alpha_matting.setToolTip(matt_tt)
         self.chk_alpha_matting.toggled.connect(self.handle_alpha_matting_toggle)
+        self.chk_alpha_matting.toggled.connect(self.trigger_refinement_update) 
         layout.addWidget(self.chk_alpha_matting)
 
 
@@ -953,7 +969,11 @@ class BackgroundRemoverGUI(QMainWindow):
         am_layout = QVBoxLayout(self.alpha_matting_frame)
         am_layout.setContentsMargins(15, 5, 0, 5) # Indent options slightly
 
-        
+        self.chk_show_trimap = QCheckBox("Show Trimap on Input")
+        self.chk_show_trimap.setToolTip("Displays the generated trimap on the input view.\n"
+                                        "White = Foreground, Blue = Unknown (semi transparent, e.g. hair edges), Black = Background")
+        self.chk_show_trimap.toggled.connect(self.toggle_trimap_display)
+        am_layout.addWidget(self.chk_show_trimap)
 
         # --- Trimap Source Radio Buttons ---
         lbl_tri_src = QLabel("<b>Trimap Source:</b>")
@@ -971,6 +991,7 @@ class BackgroundRemoverGUI(QMainWindow):
         am_layout.addWidget(self.rb_trimap_auto)
         
         self.trimap_mode_group.buttonToggled.connect(self.on_trimap_mode_changed)
+        self.trimap_mode_group.buttonToggled.connect(self.trigger_refinement_update)
         
         # --- Group sliders for easy show/hide ---
         self.auto_trimap_sliders_widget = QWidget()
@@ -984,7 +1005,9 @@ class BackgroundRemoverGUI(QMainWindow):
             slider = QSlider(Qt.Orientation.Horizontal)
             slider.setRange(min_v, max_v)
             slider.setValue(def_v)
-            slider.valueChanged.connect(lambda val, l=label, txt=lbl_text: (l.setText(f"{txt}: {val}"), self.update_trimap_preview_throttled()))
+            slider.valueChanged.connect(lambda val, l=label, txt=lbl_text: (l.setText(f"{txt}: {val}"), 
+                                                                            self.update_trimap_preview_throttled(),
+                                                                            self.trigger_refinement_update()))
             h_layout.addWidget(label)
             h_layout.addWidget(slider)
             return label, slider, h_layout
@@ -1006,11 +1029,7 @@ class BackgroundRemoverGUI(QMainWindow):
         self.btn_edit_trimap.setEnabled(False)
         am_layout.addWidget(self.btn_edit_trimap)
         
-        self.chk_show_trimap = QCheckBox("Show Trimap on Input")
-        self.chk_show_trimap.setToolTip("Displays the generated trimap on the input view.\n"
-                                        "White = Foreground, Blue = Unknown (semi transparent, e.g. hair edges), Black = Background")
-        self.chk_show_trimap.toggled.connect(self.toggle_trimap_display)
-        am_layout.addWidget(self.chk_show_trimap)
+        
 
 
         layout.addWidget(self.alpha_matting_frame)
@@ -1041,20 +1060,36 @@ class BackgroundRemoverGUI(QMainWindow):
         lbl_brush_refine = QLabel("<b>Smart Refine Brush (Experimental)</b>")
         layout.addWidget(lbl_brush_refine)
         
-        lbl_brush_hint = QLabel("Hold <b>Ctrl + Paint</b> to locally refine edges such as hair in the output image.")
+        lbl_brush_hint = QLabel("Hold <b>Ctrl + Paint</b> to locally refine edges such as hair on the <i>output</i> image.")
         lbl_brush_hint.setWordWrap(True)
         #lbl_brush_hint.setStyleSheet("color: #2a82da;")
         layout.addWidget(lbl_brush_hint)
 
         self.lbl_smart_padding, self.sl_smart_padding, pad_l = make_brush_refine_slider(
-            "Context Padding", 0, 5, 1)
+            "Context Padding", 1, 5, 3)
         self.sl_smart_padding.setToolTip("Determines how much 'Definite' background and foreground the AI sees around your brush stroke.\nCan have small impact on output quality")
         layout.addLayout(pad_l)
 
         layout.addStretch()
         scroll.setWidget(container)
         return scroll
-        
+    
+    def handle_live_preview_toggle(self, checked):
+        """Handles the live preview checkbox toggle."""
+        if checked:
+            if self.model_output_mask:
+                self.modify_mask(op="live_preview")
+        else:
+            # Clear refined preview and reset UI opacity
+            self.refined_preview_mask = None
+            self.input_pixmap_item.show()
+            self.input_pixmap_item.setOpacity(1.0)
+            self.show_mask_overlay()
+    
+    def trigger_refinement_update(self):
+        """Debounced trigger for updating the live preview mask."""
+        if self.chk_live_preview.isChecked() and self.model_output_mask and not self.is_busy():
+            self.refinement_timer.start()
 
     def create_export_tab(self):
         scroll = QScrollArea()
@@ -1824,6 +1859,7 @@ class BackgroundRemoverGUI(QMainWindow):
             self.working_mask = Image.new("L", size, 0)
 
         self.model_output_mask = Image.new("L", size, 0)
+        self.refined_preview_mask = None
         self.undo_history = [self.working_mask.copy()]
         self.redo_history = []
 
@@ -2045,6 +2081,10 @@ class BackgroundRemoverGUI(QMainWindow):
             msg_box.addButton(QPushButton("OK"), QMessageBox.ButtonRole.AcceptRole)
             msg_box.exec()
             return
+        
+        # clear any previous mask or sam points
+        # ideally would be after inference, but on_inference_finished is shared by sam and auto models
+        self.clear_overlay()
 
         crop, x_off, y_off = self.get_viewport_crop()
         if crop.width == 0 or crop.height == 0:
@@ -2077,28 +2117,59 @@ class BackgroundRemoverGUI(QMainWindow):
         # Paste the viewport mask into the correct place
         self.model_output_mask = Image.new("L", self.working_orig_image.size, 0)
         self.model_output_mask.paste(Image.fromarray(mask_arr, mode="L"), (x_off, y_off))
+        self.refined_preview_mask = None
         
         # Update UI
-        self.show_mask_overlay()
+        if self.chk_live_preview.isChecked():
+            # Automatically start the refinement thread
+            self.modify_mask(op="live_preview")
+        else:
+            self.show_mask_overlay()
         self.update_cached_model_icons()
         
         self.set_loading(False, status_msg)
 
 
     def show_mask_overlay(self):
-        if self.chk_input_mask_only.isChecked():
-            # Show mask as grayscale, hiding original image
-            self.overlay_pixmap_item.setOpacity(1.0)
-            self.overlay_pixmap_item.setPixmap(pil2pixmap(self.model_output_mask))
-            self.input_pixmap_item.hide()
-        else:
-            # Show blue overlay on top of original image
-            self.overlay_pixmap_item.setOpacity(0.5)
+        is_live = self.chk_live_preview.isChecked()
+        mask_only = self.chk_input_mask_only.isChecked()
+        
+        # Determine which mask to display
+        active_mask = self.refined_preview_mask if is_live and self.refined_preview_mask else self.model_output_mask
+
+        if is_live and self.refined_preview_mask:
+            # live preview logic
             self.input_pixmap_item.show()
-            blue = Image.new("RGB", self.working_orig_image.size, (0, 0, 255))
-            overlay = blue.convert("RGBA")
-            overlay.putalpha(self.model_output_mask)
-            self.overlay_pixmap_item.setPixmap(pil2pixmap(overlay))
+            
+            if mask_only:
+                # show the high-res alpha mask in grayscale
+                self.input_pixmap_item.setOpacity(0.0)
+                self.overlay_pixmap_item.setOpacity(1.0)
+                self.overlay_pixmap_item.setPixmap(pil2pixmap(active_mask))
+            else:
+                # image cutout over dimmed background
+                self.input_pixmap_item.setOpacity(0.3) # Dim the original
+                self.overlay_pixmap_item.setOpacity(1.0)
+                
+                cutout = self.working_orig_image.convert("RGBA")
+                cutout.putalpha(active_mask)
+                self.overlay_pixmap_item.setPixmap(pil2pixmap(cutout))
+        else:
+            # original blue overlay mode
+            self.input_pixmap_item.setOpacity(1.0)
+            
+            if mask_only:
+                self.overlay_pixmap_item.setOpacity(1.0)
+                self.overlay_pixmap_item.setPixmap(pil2pixmap(active_mask))
+                self.input_pixmap_item.hide()
+            else:
+                # Show blue overlay on top of original image
+                self.overlay_pixmap_item.setOpacity(0.5)
+                self.input_pixmap_item.show()
+                blue = Image.new("RGB", self.working_orig_image.size, (0, 0, 255))
+                overlay = blue.convert("RGBA")
+                overlay.putalpha(active_mask)
+                self.overlay_pixmap_item.setPixmap(pil2pixmap(overlay))
         
         self.update_trimap_preview()
 
@@ -2201,7 +2272,7 @@ class BackgroundRemoverGUI(QMainWindow):
         elif self.model_output_mask:
             fg_erode = self.sl_fg_erode.value()
             bg_erode = self.sl_bg_erode.value()
-            trimap_np = self.model_manager.generate_trimap_from_mask(self.model_output_mask, fg_erode, bg_erode)
+            trimap_np = generate_trimap_from_mask(self.model_output_mask, fg_erode, bg_erode)
             initial_trimap = Image.fromarray(trimap_np)
         else:
             # If there's no mask at all, start with a blank (all unknown) trimap.
@@ -2258,7 +2329,7 @@ class BackgroundRemoverGUI(QMainWindow):
         if self.rb_trimap_auto.isChecked():
             fg_erode = self.sl_fg_erode.value()
             bg_erode = self.sl_bg_erode.value()
-            trimap_np = self.model_manager.generate_trimap_from_mask(self.model_output_mask, fg_erode, bg_erode)
+            trimap_np = generate_trimap_from_mask(self.model_output_mask, fg_erode, bg_erode)
         
         elif self.rb_trimap_custom.isChecked() and hasattr(self, 'user_trimap'):
             trimap_np = np.array(self.user_trimap)
@@ -2326,7 +2397,7 @@ class BackgroundRemoverGUI(QMainWindow):
                     mask_crop = mask_to_process.crop((x_off, y_off, x_off + image_crop.width, y_off + image_crop.height))
                     fg_erode = self.sl_fg_erode.value()
                     bg_erode = self.sl_bg_erode.value()
-                    trimap_np = self.model_manager.generate_trimap_from_mask(mask_crop, fg_erode, bg_erode)
+                    trimap_np = generate_trimap_from_mask(mask_crop, fg_erode, bg_erode)
                 
                 matting_params = {
                     'image_crop': image_crop,
@@ -2388,9 +2459,16 @@ class BackgroundRemoverGUI(QMainWindow):
 
     def _on_modify_mask_finished(self, processed_mask, op):
         """Handles the result from the mask modification worker."""
-        self.working_mask = op(self.working_mask, processed_mask)
+
+        if not op == "live_preview":
+            # commit refined mask to working_mask
+            self.working_mask = op(self.working_mask, processed_mask)
+            self.update_output_preview()
+        else:
+            # show live preview
+            self.refined_preview_mask = processed_mask
+            self.show_mask_overlay()
         self.set_loading(False, "Ready")
-        self.update_output_preview()
 
     
 
