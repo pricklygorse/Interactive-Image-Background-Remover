@@ -1928,7 +1928,10 @@ class BackgroundRemoverGUI(QMainWindow):
         sr = self.view_input.mapToScene(vp).boundingRect()
         ir = QRectF(0, 0, self.working_orig_image.width, self.working_orig_image.height)
         cr = sr.intersected(ir)
-        x, y, w, h = int(cr.x()), int(cr.y()), int(cr.width()), int(cr.height())
+        x = int(round(cr.x()))
+        y = int(round(cr.y()))
+        w = int(round(cr.width()))
+        h = int(round(cr.height()))
         if w <= 0 or h <= 0: return self.working_orig_image, 0, 0
         return self.working_orig_image.crop((x, y, x+w, y+h)), x, y
 
@@ -2210,14 +2213,25 @@ class BackgroundRemoverGUI(QMainWindow):
             self.scene_input.removeItem(item)
 
     def clear_visible_area(self):
-        if not self.model_output_mask: return
+        if not self.working_mask: 
+            return
+            
         self.add_undo_step()
+        
+        # Get the exact pixel boundaries currently in view
         crop, x, y = self.get_viewport_crop()
-        vis_mask = Image.new("L", self.working_orig_image.size, 0)
-        draw = ImageDraw.Draw(vis_mask)
-        draw.rectangle([x, y, x+crop.width, y+crop.height], fill=255)
-        self.working_mask = ImageChops.subtract(self.working_mask, vis_mask)
+        
+        # Create a black rectangle of the viewport size
+        # We use a solid 0-value (black) to 'clear' the mask
+        clear_rect = Image.new("L", (crop.width, crop.height), 0)
+        
+        # Paste directly into the working mask at the viewport offset
+        # PIL's paste uses (left, top, right, bottom) or (left, top)
+        # Using (x, y) coordinates derived from the floor/ceil logic above
+        self.working_mask.paste(clear_rect, (x, y))
+        
         self.update_output_preview()
+        self.status_label.setText(f"Cleared viewport area: {crop.width}x{crop.height}") 
 
     def add_undo_step(self):
         self.undo_history.append(self.working_mask.copy())
