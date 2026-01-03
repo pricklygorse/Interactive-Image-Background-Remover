@@ -63,12 +63,9 @@ def apply_theme(main_ui_window, mode):
     palette = get_theme_palette(mode)
     app.setPalette(palette)
 
-    # Define background hatch pattern
-    hatch_color = QColor(40, 40, 40) if mode == 'dark' else QColor(230, 230, 230)
-    hatch_brush = QBrush(hatch_color, Qt.BrushStyle.DiagCrossPattern)
-    
-    main_ui_window.view_input.setBackgroundBrush(hatch_brush)
-    main_ui_window.view_output.setBackgroundBrush(hatch_brush)
+    # adjust checkerboard backgrounds
+    main_ui_window.view_input.update_background_theme()
+    main_ui_window.view_output.update_background_theme()
 
     # Stylesheet overrides
     if mode == 'dark':

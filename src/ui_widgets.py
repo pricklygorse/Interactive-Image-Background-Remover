@@ -200,6 +200,9 @@ class SynchronisedGraphicsView(QGraphicsView):
         self.scene().addItem(self.brush_cursor_item)
         self.brush_cursor_item.hide()
 
+        self.setBackgroundBrush(QBrush(Qt.BrushStyle.NoBrush))
+        self._checker_pixmap = self._create_checkerboard_pixmap()
+
         # If no image loaded, intro text
         self.placeholder_label = QLabel(self)
         self.placeholder_label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
@@ -223,6 +226,31 @@ class SynchronisedGraphicsView(QGraphicsView):
         self.crop_rect_item.hide()
         
         self.crop_start = None
+
+    def _create_checkerboard_pixmap(self, size=24):
+        pixmap = QPixmap(size, size)
+        painter = QPainter(pixmap)
+        
+        is_dark = QApplication.instance().palette().color(QPalette.ColorRole.Window).lightness() < 128
+        
+        if is_dark:
+            color1 = QColor(25, 25, 25)
+            color2 = QColor(35, 35, 35)
+        else:
+            color1 = QColor(255, 255, 255)
+            color2 = QColor(240, 240, 240)
+            
+        half = size // 2
+        painter.fillRect(0, 0, half, half, color1)
+        painter.fillRect(half, half, half, half, color1)
+        painter.fillRect(half, 0, half, half, color2)
+        painter.fillRect(0, half, half, half, color2)
+        painter.end()
+        return pixmap
+    
+    def update_background_theme(self):
+        self._checker_pixmap = self._create_checkerboard_pixmap()
+        self.viewport().update()
 
     def update_legend_style(self, is_dark):
         bg = "rgba(0, 0, 0, 150)" if is_dark else "rgba(255, 255, 255, 180)"
@@ -290,8 +318,7 @@ class SynchronisedGraphicsView(QGraphicsView):
 
         viewport_rect = self.viewport().rect()
 
-        painter.fillRect(viewport_rect, self.palette().color(QPalette.ColorRole.Base))
-        painter.fillRect(viewport_rect, self.backgroundBrush())
+        painter.drawTiledPixmap(viewport_rect, self._checker_pixmap)
         
         painter.restore()
 
