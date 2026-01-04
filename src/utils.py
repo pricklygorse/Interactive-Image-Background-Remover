@@ -416,3 +416,35 @@ def generate_trimap_from_mask(mask_pil, fg_erode_size, bg_erode_size):
     trimap[is_background_eroded.astype(bool)] = 0
 
     return trimap
+
+
+def clean_alpha(mask):
+    """
+    Filters out alpha <5 and > 250
+    """
+    alpha_np = np.array(mask)
+    alpha_np[alpha_np > 250] = 255
+    alpha_np[alpha_np < 5] = 0
+    return Image.fromarray(alpha_np)
+
+def generate_alpha_map(mask):
+        """
+        Creates a diagnostic image to reveal hidden transparency.
+        - Black: Fully Transparent (0)
+        - Red: Semi Transparent
+        - White: Fully Opaque (255)
+        """
+        alpha_np = np.array(mask)
+    
+        # white default array
+        h, w = alpha_np.shape
+        viz_np = np.full((h, w, 3), 255, dtype=np.uint8)
+        
+        # pure transparent to black
+        viz_np[alpha_np == 0] = [0, 0, 0]
+        
+        # semi to red
+        semi_transparent_mask = (alpha_np > 0) & (alpha_np < 255)
+        viz_np[semi_transparent_mask] = [255, 0, 0]
+        
+        return Image.fromarray(viz_np)

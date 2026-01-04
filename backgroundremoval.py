@@ -38,7 +38,7 @@ from src.ui_widgets import CollapsibleFrame, SynchronisedGraphicsView, Thumbnail
 #from src.ui_dialogs import SaveOptionsDialog, ImageEditorDialog
 from src.trimap_editor import TrimapEditorDialog
 from src.utils import pil2pixmap, numpy_to_pixmap, apply_tone_sharpness, generate_drop_shadow, \
-    generate_blurred_background, sanitise_filename_for_windows, get_current_crop_bbox, generate_trimap_from_mask
+    generate_blurred_background, sanitise_filename_for_windows, get_current_crop_bbox, generate_trimap_from_mask, clean_alpha, generate_alpha_map
 from src.constants import PAINT_BRUSH_SCREEN_SIZE, UNDO_STEPS, SOFTEN_RADIUS
 
 try: pyi_splash.update_text("Loading pymatting (Compiles on first run, approx 1-2 minutes)")
@@ -135,7 +135,7 @@ class BackgroundRemoverGUI(QMainWindow):
         self.init_ui()
 
         if cli_args.binary:
-            self.chk_post.setChecked(True)
+            self.chk_binarise_mask.setChecked(True)
         if cli_args.soften:
             self.chk_soften.setChecked(True)
         if cli_args.alpha_matting:
@@ -292,6 +292,21 @@ class BackgroundRemoverGUI(QMainWindow):
                 border-radius: 4px;
             }
         """)
+
+        self.chk_show_partial_alpha = QCheckBox("Show Transparency in Red (alpha = 1 to 244)", self.view_output)
+        self.chk_show_partial_alpha.toggled.connect(self.update_output_preview)
+        self.chk_show_partial_alpha.move(20, 40)
+        self.chk_show_partial_alpha.setStyleSheet("""
+            QCheckBox {
+                background-color: rgba(120, 120, 120, 120);
+                color: white;
+                padding: 4px;
+                border-radius: 4px;
+            }
+        """)
+
+        self.chk_show_partial_alpha.setVisible(self.chk_show_mask.isChecked())
+        self.chk_show_mask.toggled.connect(self.chk_show_partial_alpha.setVisible)
         
         # the output image
         self.output_pixmap_item = QGraphicsPixmapItem()
@@ -902,59 +917,111 @@ class BackgroundRemoverGUI(QMainWindow):
         container = QWidget()
         layout = QVBoxLayout(container)
 
-        lbl_desc = QLabel("Modifiers applied to the AI model's mask when adding or subtracting to the output image.")
-        lbl_desc.setWordWrap(True)
-        layout.addWidget(lbl_desc)
+        
 
         layout.addSpacing(10)
+
+        
+
+        lbl_global_modifiers = QLabel("<b>GLOBAL REFINEMENTS</b>")
+        lbl_global_modifiers.setToolTip("Applied to the entire image")
+        lbl_global_modifiers.setContentsMargins(3, 0, 0, 0)
+        layout.addWidget(lbl_global_modifiers)
+
+        self.chk_clean_alpha = QCheckBox("Clean Transparency")
+        self.chk_clean_alpha.setToolTip("Remove nearly transparent pixels (alpha < 5) and solidify nearly opaque (alpha >250) to fully opaque (255).\n"
+                                        "You can view the partial transparency via View Global Mask on the output canvas\n"
+                                        "Recommended to leave on.")
+        self.chk_clean_alpha.setChecked(self.settings.value("clean_alpha", True, type=bool))
+        # In your UI setup code where you define the checkbox:
+        self.chk_clean_alpha.toggled.connect(
+            lambda checked: self.settings.setValue("clean_alpha", checked)
+        )
+        self.chk_clean_alpha.toggled.connect(self.update_output_preview)
+        layout.addWidget(self.chk_clean_alpha)
+
+        self.chk_estimate_foreground = QCheckBox("Foreground Edge \nColour Correction (Slow)")
+        self.chk_estimate_foreground.setToolTip("Recalculates edge colors to remove halos or fringes from the original background.\n"
+                                                "Recommended for soft edges such as hair")
+        layout.addWidget(self.chk_estimate_foreground)
+        self.chk_estimate_foreground.toggled.connect(self.update_output_preview)
+
+        layout.addSpacing(10)
+
+        lbl_modifiers = QLabel("<b>MODEL OUTPUT MASK REFINEMENTS</b>")
+        lbl_modifiers.setContentsMargins(3, 0, 0, 0)
+        layout.addWidget(lbl_modifiers)
+
+        lbl_desc = QLabel("Applied to the AI model's mask when adding or subtracting to the output image.")
+        lbl_desc.setWordWrap(True)
+        layout.addWidget(lbl_desc)
 
         self.chk_live_preview = QCheckBox("Live Preview Refinements on Input")
         self.chk_live_preview.setToolTip("Automatically run softening and alpha matting on the model output for previewing before committing.")
         self.chk_live_preview.toggled.connect(self.handle_live_preview_toggle)
         layout.addWidget(self.chk_live_preview)
 
-        layout.addSpacing(10)
 
-        lbl_modifiers = QLabel("<b>BASIC MODIFIERS</b>")
-        lbl_modifiers.setContentsMargins(3, 0, 0, 0)
-        layout.addWidget(lbl_modifiers)
+        #layout.addSpacing(10)
 
-        self.chk_post = QCheckBox("Remove Mask Partial Transparency")
-        self.chk_post.toggled.connect(self.trigger_refinement_update)
-        layout.addWidget(self.chk_post)
+        # indent smart refine to highlight (crudely) that they are part of the live preview
+        indent_container = QWidget()
+        indent_layout = QVBoxLayout(indent_container)
+        indent_layout.setContentsMargins(10, 0, 0, 0)
+
+        live_opac_layout = QHBoxLayout()
+        lbl_opac = QLabel("BG Dimming:")
+        lbl_opac.setToolTip("Adjust how visible the original background is during live preview")
+        
+        self.sl_live_opacity = QSlider(Qt.Orientation.Horizontal)
+        self.sl_live_opacity.setRange(0, 40)  
+        self.sl_live_opacity.setValue(30)
+        self.sl_live_opacity.setFixedWidth(100)
+        self.sl_live_opacity.valueChanged.connect(self.show_mask_overlay)
+        
+        live_opac_layout.addWidget(lbl_opac)
+        live_opac_layout.addWidget(self.sl_live_opacity)
+        live_opac_layout.addStretch() 
+        indent_layout.addLayout(live_opac_layout)
+
+        self.chk_live_preview.toggled.connect(self.sl_live_opacity.setEnabled)
+        self.sl_live_opacity.setEnabled(self.chk_live_preview.isChecked())
+
+        self.chk_binarise_mask = QCheckBox("Remove Mask Partial Transparency")
+        self.chk_binarise_mask.toggled.connect(self.trigger_refinement_update)
+        indent_layout.addWidget(self.chk_binarise_mask)
 
         self.chk_soften = QCheckBox("Soften Mask/Paintbrush Edges")
         soften_checked = self.settings.value("soften_mask", False, type=bool)
         self.chk_soften.setChecked(soften_checked)
         self.chk_soften.toggled.connect(lambda checked: self.settings.setValue("soften_mask", checked))
         self.chk_soften.toggled.connect(self.trigger_refinement_update) 
-        layout.addWidget(self.chk_soften)
+        indent_layout.addWidget(self.chk_soften)
         
-        layout.addSpacing(20)
+        indent_layout.addSpacing(20)
 
 
         matt_tt = "Uses a matting algorithm to estimate the transparency of mask edges.\n" + "This can improve the quality of detailed edges such as hair, especially when using binary mask models like SAM.\n" + "This requires a trimap (a foreground, unknown, background mask), either estimated from a SAM or automatic models, or manually drawn.\n" + "Alpha matting is computationally expensive and is only applied when 'Add' or 'Subtract' is clicked. Undo if the effect is unsatisfactory"
         lbl_alpha = QLabel("<b>SMART REFINE (Alpha Matting)</b>")
         lbl_alpha.setToolTip(matt_tt)
-        layout.addWidget(lbl_alpha)
+        indent_layout.addWidget(lbl_alpha)
         lbl_alpha_desc = QLabel("Uses specialised algorithms to refine difficult areas like hair and fur. ViTMatte is recommended")
         lbl_alpha_desc.setWordWrap(True)
         lbl_alpha_desc.setToolTip(matt_tt)
-        layout.addWidget(lbl_alpha_desc)
+        indent_layout.addWidget(lbl_alpha_desc)
 
         btn_refine_download = QPushButton("Download Refinement Models 📥")
         btn_refine_download.setToolTip("Download Refinement Models. VitMatte Small is recommended")
         btn_refine_download.clicked.connect(self.open_settings)
-        layout.addWidget(btn_refine_download)
+        indent_layout.addWidget(btn_refine_download)
 
 
         ma_layout = QHBoxLayout()
 
-
         matting_label = QLabel("Algorithm:")
         matting_tt = "Additional models can be downloaded using the model manager.\nThe default included PyMatting algo can be very slow on large images.\nViTMatte (model downloader) can be much faster and far more accurate"
         matting_label.setToolTip(matting_tt)
-        ma_layout.addWidget(matting_label)
+        ma_layout.addWidget(matting_label, 0)
 
 
         self.combo_matting_algorithm = QComboBox()
@@ -963,15 +1030,15 @@ class BackgroundRemoverGUI(QMainWindow):
         self.combo_matting_algorithm.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
         self.combo_matting_algorithm.setMinimumContentsLength(1)
         self.combo_matting_algorithm.currentIndexChanged.connect(self.trigger_refinement_update)
-        ma_layout.addWidget(self.combo_matting_algorithm)
+        ma_layout.addWidget(self.combo_matting_algorithm, 1)
 
-        layout.addLayout(ma_layout)
+        indent_layout.addLayout(ma_layout)
 
         self.chk_alpha_matting = QCheckBox("Enable Alpha Matting")
         self.chk_alpha_matting.setToolTip(matt_tt)
         self.chk_alpha_matting.toggled.connect(self.handle_alpha_matting_toggle)
         self.chk_alpha_matting.toggled.connect(self.trigger_refinement_update) 
-        layout.addWidget(self.chk_alpha_matting)
+        indent_layout.addWidget(self.chk_alpha_matting)
 
 
         # --- Alpha Matting Options Frame ---
@@ -1042,7 +1109,7 @@ class BackgroundRemoverGUI(QMainWindow):
         
 
 
-        layout.addWidget(self.alpha_matting_frame)
+        indent_layout.addWidget(self.alpha_matting_frame)
         self.alpha_matting_frame.hide()
 
         # end alpha matting
@@ -1065,20 +1132,22 @@ class BackgroundRemoverGUI(QMainWindow):
             h_layout.addWidget(slider)
             return label, slider, h_layout
         
-        layout.addSpacing(10)
+        indent_layout.addSpacing(10)
 
         lbl_brush_refine = QLabel("<b>Smart Refine Brush (Experimental)</b>")
-        layout.addWidget(lbl_brush_refine)
+        indent_layout.addWidget(lbl_brush_refine)
         
         lbl_brush_hint = QLabel("Hold <b>Ctrl + Paint</b> to locally refine edges such as hair on the <i>output</i> image.")
         lbl_brush_hint.setWordWrap(True)
         #lbl_brush_hint.setStyleSheet("color: #2a82da;")
-        layout.addWidget(lbl_brush_hint)
+        indent_layout.addWidget(lbl_brush_hint)
 
         self.lbl_smart_padding, self.sl_smart_padding, pad_l = make_brush_refine_slider(
             "Context Padding", 1, 5, 3)
         self.sl_smart_padding.setToolTip("Determines how much 'Definite' background and foreground the AI sees around your brush stroke.\nCan have small impact on output quality")
-        layout.addLayout(pad_l)
+        indent_layout.addLayout(pad_l)
+
+        layout.addWidget(indent_container)
 
         layout.addStretch()
         scroll.setWidget(container)
@@ -1122,13 +1191,6 @@ class BackgroundRemoverGUI(QMainWindow):
         self.combo_bg_color.currentTextChanged.connect(self.handle_bg_change)
         bg_layout.addWidget(self.combo_bg_color)
         layout.addLayout(bg_layout)
-        
-
-        self.chk_estimate_foreground = QCheckBox("Foreground Edge \nColour Correction (Slow)")
-        self.chk_estimate_foreground.setToolTip("Recalculates edge colors to remove halos or fringes from the original background.\n"
-                                                "Recommended for soft edges such as hair")
-        layout.addWidget(self.chk_estimate_foreground)
-        self.chk_estimate_foreground.toggled.connect(self.update_output_preview)
 
 
         self.chk_shadow = QCheckBox("Drop Shadow")
@@ -2159,6 +2221,8 @@ class BackgroundRemoverGUI(QMainWindow):
     def show_mask_overlay(self):
         is_live = self.chk_live_preview.isChecked()
         mask_only = self.chk_input_mask_only.isChecked()
+
+        live_preview_alpha = self.sl_live_opacity.value() / 100.0
         
         # Determine which mask to display
         active_mask = self.refined_preview_mask if is_live and self.refined_preview_mask else self.model_output_mask
@@ -2174,7 +2238,7 @@ class BackgroundRemoverGUI(QMainWindow):
                 self.overlay_pixmap_item.setPixmap(pil2pixmap(active_mask))
             else:
                 # image cutout over dimmed background
-                self.input_pixmap_item.setOpacity(0.2) # Dim the original
+                self.input_pixmap_item.setOpacity(live_preview_alpha) # Dim the original
                 self.overlay_pixmap_item.setOpacity(1.0)
                 
                 cutout = self.working_orig_image.convert("RGBA")
@@ -2414,7 +2478,7 @@ class BackgroundRemoverGUI(QMainWindow):
         mask_to_process = self.model_output_mask.copy()
         apply_matting = self.chk_alpha_matting.isChecked()
         apply_soften = self.chk_soften.isChecked()
-        apply_binary = self.chk_post.isChecked()
+        apply_binary = self.chk_binarise_mask.isChecked()
 
         msg = " Alpha matting can take a while" if apply_matting else ""
         self.set_loading(True, "Applying mask..." + msg)
@@ -2522,15 +2586,25 @@ class BackgroundRemoverGUI(QMainWindow):
     def render_output_image(self, shadow_downscale=0.125):
         if not self.working_orig_image: return
 
+        current_mask = self.working_mask
+
+        if self.chk_clean_alpha.isChecked():
+            current_mask = clean_alpha(current_mask)
+
+
+        # Generate Cutout
+
         # check if image has been adjusted using adjustment tab
         # if it has, we need to re-calculate cutout and bg blur
         adj_params = self.get_adjustment_params()
         adj_hash = hash(frozenset(adj_params.items()))
 
+
+        # foreground colour correction from pymatting
         if self.chk_estimate_foreground.isChecked():
             
             try:
-                current_mask_hash = hash(self.working_mask.tobytes())
+                current_mask_hash = hash(current_mask.tobytes())
                 fg_algo = self.settings.value("fg_correction_algo", "ml")
                 current_state_key = (current_mask_hash, adj_hash, fg_algo)
 
@@ -2538,7 +2612,7 @@ class BackgroundRemoverGUI(QMainWindow):
 
                     self.set_loading(True, f"Estimating foreground colour correction ({fg_algo.upper()})")
 
-                    cutout = self.model_manager.estimate_foreground(self.working_orig_image, self.working_mask, fg_algo)
+                    cutout = self.model_manager.estimate_foreground(self.working_orig_image, current_mask, fg_algo)
 
                     self.set_loading(False)
                     self.working_mask_hash = current_state_key
@@ -2550,15 +2624,19 @@ class BackgroundRemoverGUI(QMainWindow):
                 print(f"Error during foreground estimation: {e}")
                 # Fallback to the standard method if something goes wrong
                 cutout = self.working_orig_image.convert("RGBA")
-                cutout.putalpha(self.working_mask)
+                cutout.putalpha(current_mask)
         else:
             # Quick enough to not need caching
             cutout = self.working_orig_image.convert("RGBA")
-            cutout.putalpha(self.working_mask)
+            cutout.putalpha(current_mask)
         
+
+
+        # Generate effects and background colours
+
         if self.chk_shadow.isChecked():
             shadow_layer = generate_drop_shadow(
-                self.working_mask,
+                current_mask,
                 opacity=self.sl_s_op.value(),
                 blur_radius=self.sl_s_r.value(),
                 offset_x=self.sl_s_x.value(),
@@ -2572,7 +2650,7 @@ class BackgroundRemoverGUI(QMainWindow):
             final = cutout
         elif "Blur" in bg_txt:
 
-            mask_hash = hash(self.working_mask.tobytes())
+            mask_hash = hash(current_mask.tobytes())
             rad = getattr(self, 'blur_radius', 30)
             current_params = (mask_hash, adj_hash, rad)
             
@@ -2581,7 +2659,7 @@ class BackgroundRemoverGUI(QMainWindow):
             else:
                 self.set_loading(True, "Blurring Background")
                 
-                final = generate_blurred_background(self.working_orig_image, self.working_mask, rad)
+                final = generate_blurred_background(self.working_orig_image, current_mask, rad)
                 final.alpha_composite(cutout)
                 self.set_loading(False,"")
 
@@ -2598,10 +2676,22 @@ class BackgroundRemoverGUI(QMainWindow):
         
         return final
 
+    
+
     def update_output_preview(self):
 
         if self.chk_show_mask.isChecked(): 
-            final = self.working_mask.convert("RGBA")
+            
+
+            mask = self.working_mask
+            if self.chk_clean_alpha.isChecked():
+                mask = clean_alpha(mask)
+
+            if self.chk_show_partial_alpha.isChecked():
+                final = generate_alpha_map(mask)
+            else:
+                final = mask.convert("RGBA")
+        
         else:
             final = self.render_output_image()
         
@@ -2965,7 +3055,10 @@ class BackgroundRemoverGUI(QMainWindow):
             
         if save_mask:
             mname = os.path.splitext(fname)[0] + "_mask.png"
-            self.working_mask.save(mname)
+            mask = self.working_mask
+            if self.chk_clean_alpha.isChecked():
+                mask = clean_alpha(mask)
+            mask.save(mname)
             lbl = f"Saved to {os.path.basename(fname)} and {os.path.basename(mname)}"
 
         self.set_loading(False,lbl)
