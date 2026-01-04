@@ -20,7 +20,7 @@ from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QH
                              QSlider, QFrame, QSplitter, QDialog, QScrollArea, 
                              QGraphicsRectItem, QGraphicsEllipseItem, QGraphicsPathItem, 
                              QTextEdit, QSizePolicy, QRadioButton, QButtonGroup, QInputDialog, 
-                             QProgressBar, QStyle, QToolBar, QTabWidget, QSpacerItem)
+                             QProgressBar, QStyle, QToolBar, QTabWidget, QSpacerItem,QColorDialog)
 from PyQt6.QtCore import Qt, QTimer, QPointF, QRectF, QSettings, QPropertyAnimation, QEasingCurve, QThread, pyqtSignal, QEvent
 from PyQt6.QtGui import (QPixmap, QImage, QColor, QPainter, QPainterPath, QPen, QBrush,
                          QKeySequence, QShortcut, QCursor, QIcon, QPalette, QAction, QGuiApplication)
@@ -38,7 +38,8 @@ from src.ui_widgets import CollapsibleFrame, SynchronisedGraphicsView, Thumbnail
 #from src.ui_dialogs import SaveOptionsDialog, ImageEditorDialog
 from src.trimap_editor import TrimapEditorDialog
 from src.utils import pil2pixmap, numpy_to_pixmap, apply_tone_sharpness, generate_drop_shadow, \
-    generate_blurred_background, sanitise_filename_for_windows, get_current_crop_bbox, generate_trimap_from_mask, clean_alpha, generate_alpha_map
+    generate_blurred_background, sanitise_filename_for_windows, get_current_crop_bbox, generate_trimap_from_mask, clean_alpha, generate_alpha_map, \
+    generate_outline
 from src.constants import PAINT_BRUSH_SCREEN_SIZE, UNDO_STEPS, SOFTEN_RADIUS
 
 try: pyi_splash.update_text("Loading pymatting (Compiles on first run, approx 1-2 minutes)")
@@ -107,6 +108,7 @@ class BackgroundRemoverGUI(QMainWindow):
         self.crop_mode = False
         self.image_exif = None
         self.blur_radius = 30
+        self.outline_color = QColor(0, 0, 0)
 
         
         self.working_orig_image = None
@@ -1187,7 +1189,7 @@ class BackgroundRemoverGUI(QMainWindow):
         self.combo_bg_color = QComboBox()
         self.combo_bg_color.addItems(["Transparent", "White", "Black", "Red", "Blue", 
                   "Orange", "Yellow", "Green", "Grey", 
-                  "Lightgrey", "Brown", "Blurred (Slow)"])
+                  "Lightgrey", "Brown", "Blurred (Slow)", "Original Image"])
         self.combo_bg_color.currentTextChanged.connect(self.handle_bg_change)
         bg_layout.addWidget(self.combo_bg_color)
         layout.addLayout(bg_layout)
@@ -1232,6 +1234,47 @@ class BackgroundRemoverGUI(QMainWindow):
             
         layout.addWidget(self.shadow_frame)
         self.shadow_frame.hide()
+
+        #layout.addSpacing(10)
+
+        # Outline around mask
+        self.chk_outline = QCheckBox("Outline Cutout")
+        self.chk_outline.toggled.connect(self.toggle_outline_options)
+        layout.addWidget(self.chk_outline)
+
+        self.outline_frame = QFrame()
+        of_layout = QVBoxLayout(self.outline_frame)
+        of_layout.setContentsMargins(0, 0, 0, 0)
+        
+        # Outline Size Slider
+        self.lbl_outline_size, self.sl_outline_size, h_os_layout = make_slider_row("Size", 1, 100, 5)
+        self.sl_outline_size.valueChanged.connect(lambda: self.shadow_timer.start())
+        of_layout.addLayout(h_os_layout)
+
+        # Outline Threshold Slider
+        self.lbl_outline_thresh, self.sl_outline_thresh, h_ot_layout = make_slider_row("Threshold", 1, 254, 128)
+        self.sl_outline_thresh.setToolTip("Lower values include more of the semi-transparent edges in the outline base.")
+        self.sl_outline_thresh.valueChanged.connect(lambda: self.shadow_timer.start())
+        of_layout.addLayout(h_ot_layout)
+
+        # Outline Opacity Slider
+        self.lbl_outline_op, self.sl_outline_op, h_oop_layout = make_slider_row("Opacity", 0, 255, 255)
+        self.sl_outline_op.valueChanged.connect(lambda: self.shadow_timer.start())
+        of_layout.addLayout(h_oop_layout)
+
+        # Outline Colour Button
+        color_layout = QHBoxLayout()
+        color_layout.addWidget(QLabel("Colour:"))
+        self.btn_outline_color = QPushButton()
+        self.btn_outline_color.setToolTip("Select the outline colour")
+        self.btn_outline_color.clicked.connect(self.pick_outline_color)
+        self.update_outline_color_button() 
+        color_layout.addWidget(self.btn_outline_color)
+        color_layout.addStretch()
+        of_layout.addLayout(color_layout)
+
+        layout.addWidget(self.outline_frame)
+        self.outline_frame.hide()
 
         #layout.addStretch()
 
@@ -1298,7 +1341,29 @@ class BackgroundRemoverGUI(QMainWindow):
         is_lossy = fmt in ["webp_lossy", "jpeg"]
         self.export_quality_frame.setEnabled(is_lossy)
 
+    def toggle_shadow_options(self, checked):
+        if checked: self.shadow_frame.show()
+        else: self.shadow_frame.hide()
+        self.update_output_preview()
 
+    def toggle_outline_options(self, checked):
+        self.outline_frame.setVisible(checked)
+        self.update_output_preview()
+
+    def pick_outline_color(self):
+        color = QColorDialog.getColor(self.outline_color, self, "Select Outline Colour")
+        if color.isValid():
+            self.outline_color = color
+            self.update_outline_color_button()
+            self.update_output_preview()
+
+    def update_outline_color_button(self):
+        self.btn_outline_color.setText(self.outline_color.name())
+        # Set text colour based on luminance for readability
+        text_color = "white" if self.outline_color.lightnessF() < 0.5 else "black"
+        self.btn_outline_color.setStyleSheet(
+            f"background-color: {self.outline_color.name()}; color: {text_color};"
+        )
 
     def create_commit_widget(self):
         self.commit_zone = QFrame()
@@ -2633,6 +2698,17 @@ class BackgroundRemoverGUI(QMainWindow):
 
 
         # Generate effects and background colours
+        # TODO - fix outline being baked into blurred background
+
+        if self.chk_outline.isChecked():
+            outline_layer = generate_outline(
+                current_mask,
+                size=self.sl_outline_size.value(),
+                color_tuple=(self.outline_color.red(), self.outline_color.green(), self.outline_color.blue()),
+                threshold=self.sl_outline_thresh.value(),
+                opacity=self.sl_outline_op.value()
+            )
+            cutout = Image.alpha_composite(outline_layer, cutout)
 
         if self.chk_shadow.isChecked():
             shadow_layer = generate_drop_shadow(
@@ -2648,6 +2724,9 @@ class BackgroundRemoverGUI(QMainWindow):
         bg_txt = self.combo_bg_color.currentText()
         if bg_txt == "Transparent": 
             final = cutout
+        elif bg_txt == "Original Image":
+            final = self.working_orig_image.convert("RGBA")
+            final.alpha_composite(cutout)
         elif "Blur" in bg_txt:
 
             mask_hash = hash(current_mask.tobytes())

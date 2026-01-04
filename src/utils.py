@@ -448,3 +448,64 @@ def generate_alpha_map(mask):
         viz_np[semi_transparent_mask] = [255, 0, 0]
         
         return Image.fromarray(viz_np)
+
+
+def generate_outline(mask_pil, size, color_tuple, threshold=128, opacity=255):
+    """
+    Generates a solid-colored, high-quality smooth outline using a 
+    Distance Transform (SDF) approach.
+
+    Args:
+        mask_pil: PIL Image ('L' mode) of the mask.
+        size: The thickness of the outline in pixels.
+        color_tuple: An (R, G, B) tuple for the outline colour.
+        threshold: The alpha value (0-255) at which the outline begins.
+        opacity: The global opacity of the outline (0-255).
+    Returns:
+        A PIL Image ('RGBA' mode) of the smooth outline silhouette.
+    """
+    if size <= 0:
+        return Image.new("RGBA", mask_pil.size, (0, 0, 0, 0))
+
+    if isinstance(mask_pil, np.ndarray):
+        mask_np = mask_pil
+    else:
+        mask_np = np.array(mask_pil)
+
+    # Binarise using the user-provided threshold. 
+    _, binary_mask = cv2.threshold(mask_np, threshold, 255, cv2.THRESH_BINARY)
+
+    # Distance Transform
+    inverted_mask = cv2.bitwise_not(binary_mask)
+    dist_field = cv2.distanceTransform(inverted_mask, cv2.DIST_L2, cv2.DIST_MASK_PRECISE)
+
+    # Threshold the distance field
+    outline_mask = np.where(dist_field <= size, 255, 0).astype(np.uint8)
+
+    # Final Geometric Smoothing
+    smooth_rad = max(3, int(size * 0.3))
+    if smooth_rad % 2 == 0: smooth_rad += 1
+    
+    blurred = cv2.GaussianBlur(outline_mask, (smooth_rad, smooth_rad), 0)
+    _, final_mask = cv2.threshold(blurred, 140, 255, cv2.THRESH_BINARY)
+    
+    # Anti-Aliasing
+    final_mask = cv2.GaussianBlur(final_mask, (3, 3), 0)
+
+    # Assemble the RGBA layer
+    h, w = mask_np.shape
+    r, g, b = color_tuple
+    color_layer = np.zeros((h, w, 4), dtype=np.uint8)
+    color_layer[:, :, 0] = r
+    color_layer[:, :, 1] = g
+    color_layer[:, :, 2] = b
+    
+    # Apply user opacity to the final mask
+    if opacity < 255:
+        alpha_channel = (final_mask.astype(np.float32) * (opacity / 255.0)).astype(np.uint8)
+    else:
+        alpha_channel = final_mask
+
+    color_layer[:, :, 3] = alpha_channel
+    
+    return Image.fromarray(color_layer, "RGBA")
