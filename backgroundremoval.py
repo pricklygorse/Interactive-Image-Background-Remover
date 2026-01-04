@@ -2337,7 +2337,9 @@ class BackgroundRemoverGUI(QMainWindow):
         self.alpha_matting_frame.setVisible(checked)
         if checked:
             self.update_trimap_preview()
-            self.chk_show_trimap.setChecked(True)
+            # only show trimap immediately when live preview is off, otherwise difficult to a/b test
+            if not self.chk_live_preview.isChecked():
+                self.chk_show_trimap.setChecked(True)
         else:
             # If unchecked, also uncheck the trimap view so it's off if re-enabled
             self.chk_show_trimap.setChecked(False)
