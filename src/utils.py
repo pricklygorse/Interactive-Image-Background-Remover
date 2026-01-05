@@ -509,3 +509,88 @@ def generate_outline(mask_pil, size, color_tuple, threshold=128, opacity=255):
     color_layer[:, :, 3] = alpha_channel
     
     return Image.fromarray(color_layer, "RGBA")
+
+
+def generate_inner_glow(mask_pil, size, color_tuple, threshold=128, opacity=255):
+    """
+    Generates an inner glow layer with thresholding to prevent over-lighting 
+    faint edges.
+    
+    Args:
+        mask_pil: PIL Image ('L' mode) of the mask.
+        size: The thickness of the glow in pixels.
+        color_tuple: An (R, G, B) tuple for the glow colour.
+        threshold: The alpha value (0-255) to consider as the "solid" edge.
+        opacity: Global opacity (0-255).
+    """
+    if size <= 0:
+        return Image.new("RGBA", mask_pil.size, (0, 0, 0, 0))
+
+    if isinstance(mask_pil, np.ndarray):
+        mask_np = mask_pil
+    else:
+        mask_np = np.array(mask_pil)
+
+    # Binarise to ensure the glow calculates distance from a clean edge, not faint noise.
+    _, binary_mask = cv2.threshold(mask_np, threshold, 255, cv2.THRESH_BINARY)
+
+    # Distance Transform
+    dist_field = cv2.distanceTransform(binary_mask, cv2.DIST_L2, cv2.DIST_MASK_PRECISE)
+
+    # Internal gradient
+    glow_mask = np.clip(1.0 - (dist_field / size), 0, 1)
+    
+    # Constrain to the binarised area
+    glow_mask[binary_mask == 0] = 0
+    
+    # Smoothing
+    glow_mask = (glow_mask * 255).astype(np.uint8)
+    smooth_rad = max(3, int(size * 0.5))
+    if smooth_rad % 2 == 0: smooth_rad += 1
+    glow_mask = cv2.GaussianBlur(glow_mask, (smooth_rad, smooth_rad), 0)
+
+    # Assemble RGBA
+    h, w = mask_np.shape
+    r, g, b = color_tuple
+    glow_layer = np.zeros((h, w, 4), dtype=np.uint8)
+    glow_layer[:, :, 0] = r
+    glow_layer[:, :, 1] = g
+    glow_layer[:, :, 2] = b
+    
+    # Multiply glow by distance gradient (glow_mask), opacity and original mask
+    # to ensure the glow softens with the hair.
+    alpha_f = (glow_mask.astype(np.float32) / 255.0) * \
+              (opacity / 255.0) * \
+              (mask_np.astype(np.float32) / 255.0)
+              
+    glow_layer[:, :, 3] = (alpha_f * 255).astype(np.uint8)
+    
+    return Image.fromarray(glow_layer, "RGBA")
+
+
+def apply_subject_tint(image_pil, color_tuple, amount):
+    """
+    Applies a color tint to an RGBA image.
+    
+    Args:
+        image_pil: The subject cutout (PIL RGBA).
+        color_tuple: (R, G, B) to tint with.
+        amount: Intensity (0.0 to 1.0).
+    """
+    if amount <= 0:
+        return image_pil
+
+    img_np = np.array(image_pil).astype(np.float32)
+    h, w, _ = img_np.shape
+    
+    # Create a target color buffer
+    r, g, b = color_tuple
+    tint_layer = np.full((h, w, 3), [r, g, b], dtype=np.float32)
+    
+    # Blend original RGB with tint RGB
+    original_rgb = img_np[:, :, :3]
+    blended_rgb = (original_rgb * (1.0 - amount)) + (tint_layer * amount)
+    
+    img_np[:, :, :3] = blended_rgb
+    
+    return Image.fromarray(img_np.astype(np.uint8), "RGBA")

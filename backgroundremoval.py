@@ -39,7 +39,7 @@ from src.ui_widgets import CollapsibleFrame, SynchronisedGraphicsView, Thumbnail
 from src.trimap_editor import TrimapEditorDialog
 from src.utils import pil2pixmap, numpy_to_pixmap, apply_tone_sharpness, generate_drop_shadow, \
     generate_blurred_background, sanitise_filename_for_windows, get_current_crop_bbox, generate_trimap_from_mask, clean_alpha, generate_alpha_map, \
-    generate_outline
+    generate_outline, generate_inner_glow, apply_subject_tint
 from src.constants import PAINT_BRUSH_SCREEN_SIZE, UNDO_STEPS, SOFTEN_RADIUS
 
 try: pyi_splash.update_text("Loading pymatting (Compiles on first run, approx 1-2 minutes)")
@@ -109,6 +109,8 @@ class BackgroundRemoverGUI(QMainWindow):
         self.image_exif = None
         self.blur_radius = 30
         self.outline_color = QColor(0, 0, 0)
+        self.inner_glow_color = QColor(255, 255, 255)
+        self.tint_color = QColor(255, 200, 150)
 
         
         self.working_orig_image = None
@@ -1278,6 +1280,67 @@ class BackgroundRemoverGUI(QMainWindow):
 
         #layout.addStretch()
 
+        # Inner Glow
+        self.chk_inner_glow = QCheckBox("Inner Glow (Edge Light)")
+        self.chk_inner_glow.toggled.connect(self.toggle_inner_glow_options)
+        layout.addWidget(self.chk_inner_glow)
+
+        self.inner_glow_frame = QFrame()
+        ig_layout = QVBoxLayout(self.inner_glow_frame)
+        ig_layout.setContentsMargins(0, 0, 0, 0)
+
+        self.lbl_ig_size, self.sl_ig_size, h_ig_size = make_slider_row("Size", 1, 100, 10)
+        self.sl_ig_size.valueChanged.connect(lambda: self.shadow_timer.start())
+        ig_layout.addLayout(h_ig_size)
+
+        self.lbl_ig_op, self.sl_ig_op, h_ig_op = make_slider_row("Opacity", 0, 255, 150)
+        self.sl_ig_op.valueChanged.connect(lambda: self.shadow_timer.start())
+        ig_layout.addLayout(h_ig_op)
+
+        # New: Inner Glow Threshold Slider
+        self.lbl_ig_thresh, self.sl_ig_thresh, h_ig_thresh = make_slider_row("Threshold", 1, 254, 128)
+        self.sl_ig_thresh.setToolTip("Controls how far into the semi-transparency the glow starts.")
+        self.sl_ig_thresh.valueChanged.connect(lambda: self.shadow_timer.start())
+        ig_layout.addLayout(h_ig_thresh)
+
+        # Color Picker for Inner Glow
+        ig_col_layout = QHBoxLayout()
+        ig_col_layout.addWidget(QLabel("Colour:"))
+        self.btn_ig_color = QPushButton()
+        self.btn_ig_color.clicked.connect(self.pick_inner_glow_color)
+        self.update_inner_glow_color_button()
+        ig_col_layout.addWidget(self.btn_ig_color)
+        ig_col_layout.addStretch()
+        ig_layout.addLayout(ig_col_layout)
+
+        layout.addWidget(self.inner_glow_frame)
+        self.inner_glow_frame.hide()
+
+        # --- Subject Tint ---
+        self.chk_tint = QCheckBox("Subject Colour Tint")
+        self.chk_tint.toggled.connect(self.toggle_tint_options)
+        layout.addWidget(self.chk_tint)
+
+        self.tint_frame = QFrame()
+        t_layout = QVBoxLayout(self.tint_frame)
+        t_layout.setContentsMargins(0, 0, 0, 0)
+
+        self.lbl_tint_amt, self.sl_tint_amt, h_t_amt = make_slider_row("Amount", 0, 100, 20)
+        self.sl_tint_amt.valueChanged.connect(lambda: self.shadow_timer.start())
+        t_layout.addLayout(h_t_amt)
+
+        t_col_layout = QHBoxLayout()
+        t_col_layout.addWidget(QLabel("Colour:"))
+        self.btn_tint_color = QPushButton()
+        self.btn_tint_color.clicked.connect(self.pick_tint_color)
+        self.update_tint_color_button()
+        t_col_layout.addWidget(self.btn_tint_color)
+        t_col_layout.addStretch()
+        t_layout.addLayout(t_col_layout)
+
+        layout.addWidget(self.tint_frame)
+        self.tint_frame.hide()
+
         layout.addSpacing(20)
         layout.addWidget(QLabel("<b>EXPORT SETTINGS</b>"))
 
@@ -1364,6 +1427,38 @@ class BackgroundRemoverGUI(QMainWindow):
         self.btn_outline_color.setStyleSheet(
             f"background-color: {self.outline_color.name()}; color: {text_color};"
         )
+
+    def toggle_inner_glow_options(self, checked):
+        self.inner_glow_frame.setVisible(checked)
+        self.update_output_preview()
+
+    def pick_inner_glow_color(self):
+        color = QColorDialog.getColor(self.inner_glow_color, self, "Inner Glow Color")
+        if color.isValid():
+            self.inner_glow_color = color
+            self.update_inner_glow_color_button()
+            self.update_output_preview()
+
+    def update_inner_glow_color_button(self):
+        text_color = "white" if self.inner_glow_color.lightnessF() < 0.5 else "black"
+        self.btn_ig_color.setStyleSheet(f"background-color: {self.inner_glow_color.name()}; color: {text_color};")
+        self.btn_ig_color.setText(self.inner_glow_color.name())
+
+    def toggle_tint_options(self, checked):
+        self.tint_frame.setVisible(checked)
+        self.update_output_preview()
+
+    def pick_tint_color(self):
+        color = QColorDialog.getColor(self.tint_color, self, "Tint Color")
+        if color.isValid():
+            self.tint_color = color
+            self.update_tint_color_button()
+            self.update_output_preview()
+
+    def update_tint_color_button(self):
+        text_color = "white" if self.tint_color.lightnessF() < 0.5 else "black"
+        self.btn_tint_color.setStyleSheet(f"background-color: {self.tint_color.name()}; color: {text_color};")
+        self.btn_tint_color.setText(self.tint_color.name())
 
     def create_commit_widget(self):
         self.commit_zone = QFrame()
@@ -2700,6 +2795,13 @@ class BackgroundRemoverGUI(QMainWindow):
         # Generate effects and background colours
         # TODO - fix outline being baked into blurred background
 
+        if self.chk_tint.isChecked():
+            cutout = apply_subject_tint(
+                cutout, 
+                (self.tint_color.red(), self.tint_color.green(), self.tint_color.blue()),
+                self.sl_tint_amt.value() / 100.0
+            )
+
         if self.chk_outline.isChecked():
             outline_layer = generate_outline(
                 current_mask,
@@ -2750,6 +2852,15 @@ class BackgroundRemoverGUI(QMainWindow):
         else:
             final = Image.new("RGBA", self.working_orig_image.size, bg_txt.lower())
             final.alpha_composite(cutout)
+
+        if self.chk_inner_glow.isChecked():
+            glow_layer = generate_inner_glow(
+                current_mask, self.sl_ig_size.value(),
+                (self.inner_glow_color.red(), self.inner_glow_color.green(), self.inner_glow_color.blue()),
+                self.sl_ig_thresh.value(),
+                self.sl_ig_op.value()
+            )
+            final = Image.alpha_composite(final, glow_layer)
         
         self.last_render = final.copy()
         
