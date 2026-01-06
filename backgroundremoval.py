@@ -268,7 +268,7 @@ class BackgroundRemoverGUI(QMainWindow):
         self.in_out_splitter.addWidget(self.view_input)
 
         # Input view UI additions
-        self.chk_input_mask_only = QCheckBox("Show Only Model Ouput", self.view_input)
+        self.chk_input_mask_only = QCheckBox("Show Only Model Output", self.view_input)
         self.chk_input_mask_only.toggled.connect(self.show_mask_overlay)
         self.chk_input_mask_only.move(10, 10)
         self.chk_input_mask_only.setStyleSheet("""
@@ -1214,7 +1214,7 @@ class BackgroundRemoverGUI(QMainWindow):
         lbl_tri_src.setToolTip("A trimap is a guidance mask that specifies what is definite foreground, definite background, and 'unknown/mixed' for the model to calculate")
         am_layout.addWidget(lbl_tri_src)
         self.trimap_mode_group = QButtonGroup(self)
-        self.rb_trimap_auto = QRadioButton("Automatic (model output border expand)")
+        self.rb_trimap_auto = QRadioButton("Automatic \n (model output border expand)")
         self.rb_trimap_custom = QRadioButton("Custom (user-drawn)")
         
         self.trimap_mode_group.addButton(self.rb_trimap_auto)

@@ -157,7 +157,7 @@ class BatchProcessingDialog(QDialog):
                  generation_settings, render_settings, adj_settings, export_settings):
         super().__init__(parent)
         self.setWindowTitle("Batch Processing")
-        self.resize(800, 500)
+        self.resize(1000, 600)
         
         self.image_paths = image_paths
         self.model_manager = model_manager
@@ -176,6 +176,12 @@ class BatchProcessingDialog(QDialog):
         
     def init_ui(self):
         main_layout = QVBoxLayout(self)
+
+        # Description Label
+        description_label = QLabel("Batch editor uses the values you set in the main window and applies to all the currently loaded images")
+        main_layout.addWidget(description_label)
+
+        main_layout.addSpacing(10)
         
         # Splitter Layout: Left (Files) | Right (Settings)
         content_layout = QHBoxLayout()
