@@ -1,6 +1,7 @@
 import os
 import gc
 import cv2
+import sys
 import numpy as np
 import onnxruntime as ort
 from PIL import Image
@@ -48,6 +49,10 @@ class ModelManager:
             print("No onnxruntime providers")
             return []
         options = []
+        
+        # Generic Vulkan compatible provider. Requires a custom build of onnxruntime with --use_webgpu
+        if "WebGpuExecutionProvider" in available:
+            options.append(("WebGPU (Experimental)", "WebGpuExecutionProvider", {}, "webgpu"))
         
         # DEBUG override to show all providers
         #available = ["CUDAExecutionProvider", "CPUExecutionProvider", "TensorrtExecutionProvider", "OpenVINOExecutionProvider", "CoreMLExecutionProvider"] # DEBUG
