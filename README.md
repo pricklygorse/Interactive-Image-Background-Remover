@@ -1,3 +1,5 @@
+Find this useful and want to support my work? [You can buy me a coffee (or whatever) here.](https://ko-fi.com/pricklygorse) :)
+
 # Interactive Image Background Remover
 
 Interactive Background Remover is a user-friendly tool designed to remove backgrounds from images using a combination of interactive models (Segment Anything) and automatic whole-image models (such as u2net, disnet, rmbg, and BiRefNet). This allows you to refine and fine tune your background removal, similarly to apps like Photoroom, instead of only running models on the entire image.
@@ -12,9 +14,12 @@ Interactive Background Remover is a user-friendly tool designed to remove backgr
 - **Manual Paintbrush Mode**: Manually refine the background removal with a paintbrush tool for areas not covered by the models.
 - **Mask Refinement**: Smooth edges, filter anomalous areas and soften the mask for a natural look. You can directly edit the mask for high fidelity background removal.
 - **Alpha Matting and Trimap Editor**: Refine mask edges for improved accuracy with hair and similar features. You can use different matting models and also edit the trimap for higher quality results.
-- **Drop Shadow**: Basic drop shadow effect for the cutout object.
-- **Background Options**: Choose from various background colors or apply a blurred background effect.
+- **Smart Refine Paintbrush**: Clean up the tricky parts of the output image such as hair
+- **Batch Editing**: Utilising all the features of the app
+- **Drop Shadow, Glow, and more effects**: Basic drop shadow effect for the cutout object.
+- **Background Options**: Choose from various background colours or apply a blurred background effect.
 - **Image Editing**: Includes a built-in image editor and cropper to preprocess images before background removal.
+- **Object Removal/Inpainting**: Using open weight models LaMa and DeepFillV2
 - **Undo/Redo**
 - **Save Options**: Save the processed image in various formats (PNG, JPEG, WebP) with customisable quality settings and auto-trim.
 - **Clipboard Support**: Load images directly from the clipboard for quick editing.
@@ -52,20 +57,32 @@ pip install onnxruntime-directml # Microsoft Windows general machine learning (N
 
 This application requires pre-trained background removal/segmentation models in onnx format to function correctly.
 
-The application now includes a model downloader to make getting started very easy.
+The application includes a model downloader to make getting started very easy.
 
 **Interactive Models**
-- Segment Anything + mobile-sam:
+- Segment Anything 1 and 2 + mobile-sam:
 
 I recommend using mobile-sam as it has near instant inference results, and you can zoom into the image for higher resolution masks. I haven't found much benefit to using the larger models.
 
 
 **Whole Image Models**
 - rembg 1.4 and 2: [https://huggingface.co/briaai/RMBG-1.4/tree/main/onnx](https://huggingface.co/briaai/RMBG-1.4/tree/main/onnx)
-- u2net
+- u2net, u2netp
 - disnet
-- BiRefNet 
-```
+- BiRefNet
+- MVANet
+- MODnet
+- BEN2
+
+**Alpha Matting Models**
+- ViTMatte
+- AlphaMatte
+- PyMatting
+
+**Inpainting Object Removal**
+- LaMa
+- DeepFillV2
+
 
 ## Usage
 
@@ -95,7 +112,7 @@ python interactive_background_remover.py image1.jpg image2.png
 ### Basic Workflow
 
 1. **Load Image**: Click "Open Image" to load an image file or "Open Clipboard" to use an image from the clipboard.
-2. **Select Model**: Choose a model from the "Model Selection" section.
+2. **Select Model**: Choose a model from the "Mask" section.
 3. **Zoom and Pan**: Use the full image or zoom into region of interest (arrow keys or middle mouse to pan, mouse scroll to zoom)
 4. **Generate Background Removal Mask**:
    - **Interactively: Segment Anything**: Left-click to add a positive point, right-click to add a negative (exclusion) point, or drag to draw a box around the object.
@@ -132,7 +149,7 @@ python interactive_background_remover.py image1.jpg image2.png
 
 ### Image Editing
 
-Click "Edit Image" to open the built-in image editor, where you can crop, rotate, and adjust various image parameters like brightness, contrast, saturation, and white balance.
+Click "Edit Image" to open the built-in image editor, where you can crop, rotate, and adjust various image parameters like brightness, contrast, saturation, and white balance. You can also inpaint and remove objects using downloadable models (LaMa and DeepFillV2).
 
 ![Screenshot of main window](Images/image_editor.jpg)
 
@@ -151,6 +168,6 @@ I'm fairly new to python so any improvements to the code, features, and suggesti
 
 # Acknowledgements
 
-This was originally inspired by the command line program [RemBG by Daniel Gatis](https://github.com/danielgatis/rembg), and some of the inference code is adapted from this. 
+This was originally inspired by the command line program [RemBG by Daniel Gatis](https://github.com/danielgatis/rembg), and some of the original inference code was adapted from this. 
 
 Huge thanks to Meta for Segment Anything and all the other model authors for releasing their models. 
