@@ -39,7 +39,7 @@ from src.ui_dialogs import InpaintingDialog
 from src.trimap_editor import TrimapEditorDialog
 from src.utils import pil2pixmap, numpy_to_pixmap, apply_tone_sharpness, generate_drop_shadow, \
     generate_blurred_background, sanitise_filename_for_windows, get_current_crop_bbox, generate_trimap_from_mask, clean_alpha, generate_alpha_map, \
-    generate_outline, generate_inner_glow, apply_subject_tint
+    generate_outline, generate_inner_glow, apply_subject_tint, compose_final_image, refine_mask
 from src.constants import PAINT_BRUSH_SCREEN_SIZE, UNDO_STEPS, SOFTEN_RADIUS
 
 try: pyi_splash.update_text("Loading pymatting (Compiles on first run, approx 1-2 minutes)")
@@ -51,6 +51,8 @@ from src.model_manager import ModelManager
 VIEW_IN_MSG = "Models run on current view. Zoom for more detail.   L-Click: Add Point | R-Click: Add Avoid Point | Drag: Box | M-Click: Pan | Scroll: Zoom (Ctrl+Scroll Touchpad) | [P]: Paintbrush"
 VIEW_OUT_MSG = "OUTPUT | M-Click: Pan | Scroll: Zoom | [A/S]: Add/Subtract Current Model Mask from Output"
 VIEW_PAINT_MSG = "PAINTBRUSH | L-Click: Paint | R-Click: Erase | M-Click: Pan | Scroll: Zoom | [P]: Exit Paint"
+
+from src.batch_editing import BatchProcessingDialog
 
 class InferenceWorker(QThread):
     """Super simple threaded worker that can take functions"""
@@ -129,6 +131,7 @@ class BackgroundRemoverGUI(QMainWindow):
         self.output_refresh_timer.setSingleShot(True)
         self.output_refresh_timer.setInterval(300)
         self.output_refresh_timer.timeout.connect(self.update_output_preview)
+        self.output_refresh_timer.timeout.connect(self.trigger_refinement_update)
 
         self.working_mask = None
         self.last_trimap = None
@@ -345,9 +348,27 @@ class BackgroundRemoverGUI(QMainWindow):
         self.thumbnail_strip = ThumbnailList()
         self.thumbnail_strip.itemClicked.connect(self.on_thumbnail_clicked)
 
+        # Bottom Strip (Thumbs + Batch Button)
+        bottom_strip_widget = QWidget()
+        bottom_strip_layout = QHBoxLayout(bottom_strip_widget)
+        bottom_strip_layout.setContentsMargins(0, 0, 0, 0)
+        bottom_strip_layout.setSpacing(2)
+        
+        bottom_strip_layout.addWidget(self.thumbnail_strip, 1) # Expand
+        
+        self.btn_batch = QPushButton("Batch\nProcess")
+        self.btn_batch.setToolTip("Run current settings on all loaded images")
+        self.btn_batch.clicked.connect(self.open_batch_dialog)
+        self.btn_batch.setFixedWidth(80) 
+        self.btn_batch.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Expanding)
+        # Style to look actionable but distinct
+        self.btn_batch.setStyleSheet("background-color: #444; color: white; font-weight: bold; border: 1px solid #555;")
+        
+        bottom_strip_layout.addWidget(self.btn_batch)
+
         # Add the splitter to the top, thumbnails to the bottom
         views_thumbs_layout.addWidget(self.in_out_splitter, 1) # '1' ensures views take most space
-        views_thumbs_layout.addWidget(self.thumbnail_strip)
+        views_thumbs_layout.addWidget(bottom_strip_widget)
 
         # Assemble sidebar + views
         main_layout.addWidget(self.sidebar_container)
@@ -433,6 +454,94 @@ class BackgroundRemoverGUI(QMainWindow):
         toolbar.addAction("Settings ⚙️").triggered.connect(self.open_settings)
 
         toolbar.addAction("Help/About").triggered.connect(self.show_help)
+
+    def open_batch_dialog(self):
+        if not self.image_paths:
+            QMessageBox.warning(self, "No Images", "Please open images first.")
+            return
+
+        gen_settings = self.get_generation_settings()
+        render_settings = self.get_render_settings()
+        adj_settings = self.get_adjustment_params()
+        export_settings = self.get_export_settings()
+        
+        dlg = BatchProcessingDialog(self, self.image_paths, self.model_manager,
+                                    gen_settings, render_settings, adj_settings, export_settings)
+        dlg.exec()
+
+    def get_generation_settings(self):
+        """
+        Captures settings related to mask generation (inference + refinement).
+        """
+        matting_enabled = self.chk_alpha_matting.isChecked()
+        return {
+            "model_name": self.combo_whole.currentText(),
+            "provider_data": self.combo_auto_model_EP.currentData(),
+            "use_2step": self.chk_2step_auto.isChecked(),
+            "matting": {
+                "enabled": matting_enabled,
+                "algorithm": self.combo_matting_algorithm.currentText(),
+                # Assuming simple auto trimap for batch
+                "fg_erode": self.sl_fg_erode.value(),
+                "bg_erode": self.sl_bg_erode.value(),
+                "provider_data": self.combo_auto_model_EP.currentData(),
+                "longest_edge_limit": int(self.settings.value("matting_longest_edge", 1024))
+            },
+            "soften": self.chk_soften.isChecked(),
+            "soften_radius": 1.5, # Could be made configurable
+            "binarise": self.chk_binarise_mask.isChecked()
+        }
+    
+    def get_render_settings(self):
+        """
+        Captures all current UI settings related to image composition into a dictionary.
+        """
+        return {
+            "clean_alpha": self.chk_clean_alpha.isChecked(),
+            "foreground_correction": {
+                "enabled": self.chk_estimate_foreground.isChecked(),
+                "algorithm": self.settings.value("fg_correction_algo", "ml")
+            },
+            "tint": {
+                "enabled": self.chk_tint.isChecked(),
+                "color": (self.tint_color.red(), self.tint_color.green(), self.tint_color.blue()),
+                "amount": self.sl_tint_amt.value() / 100.0
+            },
+            "outline": {
+                "enabled": self.chk_outline.isChecked(),
+                "size": self.sl_outline_size.value(),
+                "color": (self.outline_color.red(), self.outline_color.green(), self.outline_color.blue()),
+                "threshold": self.sl_outline_thresh.value(),
+                "opacity": self.sl_outline_op.value()
+            },
+            "shadow": {
+                "enabled": self.chk_shadow.isChecked(),
+                "opacity": self.sl_s_op.value(),
+                "radius": self.sl_s_r.value(),
+                "x": self.sl_s_x.value(),
+                "y": self.sl_s_y.value()
+            },
+            "background": {
+                "type": self.combo_bg_color.currentText(),
+                "blur_radius": getattr(self, 'blur_radius', 30),
+                "color": self.combo_bg_color.currentText()
+            },
+            "inner_glow": {
+                "enabled": self.chk_inner_glow.isChecked(),
+                "size": self.sl_ig_size.value(),
+                "color": (self.inner_glow_color.red(), self.inner_glow_color.green(), self.inner_glow_color.blue()),
+                "threshold": self.sl_ig_thresh.value(),
+                "opacity": self.sl_ig_op.value()
+            }
+        }
+
+    def get_export_settings(self):
+        return {
+            "format": self.combo_export_fmt.currentData(),
+            "quality": self.sl_export_quality.value(),
+            "save_mask": self.chk_export_mask.isChecked(),
+            "trim": self.chk_export_trim.isChecked()
+        }
 
     def create_adjust_tab(self):
         scroll = QScrollArea()
@@ -2617,6 +2726,7 @@ class BackgroundRemoverGUI(QMainWindow):
             
             # Ensure the preview is shown
             self.chk_show_trimap.setChecked(True)
+            self.trigger_refinement_update()
             self.status_label.setText("Custom trimap updated.")
         self.update_trimap_preview()
 
@@ -2714,6 +2824,9 @@ class BackgroundRemoverGUI(QMainWindow):
         matting_params = {}
         if apply_matting:
             try:
+                # Unsure if the normal logic of cropping the image to the viewport is as relevant when matting models
+                # are resolution agnostic. But for performance on my machine, and consistency with automatic models,
+                # will keep matting to the viewport
                 image_crop, x_off, y_off = self.get_viewport_crop()
                 trimap_np = None
                 limit = int(self.settings.value("matting_longest_edge", 1024))
@@ -2749,12 +2862,28 @@ class BackgroundRemoverGUI(QMainWindow):
             processed_mask = base_mask
 
             if matting_enabled and m_params:
-                matted_alpha_crop = model_manager.run_matting(
-                    m_params['algorithm'], 
+                # Construct settings for the crop matting step
+                mat_settings = {
+                    "matting": {
+                        "enabled": True,
+                        "algorithm": m_params['algorithm'],
+                        "provider_data": m_params['provider_data'],
+                        "longest_edge_limit": m_params['longest_edge_limit']
+                    }
+                }
+                
+                # Extract mask crop to match the image crop
+                x, y = m_params['x_off'], m_params['y_off']
+                w, h = m_params['image_crop'].size
+                mask_crop = processed_mask.crop((x, y, x + w, y + h))
+                
+                # Run Refine Mask on the crop (using passed trimap)
+                matted_alpha_crop = refine_mask(
+                    mask_crop, 
                     m_params['image_crop'], 
-                    m_params['trimap_np'], 
-                    m_params['provider_data'],
-                    longest_edge_limit=m_params['longest_edge_limit']
+                    mat_settings, 
+                    model_manager, 
+                    trimap_np=m_params['trimap_np']
                 )
 
                 if matted_alpha_crop:
@@ -2762,19 +2891,21 @@ class BackgroundRemoverGUI(QMainWindow):
                     new_m = processed_mask.copy()
                     # Create a black patch to clear the area under the new matted crop
                     paste_area = Image.new("L", matted_alpha_crop.size, 0)
-                    new_m.paste(paste_area, (m_params['x_off'], m_params['y_off']))
+                    new_m.paste(paste_area, (x, y))
                     # Paste the new matted result
-                    new_m.paste(matted_alpha_crop, (m_params['x_off'], m_params['y_off']))
+                    new_m.paste(matted_alpha_crop, (x, y))
                     processed_mask = new_m
 
-            if soften_enabled:
-                processed_mask = processed_mask.filter(ImageFilter.GaussianBlur(radius=SOFTEN_RADIUS))
+            # Apply Global Effects (Soften / Binarise)
+            global_settings = {
+                "soften": soften_enabled,
+                "soften_radius": SOFTEN_RADIUS,
+                "binarise": binary_enabled
+            }
             
-            if binary_enabled:
-                arr = np.array(processed_mask) > 128
-                kernel = np.ones((3,3), np.uint8)
-                arr = cv2.erode(cv2.dilate(arr.astype(np.uint8), kernel, iterations=1), kernel, iterations=1).astype(bool)
-                processed_mask = Image.fromarray((arr*255).astype(np.uint8))
+            # Since matting is already done (or disabled), we don't need to pass image/model_manager here
+            # Should probably split into two functions instead of using different parts of one a second time...
+            processed_mask = refine_mask(processed_mask, None, global_settings, None)
             
             return processed_mask
 
@@ -2810,128 +2941,76 @@ class BackgroundRemoverGUI(QMainWindow):
         else: self.shadow_frame.hide()
         self.update_output_preview()
 
+    
+
     #@profile
     def render_output_image(self, shadow_downscale=0.125):
         if not self.working_orig_image: return
 
-        current_mask = self.working_mask
+        # Get Settings
+        settings = self.get_render_settings()
+        
+        # Inject downscale for GUI performance (not in base settings as batch might want full quality)
+        settings['shadow']['downscale'] = shadow_downscale
 
-        if self.chk_clean_alpha.isChecked():
+        current_mask = self.working_mask
+        if settings["clean_alpha"]:
             current_mask = clean_alpha(current_mask)
 
-
-        # Generate Cutout
-
-        # check if image has been adjusted using adjustment tab
-        # if it has, we need to re-calculate cutout and bg blur
+        # Handle Caching Logic for Foreground Estimation
+        precomputed_cutout = None
+        
+        # Check if we need to update the cached cutout
         adj_params = self.get_adjustment_params()
         adj_hash = hash(frozenset(adj_params.items()))
-
-
-        # foreground colour correction from pymatting
-        if self.chk_estimate_foreground.isChecked():
-            
-            try:
+        
+        if settings["foreground_correction"]["enabled"]:
+             try:
                 current_mask_hash = hash(current_mask.tobytes())
-                fg_algo = self.settings.value("fg_correction_algo", "ml")
+                fg_algo = settings["foreground_correction"]["algorithm"]
                 current_state_key = (current_mask_hash, adj_hash, fg_algo)
 
                 if current_state_key != self.working_mask_hash:
-
                     self.set_loading(True, f"Estimating foreground colour correction ({fg_algo.upper()})")
-
-                    cutout = self.model_manager.estimate_foreground(self.working_orig_image, current_mask, fg_algo)
-
+                    # We compute it here to cache it on the instance
+                    precomputed_cutout = self.model_manager.estimate_foreground(self.working_orig_image, current_mask, fg_algo)
                     self.set_loading(False)
+                    
                     self.working_mask_hash = current_state_key
-                    self.cached_fg_corrected_cutout = cutout
+                    self.cached_fg_corrected_cutout = precomputed_cutout
                 else:
-                    cutout = self.cached_fg_corrected_cutout
-
-            except Exception as e:
+                    precomputed_cutout = self.cached_fg_corrected_cutout
+             except Exception as e:
                 print(f"Error during foreground estimation: {e}")
-                # Fallback to the standard method if something goes wrong
-                cutout = self.working_orig_image.convert("RGBA")
-                cutout.putalpha(current_mask)
-        else:
-            # Quick enough to not need caching
-            cutout = self.working_orig_image.convert("RGBA")
-            cutout.putalpha(current_mask)
-        
+
+        # Handle Caching Logic for Blurred Background
+        precomputed_bg = None
+        if "Blur" in settings["background"]["type"]:
+             mask_hash = hash(current_mask.tobytes())
+             rad = settings["background"]["blur_radius"]
+             current_params = (mask_hash, adj_hash, rad)
+             
+             if current_params == self.last_blur_params and self.cached_blurred_bg is not None:
+                 precomputed_bg = self.cached_blurred_bg
+             else:
+                 self.set_loading(True, "Blurring Background")
+                 precomputed_bg = generate_blurred_background(self.working_orig_image, current_mask, rad)
+                 self.set_loading(False)
+                 
+                 self.cached_blurred_bg = precomputed_bg
+                 self.last_blur_params = current_params
 
 
-        # Generate effects and background colours
-        # TODO - fix outline being baked into blurred background
-
-        if self.chk_tint.isChecked():
-            cutout = apply_subject_tint(
-                cutout, 
-                (self.tint_color.red(), self.tint_color.green(), self.tint_color.blue()),
-                self.sl_tint_amt.value() / 100.0
-            )
-
-        if self.chk_outline.isChecked():
-            outline_layer = generate_outline(
-                current_mask,
-                size=self.sl_outline_size.value(),
-                color_tuple=(self.outline_color.red(), self.outline_color.green(), self.outline_color.blue()),
-                threshold=self.sl_outline_thresh.value(),
-                opacity=self.sl_outline_op.value()
-            )
-            cutout = Image.alpha_composite(outline_layer, cutout)
-
-        if self.chk_shadow.isChecked():
-            shadow_layer = generate_drop_shadow(
-                current_mask,
-                opacity=self.sl_s_op.value(),
-                blur_radius=self.sl_s_r.value(),
-                offset_x=self.sl_s_x.value(),
-                offset_y=self.sl_s_y.value(),
-                shadow_downscale=shadow_downscale
-            )
-            cutout = Image.alpha_composite(shadow_layer, cutout)
-
-        bg_txt = self.combo_bg_color.currentText()
-        if bg_txt == "Transparent": 
-            final = cutout
-        elif bg_txt == "Original Image":
-            final = self.working_orig_image.convert("RGBA")
-            final.alpha_composite(cutout)
-        elif "Blur" in bg_txt:
-
-            mask_hash = hash(current_mask.tobytes())
-            rad = getattr(self, 'blur_radius', 30)
-            current_params = (mask_hash, adj_hash, rad)
-            
-            if current_params == self.last_blur_params and self.cached_blurred_bg is not None:
-                final = self.cached_blurred_bg.copy()
-            else:
-                self.set_loading(True, "Blurring Background")
-                
-                final = generate_blurred_background(self.working_orig_image, current_mask, rad)
-                final.alpha_composite(cutout)
-                self.set_loading(False,"")
-
-                self.cached_blurred_bg = final.copy()
-                self.last_blur_params = current_params
-                self.set_loading(False, "")
-
-            final.alpha_composite(cutout)
-        else:
-            final = Image.new("RGBA", self.working_orig_image.size, bg_txt.lower())
-            final.alpha_composite(cutout)
-
-        if self.chk_inner_glow.isChecked():
-            glow_layer = generate_inner_glow(
-                current_mask, self.sl_ig_size.value(),
-                (self.inner_glow_color.red(), self.inner_glow_color.green(), self.inner_glow_color.blue()),
-                self.sl_ig_thresh.value(),
-                self.sl_ig_op.value()
-            )
-            final = Image.alpha_composite(final, glow_layer)
+        final = compose_final_image(
+            self.working_orig_image, 
+            self.working_mask, 
+            settings, 
+            model_manager=self.model_manager,
+            precomputed_cutout=precomputed_cutout,
+            precomputed_bg=precomputed_bg
+        )
         
         self.last_render = final.copy()
-        
         return final
 
     
@@ -2940,7 +3019,6 @@ class BackgroundRemoverGUI(QMainWindow):
 
         if self.chk_show_mask.isChecked(): 
             
-
             mask = self.working_mask
             if self.chk_clean_alpha.isChecked():
                 mask = clean_alpha(mask)

@@ -4,8 +4,7 @@ import cv2
 import math
 from timeit import default_timer as timer
 import os
-from PIL import Image
-
+from PIL import Image, ImageFilter
 
 
 
@@ -284,7 +283,7 @@ def sanitise_filename_for_windows(path: str) -> str:
 
     """
     On Windows, strip invalid filename characters from the basename:
-    \\/:*?"<>|
+    \/:*?"<>|
     Directory part (e.g. C:\\folder) is left intact.
     """
     if os.name != "nt":
@@ -341,7 +340,6 @@ def get_current_crop_bbox(working_mask, drop_shadow, sl_s_x, sl_s_y, sl_s_r):
         return None
 
     return (final_min_x, final_min_y, final_max_x, final_max_y)
-
 
 
 
@@ -594,3 +592,152 @@ def apply_subject_tint(image_pil, color_tuple, amount):
     img_np[:, :, :3] = blended_rgb
     
     return Image.fromarray(img_np.astype(np.uint8), "RGBA")
+
+def compose_final_image(original_image, mask, settings, model_manager=None, 
+                       precomputed_cutout=None, precomputed_bg=None):
+    """
+    Composes the final image based on the original image, mask, and settings.
+    Supports injecting precomputed layers (cutout, background) for caching in GUI.
+    Otherwise generates layers for use in batch processing
+    """
+    
+    current_mask = mask
+    if settings.get("clean_alpha", True):
+        current_mask = clean_alpha(current_mask)
+
+    # 2. Prepare Cutout (Foreground)
+    cutout = precomputed_cutout
+    
+    if cutout is None:
+        fg_settings = settings.get("foreground_correction", {})
+        if fg_settings.get("enabled", False) and model_manager:
+            algo = fg_settings.get("algorithm", "ml")
+            cutout = model_manager.estimate_foreground(original_image, current_mask, algo)
+        else:
+            cutout = original_image.convert("RGBA")
+            cutout.putalpha(current_mask)
+
+    # Apply Effects to Cutout
+    
+    # Tint
+    tint_settings = settings.get("tint", {})
+    if tint_settings.get("enabled", False):
+        cutout = apply_subject_tint(
+            cutout, 
+            tint_settings.get("color"),
+            tint_settings.get("amount")
+        )
+
+    # Outline
+    outline_settings = settings.get("outline", {})
+    if outline_settings.get("enabled", False):
+        outline_layer = generate_outline(
+            current_mask,
+            size=outline_settings.get("size"),
+            color_tuple=outline_settings.get("color"),
+            threshold=outline_settings.get("threshold"),
+            opacity=outline_settings.get("opacity")
+        )
+        cutout = Image.alpha_composite(outline_layer, cutout)
+
+    # Drop Shadow
+    shadow_settings = settings.get("shadow", {})
+    if shadow_settings.get("enabled", False):
+        shadow_layer = generate_drop_shadow(
+            current_mask,
+            opacity=shadow_settings.get("opacity"),
+            blur_radius=shadow_settings.get("radius"),
+            offset_x=shadow_settings.get("x"),
+            offset_y=shadow_settings.get("y"),
+            shadow_downscale=shadow_settings.get("downscale", 0.125)
+        )
+        cutout = Image.alpha_composite(shadow_layer, cutout)
+
+    # Compose with Background
+    bg_settings = settings.get("background", {})
+    bg_type = bg_settings.get("type", "Transparent")
+    
+    final = None
+    
+    if bg_type == "Transparent":
+        final = cutout
+    elif bg_type == "Original Image":
+        final = original_image.convert("RGBA")
+        final.alpha_composite(cutout)
+    elif "Blur" in bg_type:
+        if precomputed_bg:
+            final = precomputed_bg.copy()
+        else:
+            final = generate_blurred_background(
+                original_image, 
+                current_mask, 
+                bg_settings.get("blur_radius", 30)
+            )
+        final.alpha_composite(cutout)
+    else:
+        # Solid Color
+        color = bg_settings.get("color", (0, 0, 0)) # Default black
+        # If color is a string (e.g. from known colors), handle or assume tuple
+        if isinstance(color, str):
+             final = Image.new("RGBA", original_image.size, color.lower())
+        else:
+             final = Image.new("RGBA", original_image.size, color)
+             
+        final.alpha_composite(cutout)
+
+    # Inner Glow
+    ig_settings = settings.get("inner_glow", {})
+    if ig_settings.get("enabled", False):
+        glow_layer = generate_inner_glow(
+            current_mask, 
+            ig_settings.get("size"),
+            ig_settings.get("color"),
+            ig_settings.get("threshold"),
+            ig_settings.get("opacity")
+        )
+        final = Image.alpha_composite(final, glow_layer)
+
+    return final
+
+def refine_mask(base_mask, image, settings, model_manager, trimap_np=None):
+    """
+    Refines a mask using alpha matting, softening, or binarisation.
+    """
+    processed_mask = base_mask
+
+    # Alpha Matting
+    matting_settings = settings.get("matting", {})
+    if matting_settings.get("enabled", False) and model_manager:
+        # Prepare params
+        limit = matting_settings.get("longest_edge_limit", 1024)
+        fg_erode = matting_settings.get("fg_erode", 15)
+        bg_erode = matting_settings.get("bg_erode", 15)
+        algo = matting_settings.get("algorithm", "vitmatte")
+        provider = matting_settings.get("provider_data", None)
+
+        # Generate Trimap (Batch mode always uses auto trimap for now)
+        if trimap_np is None:
+            trimap_np = generate_trimap_from_mask(processed_mask, fg_erode, bg_erode)
+        
+        matted_alpha = model_manager.run_matting(
+            algo,
+            image,
+            trimap_np,
+            provider,
+            longest_edge_limit=limit
+        )
+        if matted_alpha:
+            processed_mask = matted_alpha
+
+    # Soften
+    if settings.get("soften", False):
+        processed_mask = processed_mask.filter(ImageFilter.GaussianBlur(radius=settings.get("soften_radius", 1.5)))
+
+    # Binarise
+    if settings.get("binarise", False):
+        arr = np.array(processed_mask) > 128
+        kernel = np.ones((3,3), np.uint8)
+        arr = cv2.erode(cv2.dilate(arr.astype(np.uint8), kernel, iterations=1), kernel, iterations=1).astype(bool)
+        processed_mask = Image.fromarray((arr*255).astype(np.uint8))
+        
+    return processed_mask
