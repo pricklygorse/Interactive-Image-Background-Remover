@@ -667,3 +667,172 @@ class ModelManager:
         # Return as RGBA PIL image
         combined = np.dstack((fg_rgb, (alpha * 255).astype(np.uint8)))
         return Image.fromarray(combined, "RGBA")
+    
+
+
+
+    # Inpainting
+
+    def get_inpainting_session(self, model_name, provider_data):
+        """
+        Gets or loads the inpainting session. 
+        Reuse auto_cache settings for simplicity.
+        """
+        prov_str, prov_opts, prov_code = provider_data
+        model_path = os.path.join(self.model_root_dir, model_name + ".onnx")
+        cache_key = f"{model_name}_{prov_code}"
+
+        if self.auto_cache_mode > 0 and cache_key in self.loaded_whole_models:
+             return self.loaded_whole_models[cache_key]
+        
+        if self.auto_cache_mode < 2:
+            self.clear_auto_cache()
+
+        session = self._create_inference_session(model_path, prov_str, prov_opts, model_name)
+        
+        if self.auto_cache_mode > 0:
+            self.loaded_whole_models[cache_key] = session
+            
+        return session
+
+    def run_lama_inpainting(self, image_pil, mask_pil, provider_data):
+        """
+        Runs LaMa inpainting on the provided image and mask.
+        Adapted from ailia example for ONNX Runtime.
+        """
+        model_name = "lama"
+        session = self.get_inpainting_session(model_name, provider_data)
+
+        # Input image: float32, 0.0 - 1.0
+        image_np = np.array(image_pil.convert("RGB")).astype(np.float32) / 255.0
+        orig_h, orig_w = image_np.shape[:2]
+
+        mask_np = np.array(mask_pil.convert("L")).astype(np.float32) / 255.0
+        # Ensure binary mask
+        mask_np = (mask_np > 0).astype(np.float32)
+
+        # Preprocess
+        def ceil_modulo(x, mod):
+            if x % mod == 0: return x
+            return (x // mod + 1) * mod
+
+        def pad_img_to_modulo(img, mod):
+            if len(img.shape) == 3:
+                height, width, channels = img.shape
+                out_height = ceil_modulo(height, mod)
+                out_width = ceil_modulo(width, mod)
+                # Pad Height and Width, leave Channels (0,0)
+                return np.pad(img, ((0, out_height - height), (0, out_width - width), (0, 0)), mode='symmetric')
+            else:
+                height, width = img.shape
+                out_height = ceil_modulo(height, mod)
+                out_width = ceil_modulo(width, mod)
+                return np.pad(img, ((0, out_height - height), (0, out_width - width)), mode='symmetric')
+
+        pad_out_to_modulo = 32
+        
+        image_padded = pad_img_to_modulo(image_np, pad_out_to_modulo)
+        mask_padded = pad_img_to_modulo(mask_np, pad_out_to_modulo)
+
+        # Transpose HWC -> CHW and add batch dimension -> NCHW
+        input_image = np.transpose(image_padded, (2, 0, 1))[None, ...]
+        input_mask = mask_padded[None, None, ...]
+
+        # Inference
+        t_start = timer()
+        inputs = {
+            session.get_inputs()[0].name: input_image,
+            session.get_inputs()[1].name: input_mask
+        }
+        result = session.run(None, inputs)[0]
+        
+        inference_time = (timer() - t_start) * 1000
+
+        # Post Process
+        result = result[0]
+        result = np.transpose(result, (1, 2, 0)) # CHW -> HWC
+        
+        result = np.clip(result, 0, 255).astype(np.uint8)
+
+        # Crop back to original size to remove padding
+        result = result[:orig_h, :orig_w, :]
+
+        result_img = Image.fromarray(result, "RGB").convert("RGBA")
+        
+        status = f"LaMa Inpaint: {inference_time:.0f}ms"
+        return result_img, status
+    
+
+    def run_deepfill_inpainting(self, image_pil, mask_pil, provider_data, model_name="deepfillv2"):
+        """
+        Runs DeepFillv2 Inpainting. Handles final squaring if the input patch 
+        is rectangular due to image boundary clamping.
+        """
+        session = self.get_inpainting_session(model_name, provider_data)
+
+        # Handle Square Padding (Safety check for patches hit by image edges)
+        orig_w, orig_h = image_pil.size
+        if orig_w == orig_h:
+            square_img = image_pil.convert("RGB")
+            square_mask = mask_pil.convert("L")
+            side = orig_w
+            offset_x, offset_y = 0, 0
+        else:
+            side = max(orig_w, orig_h)
+            square_img = Image.new("RGB", (side, side), (0, 0, 0))
+            square_mask = Image.new("L", (side, side), 0)
+            offset_x = (side - orig_w) // 2
+            offset_y = (side - orig_h) // 2
+            square_img.paste(image_pil.convert("RGB"), (offset_x, offset_y))
+            square_mask.paste(mask_pil.convert("L"), (offset_x, offset_y))
+
+        # Determine model resolution
+        target_res = (256, 256)
+        if "512" in model_name:
+            target_res = (512, 512)
+        elif "1024" in model_name:
+            target_res = (1024, 1024)
+            
+        img_resized = square_img.resize(target_res, Image.BILINEAR)
+        mask_resized = square_mask.resize(target_res, Image.NEAREST)
+
+        image_np = cv2.cvtColor(np.array(img_resized), cv2.COLOR_RGB2BGR)
+        
+        mask_np = np.array(mask_resized).astype(np.float32) / 255.0
+        mask_np = (mask_np > 0).astype(np.float32)
+        mask_4d = mask_np[None, None, ...] 
+
+        # Normalisation: [-1, 1]
+        img_norm = (image_np.astype(np.float32) - 127.5) / 127.5
+        img_t = np.transpose(img_norm, (2, 0, 1))[None, ...] 
+
+        # Apply Mask to Input
+        img_t_masked = img_t * (1.0 - mask_4d)
+
+        # Construct Input Tensor
+        ones_t = np.ones_like(mask_4d)
+        input_data = np.concatenate((img_t_masked, ones_t, mask_4d), axis=1).astype(np.float32)
+
+        # Inference
+        input_name = session.get_inputs()[0].name
+        result = session.run(None, {input_name: input_data})
+        output_tensor = result[1] if len(result) > 1 else result[0]
+        
+        # Post Process - Internal Blending
+        refined_blended_t = output_tensor * mask_4d + img_t * (1.0 - mask_4d)
+        output_np = np.transpose(refined_blended_t[0], (1, 2, 0)) 
+        
+        # Denormalise
+        output_np = ((output_np + 1.0) / 2.0 * 255.0)
+        output_np = np.clip(output_np, 0, 255).astype(np.uint8)
+
+        # Convert back to RGB and crop out any safety padding
+        result_rgb = cv2.cvtColor(output_np, cv2.COLOR_BGR2RGB)
+        result_pil = Image.fromarray(result_rgb, "RGB")
+        result_pil = result_pil.resize((side, side), Image.LANCZOS)
+        
+        final_patch = result_pil.crop((offset_x, offset_y, offset_x + orig_w, offset_y + orig_h))
+
+        return final_patch.convert("RGBA"), 0
+
+  

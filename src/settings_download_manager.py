@@ -9,6 +9,7 @@ from PyQt6.QtCore import (QThread, pyqtSignal, Qt, QSize)
 
 REMBG_BASE_URL = "https://github.com/danielgatis/rembg/releases/download/v0.0.0/"
 SAM2_BASE_URL = "https://huggingface.co/mabote-itumeleng/ONNX-SAM2-Segment-Anything/resolve/main/"
+DEEPFILL_BASE_URL = 'https://storage.googleapis.com/ailia-models/deepfillv2/'
 
 MODEL_DOWNLOAD_GROUPS = [
     
@@ -312,6 +313,49 @@ MODEL_DOWNLOAD_GROUPS = [
             },
         ]
     },
+    {
+    "group_name": "Inpainting Models",
+    "type": "inpainting",
+    "models": [
+        {   "id": "lama",
+            "name": "LaMa (Large Mask Inpainting)",
+            "description": "Resolution-robust Large Mask Inpainting with Fourier Convolutions. Excellent for removing objects.",
+            "files": [
+                {"file": "lama.onnx", "url": "https://storage.googleapis.com/ailia-models/lama/lama.onnx", "size_mb": 208.0}
+            ]
+        },
+        # DeepFillv2 CelebA Models
+        {   "id": "deepfillv2_celeba_256x256",
+            "name": "DeepFillv2 CelebA (256x256)",
+            "description": "DeepFillv2 trained on the CelebA (Faces) dataset at 256x256 resolution.",
+            "files": [
+                {"file": "deepfillv2_celeba_256x256.onnx", "url": DEEPFILL_BASE_URL + "deepfillv2_celeba_256x256.onnx", "size_mb": 16.9},
+            ]
+        },
+        # DeepFillv2 Places Models ---
+        {   "id": "deepfillv2_places_256x256",
+            "name": "DeepFillv2 Places (256x256)",
+            "description": "DeepFillv2 trained on the Places (General Scenes) dataset at 256x256 resolution.",
+            "files": [
+                {"file": "deepfillv2_places_256x256.onnx", "url": DEEPFILL_BASE_URL + "deepfillv2_places_256x256.onnx", "size_mb": 16.9},
+            ]
+        },
+        {   "id": "deepfillv2_places_512x512",
+            "name": "DeepFillv2 Places (512x512)",
+            "description": "DeepFillv2 trained on the Places (General Scenes) dataset at 512x512 resolution.",
+            "files": [
+                {"file": "deepfillv2_places_512x512.onnx", "url": DEEPFILL_BASE_URL + "deepfillv2_places_512x512.onnx", "size_mb": 16.9},
+            ]
+        },
+        {   "id": "deepfillv2_places_1024x1024",
+            "name": "DeepFillv2 Places (1024x1024)",
+            "description": "DeepFillv2 trained on the Places (General Scenes) dataset at 1024x1024 resolution.",
+            "files": [
+                {"file": "deepfillv2_places_1024x1024.onnx", "url": DEEPFILL_BASE_URL + "deepfillv2_places_1024x1024.onnx", "size_mb": 16.9},
+            ]
+        },
+    ]
+},
 ]
 
 

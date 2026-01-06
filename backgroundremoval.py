@@ -35,7 +35,7 @@ except: pass
 import src.settings_download_manager as settings_download_manager
 from src.ui_styles import apply_theme
 from src.ui_widgets import CollapsibleFrame, SynchronisedGraphicsView, ThumbnailList, OrientationSplitter
-#from src.ui_dialogs import SaveOptionsDialog, ImageEditorDialog
+from src.ui_dialogs import InpaintingDialog
 from src.trimap_editor import TrimapEditorDialog
 from src.utils import pil2pixmap, numpy_to_pixmap, apply_tone_sharpness, generate_drop_shadow, \
     generate_blurred_background, sanitise_filename_for_windows, get_current_crop_bbox, generate_trimap_from_mask, clean_alpha, generate_alpha_map, \
@@ -507,13 +507,20 @@ class BackgroundRemoverGUI(QMainWindow):
 
         layout.addSpacing(10)
 
-
-
-        lbl_crop_warning = QLabel("<i>Cropping is a destructive action and cannot be reverted without re-opening the image.</i>")
+        lbl_crop_warning = QLabel("<i>Inpainting or Cropping are destructive actions and cannot be reverted without re-opening the image.</i>")
         lbl_crop_warning.setWordWrap(True)
         lbl_crop_warning.setStyleSheet("color: #888; margin-bottom: 5px;")
         layout.addWidget(lbl_crop_warning)
         
+        # Inpainting Section
+        self.btn_inpaint = QPushButton("Inpaint / Remove Object")
+        self.btn_inpaint.setToolTip("Opens the Inpainting dialog. Allows you to draw over an object to remove it.\n"
+                                    "Requires the LaMa model (Download via Settings).")
+        self.btn_inpaint.clicked.connect(self.open_inpainting_dialog)
+        layout.addWidget(self.btn_inpaint)
+
+        layout.addSpacing(10)
+
         crop_layout = QHBoxLayout()
         
         self.btn_toggle_crop = QPushButton("Crop Image ✂")
@@ -723,6 +730,65 @@ class BackgroundRemoverGUI(QMainWindow):
 
         finally:
             QApplication.restoreOverrideCursor()
+
+    def open_inpainting_dialog(self):
+        if not self.working_orig_image:
+            return
+            
+        # Check for models
+        root = self.model_manager.model_root_dir
+        lama_exists = (self.model_manager.check_is_cached("lama", self.settings.value("exec_short_code", "cpu")) or 
+                       os.path.exists(os.path.join(root, "lama.onnx")))
+        
+        deepfill_exists = False
+        df_variants = [
+            'deepfillv2_celeba_256x256',
+            'deepfillv2_places_256x256', 
+            'deepfillv2_places_512x512', 
+            'deepfillv2_places_1024x1024'
+        ]
+        for variant in df_variants:
+            if os.path.exists(os.path.join(root, f"{variant}.onnx")):
+                deepfill_exists = True
+                break
+        
+        if not lama_exists and not deepfill_exists:
+             QMessageBox.information(self, "Model Missing", "Please download an Inpainting model (LaMa or DeepFill) from the Settings -> Inpainting Models tab first.")
+             return
+
+        # Use the Automatic provider for inpainting
+        provider_data = self.combo_auto_model_EP.currentData()
+        
+        # Apply current adjustments to get the image as seen on screen
+        # Unsure if should pass actual original image, or what is on screen, but doing this for now
+        if self.adjustment_source_np is not None:
+             params = self.get_adjustment_params()
+             processed_np = apply_tone_sharpness(self.adjustment_source_np, params)
+             img_to_edit = Image.fromarray(cv2.cvtColor(processed_np, cv2.COLOR_BGRA2RGBA))
+        else:
+             img_to_edit = self.working_orig_image.copy()
+
+        dlg = InpaintingDialog(img_to_edit, self.model_manager, provider_data, self)
+        
+        if dlg.exec():
+            # User clicked Apply
+            new_image = dlg.get_result()
+            
+            # This is a destructive action on the "Original" image
+            self.working_orig_image = new_image
+            self.raw_original_image = new_image
+            
+            self.adjustment_source_np = np.ascontiguousarray(
+                cv2.cvtColor(np.array(self.working_orig_image), cv2.COLOR_RGBA2BGRA)
+            )
+            
+            # Since we appled adjustments, reset here
+            # If change to send actual original image, don't reset
+            self.reset_adjustment_sliders()
+            
+            self.update_output_preview()
+            
+            self.status_label.setText("Inpainting applied. Image updated.")
 
     def create_ai_mask_tab(self):
         scroll = QScrollArea()
