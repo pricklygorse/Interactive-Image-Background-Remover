@@ -199,7 +199,7 @@ class BackgroundRemoverGUI(QMainWindow):
             if cli_args.load_trimap:
                 QTimer.singleShot(70, lambda: self.load_associated_trimap(self.image_paths[0]))
         
-        saved_theme = self.settings.value("theme", "light")
+        saved_theme = self.settings.value("theme", "dark")
         self.set_theme(saved_theme)
 
 
@@ -960,12 +960,6 @@ class BackgroundRemoverGUI(QMainWindow):
         lbl_desc.setWordWrap(True)
         layout.addWidget(lbl_desc)
 
-        self.chk_live_preview = QCheckBox("Live Preview Refinements on Input")
-        self.chk_live_preview.setToolTip("Automatically run softening and alpha matting on the model output for previewing before committing.")
-        self.chk_live_preview.toggled.connect(self.handle_live_preview_toggle)
-        layout.addWidget(self.chk_live_preview)
-
-
         #layout.addSpacing(10)
 
         # indent smart refine to highlight (crudely) that they are part of the live preview
@@ -973,23 +967,7 @@ class BackgroundRemoverGUI(QMainWindow):
         indent_layout = QVBoxLayout(indent_container)
         indent_layout.setContentsMargins(10, 0, 0, 0)
 
-        live_opac_layout = QHBoxLayout()
-        lbl_opac = QLabel("BG Dimming:")
-        lbl_opac.setToolTip("Adjust how visible the original background is during live preview")
-        
-        self.sl_live_opacity = QSlider(Qt.Orientation.Horizontal)
-        self.sl_live_opacity.setRange(0, 40)  
-        self.sl_live_opacity.setValue(30)
-        self.sl_live_opacity.setFixedWidth(100)
-        self.sl_live_opacity.valueChanged.connect(self.show_mask_overlay)
-        
-        live_opac_layout.addWidget(lbl_opac)
-        live_opac_layout.addWidget(self.sl_live_opacity)
-        live_opac_layout.addStretch() 
-        indent_layout.addLayout(live_opac_layout)
 
-        self.chk_live_preview.toggled.connect(self.sl_live_opacity.setEnabled)
-        self.sl_live_opacity.setEnabled(self.chk_live_preview.isChecked())
 
         self.chk_binarise_mask = QCheckBox("Remove Mask Partial Transparency")
         self.chk_binarise_mask.toggled.connect(self.trigger_refinement_update)
@@ -1469,6 +1447,30 @@ class BackgroundRemoverGUI(QMainWindow):
         #lbl.setFont(QFont("Segoe UI", 9, QFont.Weight.Bold))
         lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(lbl)
+
+        h_preview = QHBoxLayout()
+        h_preview.setContentsMargins(0, 5, 0, 5)
+
+        self.chk_live_preview = QCheckBox("Live Preview Refine")
+        self.chk_live_preview.setToolTip("Automatically run softening/matting etc on the mask for previewing before committing.")
+        self.chk_live_preview.toggled.connect(self.handle_live_preview_toggle)
+        
+        self.sl_live_opacity = QSlider(Qt.Orientation.Horizontal)
+        self.sl_live_opacity.setRange(0, 30) 
+        self.sl_live_opacity.setValue(30)
+        #self.sl_live_opacity.setFixedWidth(70)
+        self.sl_live_opacity.setToolTip("Adjust the dimming of the original image background during preview.")
+        self.sl_live_opacity.valueChanged.connect(self.show_mask_overlay)
+        self.sl_live_opacity.setEnabled(False)
+
+        self.chk_live_preview.toggled.connect(self.sl_live_opacity.setEnabled)
+
+        h_preview.addWidget(self.chk_live_preview)
+        h_preview.addStretch()
+        h_preview.addWidget(QLabel("Dim:"))
+        h_preview.addWidget(self.sl_live_opacity)
+        
+        layout.addLayout(h_preview)
 
         h_btns = QHBoxLayout()
         self.btn_add = QPushButton("ADD (A)")
