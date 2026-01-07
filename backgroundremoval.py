@@ -3359,7 +3359,7 @@ class BackgroundRemoverGUI(QMainWindow):
 
         # If trimming is enabled, calculate the crop box and apply it.
         if trim:
-            bbox = get_current_crop_bbox(self.working_mask, self.chk_shadow, self.sl_s_x, self.sl_s_y, self.sl_s_r)
+            bbox = get_current_crop_bbox(self.working_mask, self.chk_shadow.isChecked(), self.sl_s_x.value(), self.sl_s_y.value(), self.sl_s_r.value())
             if bbox:
                 final_image = final_image.crop(bbox)
 
