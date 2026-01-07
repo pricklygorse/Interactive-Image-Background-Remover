@@ -189,8 +189,7 @@ def calculate_saturation_matrix(sat):
     
     return matrix
 
-
-def generate_drop_shadow(mask_pil, opacity, blur_radius, offset_x, offset_y, shadow_downscale=0.125):
+def generate_drop_shadow(mask_pil, opacity, blur_radius, offset_x, offset_y, shadow_downscale=0.25):
     """
     Generates a shadow layer based on a mask. 
     Optimised using numpy and downscaling for performance
@@ -202,12 +201,12 @@ def generate_drop_shadow(mask_pil, opacity, blur_radius, offset_x, offset_y, sha
         m_np = np.array(mask_pil)
 
     # Scale down for fast blur processing
-    small_w = max(1, int(w * shadow_downscale))
-    small_h = max(1, int(h * shadow_downscale))
-    
-    m_small = cv2.resize(m_np, (small_w, small_h), interpolation=cv2.INTER_NEAREST)
-    
-    #blur_size = max(1, int(blur_radius * shadow_downscale))
+    if shadow_downscale != 1.0:
+        small_w = max(1, int(w * shadow_downscale))
+        small_h = max(1, int(h * shadow_downscale))
+        m_small = cv2.resize(m_np, (small_w, small_h), interpolation=cv2.INTER_NEAREST)
+    else:
+        m_small = m_np
 
     rad = int(blur_radius  * shadow_downscale)
     if rad % 2 == 0: rad += 1
@@ -218,10 +217,11 @@ def generate_drop_shadow(mask_pil, opacity, blur_radius, offset_x, offset_y, sha
     m_blur_small = cv2.convertScaleAbs(m_blur_small, alpha=opacity / 255.0)
     
     # Scale back up to original resolution
-    m_full = cv2.resize(m_blur_small, (w, h), interpolation=cv2.INTER_LINEAR)
+    if shadow_downscale != 1.0:
+        m_full = cv2.resize(m_blur_small, (w, h), interpolation=cv2.INTER_LINEAR)
+    else:
+        m_full = m_blur_small
     
-    # Create the RGBA shadow layer
-    shadow_layer_np = np.zeros((h, w, 4), dtype=np.uint8)
     # The shadow is black (0,0,0), we only populate the Alpha channel
     shifted_alpha = np.zeros((h, w), dtype=np.uint8)
     
@@ -234,7 +234,8 @@ def generate_drop_shadow(mask_pil, opacity, blur_radius, offset_x, offset_y, sha
     if dst_y2 > dst_y1 and dst_x2 > dst_x1:
         shifted_alpha[dst_y1:dst_y2, dst_x1:dst_x2] = m_full[src_y1:src_y2, src_x1:src_x2]
     
-    shadow_layer_np[:, :, 3] = shifted_alpha
+    z = np.zeros((h, w), dtype=np.uint8)
+    shadow_layer_np = cv2.merge([z, z, z, shifted_alpha])
     return Image.fromarray(shadow_layer_np)
 
 

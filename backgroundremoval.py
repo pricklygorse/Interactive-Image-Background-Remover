@@ -764,6 +764,10 @@ class BackgroundRemoverGUI(QMainWindow):
         if self.model_output_mask:
             self.model_output_mask = self.model_output_mask.crop(box)
 
+        if hasattr(self, 'user_trimap') and self.user_trimap:
+            self.user_trimap = self.user_trimap.crop(box)
+            self.last_trimap = np.array(self.user_trimap)
+
         # Since dimensions changed, old undo history is invalid
         # Possibly could be implemented properly
         self.undo_history = [self.working_mask.copy()] 
@@ -2553,6 +2557,10 @@ class BackgroundRemoverGUI(QMainWindow):
         self.update_cached_model_icons()
         
         self.set_loading(False, status_msg)
+
+        if hasattr(self, 'worker'):
+            self.worker.deleteLater()
+            self.worker = None
 
 
     def show_mask_overlay(self):
