@@ -19,7 +19,7 @@ from src.constants import DEFAULT_ZOOM_FACTOR, PAINT_BRUSH_SCREEN_SIZE, MIN_SAM_
 class OrientationSplitter(QSplitter):
     def __init__(self, orientation, parent=None):
         super().__init__(orientation, parent)
-        self.setHandleWidth(24)
+        self.setHandleWidth(18)
         self.toggle_button = None
 
     def createHandle(self):

@@ -215,7 +215,7 @@ class BackgroundRemoverGUI(QMainWindow):
         self.setAcceptDrops(True)
         main = QWidget()
         self.setCentralWidget(main)
-        main_layout = QHBoxLayout(main)
+        main_layout = QVBoxLayout(main)
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.setSpacing(0)
         
@@ -224,7 +224,7 @@ class BackgroundRemoverGUI(QMainWindow):
 
         # Sidebar
         self.sidebar_container = QWidget()
-        self.sidebar_container.setFixedWidth(350)
+        self.sidebar_container.setMinimumWidth(300)
         sidebar_layout = QVBoxLayout(self.sidebar_container)
         sidebar_layout.setContentsMargins(5, 5, 5, 5)
 
@@ -370,9 +370,16 @@ class BackgroundRemoverGUI(QMainWindow):
         views_thumbs_layout.addWidget(self.in_out_splitter, 1) # '1' ensures views take most space
         views_thumbs_layout.addWidget(bottom_strip_widget)
 
-        # Assemble sidebar + views
-        main_layout.addWidget(self.sidebar_container)
-        main_layout.addWidget(views_thumbs_widget, 1) # Add the container instead of the splitter
+        # Assemble sidebar + views using a splitter
+        self.main_splitter = QSplitter(Qt.Orientation.Horizontal)
+        self.main_splitter.setHandleWidth(4)
+        self.main_splitter.addWidget(self.sidebar_container)
+        self.main_splitter.addWidget(views_thumbs_widget)
+        
+        self.main_splitter.setStretchFactor(1, 1)
+        self.main_splitter.setSizes([350, 1250])
+        
+        main_layout.addWidget(self.main_splitter)
 
         # status bar 
         self.status_label = QLabel("Ready")
