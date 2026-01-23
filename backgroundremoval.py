@@ -3359,7 +3359,7 @@ class BackgroundRemoverGUI(QMainWindow):
             fmt = "jpeg"
 
         if not clipboard:
-            initial_name = os.path.splitext(self.image_paths[0])[0] + "_nobg." + default_ext
+            initial_name = os.path.splitext(self.image_paths[self.current_image_index])[0] + "_nobg." + default_ext
             initial_name = sanitise_filename_for_windows(initial_name)
 
             fname, _ = QFileDialog.getSaveFileName(self, "Export Image", initial_name, f"{default_ext.upper()} (*.{default_ext})")
