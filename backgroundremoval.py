@@ -21,7 +21,7 @@ from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QH
                              QGraphicsRectItem, QGraphicsEllipseItem, QGraphicsPathItem, 
                              QTextEdit, QSizePolicy, QRadioButton, QButtonGroup, QInputDialog, 
                              QProgressBar, QStyle, QToolBar, QTabWidget, QSpacerItem,QColorDialog)
-from PyQt6.QtCore import Qt, QTimer, QPointF, QRectF, QSettings, QPropertyAnimation, QEasingCurve, QThread, pyqtSignal, QEvent
+from PyQt6.QtCore import Qt, QTimer, QPointF, QRectF, QSettings, QPropertyAnimation, QEasingCurve, QThread, pyqtSignal, QEvent, QMimeData, QBuffer, QIODevice
 from PyQt6.QtGui import (QPixmap, QImage, QColor, QPainter, QPainterPath, QPen, QBrush,
                          QKeySequence, QShortcut, QCursor, QIcon, QPalette, QAction, QGuiApplication)
 
@@ -3418,19 +3418,24 @@ class BackgroundRemoverGUI(QMainWindow):
         if not self.image_paths: return
 
         data = final_image.tobytes("raw", "RGBA")
-        size = final_image.width * final_image.height * 4
-
         qimage = QImage(
+            data,
             final_image.width,
             final_image.height,
             QImage.Format.Format_RGBA8888
-        )
+        ).copy()
 
-        ptr = qimage.bits()
-        ptr.setsize(size)
-        ptr[:] = data
+        buffer = QBuffer()
+        buffer.open(QIODevice.OpenModeFlag.WriteOnly)
+        qimage.save(buffer, "PNG")
+        png_data = buffer.data()
 
-        QGuiApplication.clipboard().setImage(qimage)
+        mime_data = QMimeData()
+        mime_data.setData("image/png", png_data)
+        mime_data.setData("PNG", png_data)
+        mime_data.setImageData(qimage)
+
+        QGuiApplication.clipboard().setMimeData(mime_data)
 
 
     def show_help(self):
