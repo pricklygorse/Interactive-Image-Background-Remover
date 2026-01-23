@@ -562,13 +562,18 @@ class ModelManager:
             self.loaded_matting_models[cache_key] = session
         return session
     
-    def run_matting(self, algorithm_name, image_pil, trimap_np, provider_data, longest_edge_limit=1024):
+    def run_matting(self, algorithm_name, image_pil, trimap_np, provider_data, longest_edge_limit=1024, allow_upscaling=False):
 
         orig_w, orig_h = image_pil.size
         
         # Calculate Target Dimensions constrained to longest edge, without upscaling
         current_longest_edge = max(orig_w, orig_h)
-        effective_limit = min(current_longest_edge, longest_edge_limit)
+        
+        # If upscaling is allowed (testing flag to see if increases quality)
+        if allow_upscaling:
+            effective_limit = longest_edge_limit
+        else:
+            effective_limit = min(current_longest_edge, longest_edge_limit)
         
         if orig_w >= orig_h:
             target_w = effective_limit
