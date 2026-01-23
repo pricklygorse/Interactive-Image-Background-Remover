@@ -3,6 +3,7 @@ import gc
 import cv2
 import sys
 import numpy as np
+import onnx
 import onnxruntime as ort
 from PIL import Image
 from timeit import default_timer as timer
@@ -122,6 +123,32 @@ class ModelManager:
         # not from the process working directory.
         model_path = os.path.abspath(model_path)
 
+        # fix sam2 on openvino. Doesn't like dynamic batch dimensions
+        # should probably re-export the models instead...
+        model_payload = model_path
+        model_id_lower = model_id_name.lower()
+        print(model_path)
+        if provider_str == "OpenVINOExecutionProvider":
+            if "sam2" in model_id_lower:
+                try:
+                    print(f"[ModelManager] Applying OpenVINO stability fix for {model_id_name}...")
+                    onnx_model = onnx.load(model_path)
+                    for input_node in onnx_model.graph.input:
+                        shape = input_node.type.tensor_type.shape
+                        dims = shape.dim
+                        if len(dims) > 0:
+                            # Handle SAM2 dynamic points [?, ?, 2] etc.
+                            if dims[0].HasField("dim_param") or dims[0].dim_value <= 0:
+                                dims[0].dim_value = 1
+                                dims[0].ClearField("dim_param")
+
+                    model_payload = onnx_model.SerializeToString()
+                except Exception as e:
+                    print(f"[ModelManager] Warning: Stability fix failed: {e}")
+
+
+
+
         # These session options stop VRAM/RAM usage ballooning with subsequent model runs
         # by disabling automatic memory allocation
         # Doesn't seem to affect performance
@@ -160,6 +187,7 @@ class ModelManager:
             ov_opts = {
                 "cache_dir": cache_dir,
                 "num_streams": 1, # Often helps stability
+                #"precision": "FP32", 
             }
             ov_opts.update(provider_options) # Adds 'device_type': 'GPU' etc.
             final_providers.append((provider_str, ov_opts))
@@ -172,7 +200,7 @@ class ModelManager:
         if provider_str != "CPUExecutionProvider":
             final_providers.append("CPUExecutionProvider")
 
-        return ort.InferenceSession(model_path, sess_options=sess_options, providers=final_providers)
+        return ort.InferenceSession(model_payload, sess_options=sess_options, providers=final_providers)
     
 
     # Automatic Models
