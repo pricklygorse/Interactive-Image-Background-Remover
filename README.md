@@ -36,7 +36,7 @@ Interactive Background Remover is a user-friendly tool designed to remove backgr
 
 
 ```bash
-pip install pyqt6 Pillow numpy onnxruntime opencv-python requests pymatting
+pip install pyqt6 Pillow numpy onnx onnxruntime opencv-python requests pymatting
 ```
 
 Or download prebuilt executables for Windows, Linux and Mac from the [Github releases](https://github.com/pricklygorse/Interactive-Image-Background-Remover/releases) 
@@ -45,11 +45,13 @@ Or download prebuilt executables for Windows, Linux and Mac from the [Github rel
 
 When running from the script, you will need to install the appropriate onnxruntime package for your hardware. Only install one of these packages, and remove any onnxruntime packages before installing a new one. [Executable releases](https://github.com/pricklygorse/Interactive-Image-Background-Remover/releases) are built with the appropriate runtime.
 
+Building onnxruntime from source with the experimental --use_webgpu option includes a execution provider that works broadly well across Windows and Linux on GPU
+
 ```bash
 pip install onnxruntime # CPU only
 pip install onnxruntime-gpu # Nvidia CUDA, TensorRT
-pip install onnxruntime-openvino # Intel iGPU and GPU
-pip install onnxruntime-directml # Microsoft Windows general machine learning (Nvidia, AMD, Intel)
+pip install onnxruntime-openvino # Intel iGPU and GPU. Extra steps required on Windows to get working
+pip install onnxruntime-directml # Microsoft Windows general machine learning (Nvidia, AMD, Intel). Bit buggy with some models
 ```
 
 
