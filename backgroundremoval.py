@@ -3509,6 +3509,8 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     app = QApplication(sys.argv)
+    app.setApplicationName("Interactive Background Remover")
+    app.setDesktopFileName("Interactive Background Remover")
     # Set fusion for consistency across OS. The theme will be loaded from settings.
     app.setStyle("Fusion")
     window = BackgroundRemoverGUI(args.images, args)
