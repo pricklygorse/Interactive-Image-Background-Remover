@@ -410,6 +410,7 @@ class BackgroundRemoverGUI(QMainWindow):
     def create_global_toolbar(self):
         toolbar = QToolBar("Session Control")
         toolbar.setMovable(False)
+        toolbar.setContextMenuPolicy(Qt.ContextMenuPolicy.PreventContextMenu)
         toolbar.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
         self.addToolBar(toolbar)
 
@@ -1083,8 +1084,16 @@ class BackgroundRemoverGUI(QMainWindow):
         hw_layout.addWidget(self.rb_auto_cache_all)
         self.auto_cache_group.buttonToggled.connect(self.on_auto_cache_changed)
 
-        # Add all to layout
+        # End Hardware Acceleration
         layout.addWidget(self.hw_options_frame)
+        
+        # Persistence for Collapsible Frame
+        hw_collapsed = self.settings.value("hw_options_collapsed", True, type=bool)
+        self.hw_options_frame.set_collapsed(hw_collapsed)
+        self.hw_options_frame.toggled.connect(
+            lambda collapsed: self.settings.setValue("hw_options_collapsed", collapsed)
+        )
+
         last_auto_cache_mode = self.settings.value("auto_ram_cache_mode", 1, type=int)
         self.auto_cache_group.blockSignals(True)
         self.auto_cache_group.button(last_auto_cache_mode).setChecked(True)

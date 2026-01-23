@@ -6,7 +6,7 @@ from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QH
                              QTextEdit, QSizePolicy, QRadioButton, QButtonGroup, QInputDialog, 
                              QProgressBar, QStyle, QSplitterHandle,
                              QListWidget, QListWidgetItem, QListView, QAbstractItemView)
-from PyQt6.QtCore import Qt, QTimer, QPointF, QRectF, QSettings, QPropertyAnimation, QEasingCurve, QSize
+from PyQt6.QtCore import Qt, QTimer, QPointF, QRectF, QSettings, QPropertyAnimation, QEasingCurve, QSize, pyqtSignal
 from PyQt6.QtGui import (QPixmap, QImage, QColor, QPainter, QPainterPath, QPen, QBrush,
                          QKeySequence, QShortcut, QCursor, QIcon, QPalette)
 
@@ -41,6 +41,8 @@ class OrientationSplitter(QSplitter):
 
 # Animated Collapsable Frame Widget
 class CollapsibleFrame(QFrame):
+    toggled = pyqtSignal(bool) # Emits True if collapsed, False if expanded
+
     def __init__(self, title="Options", parent=None, animation_duration=250, tooltip=None):
         super().__init__(parent)
         self.animation_duration = animation_duration
@@ -119,6 +121,24 @@ class CollapsibleFrame(QFrame):
             self.animation.start()
 
         self.collapsible_set_light_dark()
+        self.toggled.emit(self.is_collapsed)
+
+    def set_collapsed(self, collapsed: bool):
+        """Sets the collapsed state without animation."""
+        self.animation.stop()
+        self.is_collapsed = collapsed
+        
+        if collapsed:
+            self.content_frame.setVisible(False)
+            self.content_frame.setMaximumHeight(0)
+            self.toggle_button.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_TitleBarUnshadeButton))
+        else:
+            self.content_frame.setVisible(True)
+            self.content_frame.setMaximumHeight(1000) # Clamp to layout
+            self.toggle_button.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_TitleBarShadeButton))
+        
+        self.collapsible_set_light_dark()
+        # We don't necessarily want to emit toggled here to avoid feedback loops if used during initialisation
 
 
     def collapsible_set_light_dark(self):
