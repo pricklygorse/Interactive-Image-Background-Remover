@@ -6,6 +6,7 @@ import os
 import cv2
 import numpy as np
 from PIL import Image, ImageOps
+from src.image_session import ImageSession
 from src.utils import (
     apply_tone_sharpness, sanitise_filename_for_windows,
     get_current_crop_bbox, compose_final_image, refine_mask
@@ -18,20 +19,12 @@ def process_batch_image(file_path, output_dir, model_manager,
     Full pipeline for processing a single image in batch mode.
     """
     try:
-        # 1. Load Image
-        img = Image.open(file_path)
-        img = ImageOps.exif_transpose(img)
-        
-        # Check if existing transparency should be preserved/used
-        # For batch, usually we re-run the model, but if user wants to use existing alpha?
-        # For now, assume we always run the model to generate a NEW mask.
-        
-        raw_original_image = img.convert("RGBA")
+
+        session = ImageSession(file_path).load()
         
         # 2. Apply Adjustments (Tone/Sharpness)
-        # Convert to BGRA numpy for opencv ops
-        np_img = np.ascontiguousarray(cv2.cvtColor(np.array(raw_original_image), cv2.COLOR_RGBA2BGRA))
-        processed_np = apply_tone_sharpness(np_img, adj_settings)
+        # Use adjustment_source_np from session for better performance
+        processed_np = apply_tone_sharpness(session.adjustment_source_np, adj_settings)
         # Convert back to PIL
         working_orig_image = Image.fromarray(cv2.cvtColor(processed_np, cv2.COLOR_BGRA2RGBA))
         
@@ -43,13 +36,13 @@ def process_batch_image(file_path, output_dir, model_manager,
         if not model_name or "Select" in model_name:
              return False, "No model selected"
 
-        session, load_t = model_manager.get_auto_session(model_name, provider_data)
+        inference_session, load_t = model_manager.get_auto_session(model_name, provider_data)
         prov_code = provider_data[2]
         
         if use_2step:
-            mask_arr, status = model_manager.run_auto_inference_2step(session, working_orig_image, model_name, load_t, prov_code)
+            mask_arr, status = model_manager.run_auto_inference_2step(inference_session, working_orig_image, model_name, load_t, prov_code)
         else:
-            mask_arr, status = model_manager.run_auto_inference(session, working_orig_image, model_name, load_t, prov_code)
+            mask_arr, status = model_manager.run_auto_inference(inference_session, working_orig_image, model_name, load_t, prov_code)
 
         base_mask = Image.fromarray(mask_arr, mode="L")
         
@@ -94,7 +87,7 @@ def process_batch_image(file_path, output_dir, model_manager,
              final_image = bg
 
         save_params = {}
-        if img.info.get('exif'): save_params['exif'] = img.info.get('exif')
+        if session.image_exif: save_params['exif'] = session.image_exif
         
         if fmt == "jpeg": save_params['quality'] = quality
         elif fmt == "webp_lossy": save_params['quality'] = quality
