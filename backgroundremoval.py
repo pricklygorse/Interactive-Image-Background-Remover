@@ -1673,15 +1673,31 @@ class BackgroundRemoverGUI(QMainWindow):
         self.btn_add.setToolTip("Add the current model output mask to the composite output image.\n" 
                            "Mask refinement steps e.g. alpha matting are added at this step")
         self.btn_add.setMinimumHeight(50)
+        self.btn_add.setEnabled(False)
         
         self.btn_sub = QPushButton("SUBTRACT (S)")
         self.btn_sub.clicked.connect(self.subtract_mask)
         self.btn_sub.setToolTip("Subtract the current model output mask to the composite output image.\n" 
                            "Mask refinement steps e.g. alpha matting are added at this step")
         self.btn_sub.setMinimumHeight(50)
+        self.btn_sub.setEnabled(False)
 
-        self.btn_add.setStyleSheet("background-color: #2e7d32; color: white; font-weight: bold; border: 1px solid #aaa;")
-        self.btn_sub.setStyleSheet("background-color: #c62828; color: white; font-weight: bold; border: 1px solid #aaa;")
+        self.btn_add.setStyleSheet("""
+            QPushButton { 
+                background-color: #2e7d32; color: white; font-weight: bold; border: 1px solid #aaa; 
+            }
+            QPushButton:hover { background-color: #388e3c; }
+            QPushButton:pressed { background-color: #1b5e20; }
+            QPushButton:disabled { background-color: #444; color: #777; border: 1px solid #333; }
+        """)
+        self.btn_sub.setStyleSheet("""
+            QPushButton { 
+                background-color: #c62828; color: white; font-weight: bold; border: 1px solid #aaa; 
+            }
+            QPushButton:hover { background-color: #d32f2f; }
+            QPushButton:pressed { background-color: #b71c1c; }
+            QPushButton:disabled { background-color: #444; color: #777; border: 1px solid #333; }
+        """)
         
         h_btns.addWidget(self.btn_add)
         h_btns.addWidget(self.btn_sub)
@@ -2287,7 +2303,7 @@ class BackgroundRemoverGUI(QMainWindow):
         else:
             self.working_mask = Image.new("L", size, 0)
 
-        self.model_output_mask = Image.new("L", size, 0)
+        self.model_output_mask = None
         self.refined_preview_mask = None
         self.undo_history = [self.working_mask.copy()]
         self.redo_history = []
@@ -2302,6 +2318,8 @@ class BackgroundRemoverGUI(QMainWindow):
         self.last_trimap = None
         if hasattr(self, 'user_trimap'):
             del self.user_trimap
+
+        self.update_commit_button_states()
 
         self.model_manager.clear_sam_cache(clear_loaded_models=False)
         
@@ -2434,7 +2452,7 @@ class BackgroundRemoverGUI(QMainWindow):
                     valid_labels.append(label)
 
         if not valid_coords or not valid_labels:
-            self.model_output_mask = Image.new("L", self.working_orig_image.size, 0)
+            self.model_output_mask = None
             self.overlay_pixmap_item.setPixmap(QPixmap())
             self.status_label.setText("Ready (No points in view)")
             return None
@@ -2577,6 +2595,8 @@ class BackgroundRemoverGUI(QMainWindow):
         if hasattr(self, 'worker'):
             self.worker.deleteLater()
             self.worker = None
+        
+        self.update_commit_button_states()
 
 
     def show_mask_overlay(self):
@@ -2627,9 +2647,10 @@ class BackgroundRemoverGUI(QMainWindow):
     def clear_overlay(self):
         self.coordinates = []
         self.labels = []
-        self.model_output_mask = Image.new("L", self.working_orig_image.size, 0)
+        self.model_output_mask = None
         self.overlay_pixmap_item.setPixmap(QPixmap())
         self.trimap_overlay_item.setPixmap(QPixmap())
+        self.update_commit_button_states()
 
         # Clear the invisible paint scratchpad
         if hasattr(self, 'paint_image'):
@@ -2954,10 +2975,15 @@ class BackgroundRemoverGUI(QMainWindow):
             # show live preview
             self.refined_preview_mask = processed_mask
             self.show_mask_overlay()
+            self.update_commit_button_states()
         self.set_loading(False, "Ready")
 
     
-
+    def update_commit_button_states(self):
+        """Enable add/subtract buttons only when a selection is active."""
+        has_selection = self.model_output_mask is not None or self.refined_preview_mask is not None
+        self.btn_add.setEnabled(has_selection)
+        self.btn_sub.setEnabled(has_selection)
     
 
     def toggle_shadow_options(self, checked):
