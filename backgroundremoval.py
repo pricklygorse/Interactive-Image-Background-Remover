@@ -380,8 +380,8 @@ class BackgroundRemoverGUI(QMainWindow):
         self.progress_bar.setFixedWidth(200)
         self.progress_bar.hide()
 
+        self.statusBar().addWidget(self.progress_bar) # Add to right side
         self.statusBar().addWidget(self.status_label)
-        self.statusBar().addPermanentWidget(self.progress_bar) # Add to right side
         self.statusBar().addPermanentWidget(self.zoom_label)
 
         self.view_input.set_placeholder(
@@ -1926,6 +1926,7 @@ class BackgroundRemoverGUI(QMainWindow):
         if is_loading:
             self.progress_bar.show()
             self.status_label.setText(message if message else "Processing...")
+            self.status_label.repaint()
             self.status_label.setStyleSheet("color: red;")
             # Prevent multiple threads being created by user clicking stuff
             self.centralWidget().layout().itemAt(0).widget().setEnabled(False)
@@ -2432,6 +2433,8 @@ class BackgroundRemoverGUI(QMainWindow):
                                       model_name, 
                                       provider_data, 
                                       image_to_process, use_2step)
+        # Clear overlay to remove any SAM points since we are in auto model mode
+        # TODO: clear only sam points, since this means the mask overlay is removed while refinement processes, visually unappealing for quick comparisons
         self.worker.finished.connect(self.clear_overlay)
         self.worker.finished.connect(lambda res: self._on_inference_finished(res, x_off, y_off))
         self.worker.error.connect(lambda msg: (self.set_loading(False), QMessageBox.critical(self, "Error", msg)))
@@ -2439,6 +2442,11 @@ class BackgroundRemoverGUI(QMainWindow):
 
     def _on_inference_finished(self, result, x_off, y_off):
         """Processes model output masks into a overlay, and updates UI"""
+        
+        if hasattr(self, 'worker') and self.worker:
+            self.worker.deleteLater()
+            self.worker = None
+
         mask_arr = result["mask"]
         status_msg = result["status"]
 
@@ -2447,20 +2455,19 @@ class BackgroundRemoverGUI(QMainWindow):
         self.session.model_output_mask.paste(Image.fromarray(mask_arr, mode="L"), (x_off, y_off))
         self.session.model_output_refined = None
         
-        # Update UI
-        if self.chk_live_preview.isChecked():
-            # Automatically start the refinement thread
-            self.modify_mask(op="live_preview")
-        else:
-            self.show_mask_overlay()
         self.update_cached_model_icons()
         
         self.set_loading(False, status_msg)
 
-        if hasattr(self, 'worker'):
-            self.worker.deleteLater()
-            self.worker = None
+        # Update UI
+        if self.chk_live_preview.isChecked():
+            # Automatically start the refinement thread
+            # Qtimer to allow the event loop to process status label updates before starting the next thread
+            QTimer.singleShot(0, lambda: self.modify_mask(op="live_preview"))
+        else:
+            self.show_mask_overlay()
         
+
         self.update_commit_button_states()
 
 
@@ -2712,11 +2719,9 @@ class BackgroundRemoverGUI(QMainWindow):
         # Capture state for the worker thread 
         mask_to_process = self.session.model_output_mask.copy()
         apply_matting = self.chk_alpha_matting.isChecked()
-        apply_soften = self.chk_soften.isChecked()
-        apply_binary = self.chk_binarise_mask.isChecked()
 
         msg = " Alpha matting can take a while" if apply_matting else ""
-        self.set_loading(True, "Applying mask..." + msg)
+        self.set_loading(True, "Refining mask..." + msg)
         
         matting_params = {}
         if apply_matting:
@@ -2724,31 +2729,33 @@ class BackgroundRemoverGUI(QMainWindow):
                 # Unsure if the normal logic of cropping the image to the viewport is as relevant when matting models
                 # are resolution agnostic. But for performance on my machine, and consistency with automatic models,
                 # will keep matting to the viewport
-                image_crop, x_off, y_off = self.get_viewport_crop()
+                viewport_crop, x_off, y_off = self.get_viewport_crop()
                 trimap_np = None
-                limit = int(self.settings.value("matting_longest_edge", 1024))
 
                 # Get the correct trimap based on UI selection
+                custom_trimap = None
                 if self.rb_trimap_custom.isChecked() and self.session and self.session.user_trimap:
                     # If a custom trimap exists and is selected, use it.
-                    trimap_crop_pil = self.session.user_trimap.crop((x_off, y_off, x_off + image_crop.width, y_off + image_crop.height))
-                    trimap_np = np.array(trimap_crop_pil)
-                else: 
-                    # Fallback to the automatic generation method
-                    mask_crop = mask_to_process.crop((x_off, y_off, x_off + image_crop.width, y_off + image_crop.height))
-                    fg_erode = self.sl_fg_erode.value()
-                    bg_erode = self.sl_bg_erode.value()
-                    trimap_np = generate_trimap_from_mask(mask_crop, fg_erode, bg_erode)
+                    custom_trimap = self.session.user_trimap.crop((x_off, y_off, x_off + viewport_crop.width, y_off + viewport_crop.height))
+                # else: 
+                #     # Fallback to the automatic generation method
+                #     mask_crop = mask_to_process.crop((x_off, y_off, x_off + image_crop.width, y_off + image_crop.height))
+                #     fg_erode = self.sl_fg_erode.value()
+                #     bg_erode = self.sl_bg_erode.value()
+                #     trimap_np = generate_trimap_from_mask(mask_crop, fg_erode, bg_erode)
                 
                 matting_params = {
-                    'image_crop': image_crop,
+                    'viewport_crop': viewport_crop,
                     'trimap_np': trimap_np,
                     'x_off': x_off, 'y_off': y_off,
                     'algorithm': self.combo_matting_algorithm.currentText(),
                     # For now use the provider we have selected in automatic models combobox
                     # Unsure if worth giving user the option to select EP, since VitMatte is essentially a automatic model
                     'provider_data': self.combo_auto_model_EP.currentData(),
-                    'longest_edge_limit': limit
+                    'longest_edge_limit': int(self.settings.value("matting_longest_edge", 1024)),
+                    'fg_erode': self.sl_fg_erode.value(),
+                    'bg_erode': self.sl_bg_erode.value(),
+                    'custom_trimap': custom_trimap
                 }
             except Exception as e:
                 QMessageBox.critical(self, "Alpha Matting Prep Error", str(e))
@@ -2759,6 +2766,17 @@ class BackgroundRemoverGUI(QMainWindow):
             processed_mask = base_mask
 
             if matting_enabled and m_params:
+                
+                if m_params['custom_trimap']:
+                    trimap_np = np.array(m_params['custom_trimap'])
+                else:
+                    # Generate trimap from the mask crop
+                    x, y = m_params['x_off'], m_params['y_off']
+                    w, h = m_params['viewport_crop'].size
+                    mask_crop = base_mask.crop((x, y, x + w, y + h))
+                    
+                    trimap_np = generate_trimap_from_mask(mask_crop, m_params['fg_erode'], m_params['bg_erode'])
+                
                 # Construct settings for the crop matting step
                 mat_settings = {
                     "matting": {
@@ -2771,16 +2789,16 @@ class BackgroundRemoverGUI(QMainWindow):
                 
                 # Extract mask crop to match the image crop
                 x, y = m_params['x_off'], m_params['y_off']
-                w, h = m_params['image_crop'].size
+                w, h = m_params['viewport_crop'].size
                 mask_crop = processed_mask.crop((x, y, x + w, y + h))
                 
                 # Run Refine Mask on the crop (using passed trimap)
                 matted_alpha_crop = refine_mask(
                     mask_crop, 
-                    m_params['image_crop'], 
+                    m_params['viewport_crop'], 
                     mat_settings, 
                     model_manager, 
-                    trimap_np=m_params['trimap_np']
+                    trimap_np=trimap_np
                 )
 
                 if matted_alpha_crop:
@@ -2809,8 +2827,12 @@ class BackgroundRemoverGUI(QMainWindow):
         # Create and start the worker
         self.worker = InferenceWorker(
             _do_modify_work,
-            self.model_manager, mask_to_process,
-            apply_matting, apply_soften, apply_binary, matting_params
+            self.model_manager, 
+            mask_to_process,
+            apply_matting, 
+            self.chk_soften.isChecked(), 
+            self.chk_binarise_mask.isChecked(), 
+            matting_params
         )
         self.worker.finished.connect(lambda result_mask: self._on_modify_mask_finished(result_mask, op))
         self.worker.error.connect(lambda msg: (self.set_loading(False), QMessageBox.critical(self, "Mask Processing Error", msg)))
@@ -2818,6 +2840,9 @@ class BackgroundRemoverGUI(QMainWindow):
 
     def _on_modify_mask_finished(self, processed_mask, op):
         """Handles the result from the mask modification worker."""
+        if hasattr(self, 'worker') and self.worker:
+            self.worker.deleteLater()
+            self.worker = None
 
         if not op == "live_preview":
             # commit refined mask to composite_mask
