@@ -93,7 +93,8 @@ class BackgroundRemoverGUI(QMainWindow):
         default_model_dir = os.path.join(script_base, "Models")
         self.model_root_dir = self.settings.value("model_root_dir", default_model_dir)
 
-        cache_root_dir = os.path.join(script_base, "Models", "cache")
+        cache_root_dir = os.path.join(self.model_root_dir, "cache")
+
 
 
         self.model_manager = ModelManager(self.model_root_dir, cache_root_dir)
@@ -1954,6 +1955,7 @@ class BackgroundRemoverGUI(QMainWindow):
         """Updates the path in the main application and synchronises the model manager."""
         self.model_root_dir = new_dir
         self.model_manager.model_root_dir = new_dir
+        self.model_manager.cache_root_dir = os.path.join(new_dir, "cache")
         
         self.populate_sam_models()
         self.populate_whole_models()

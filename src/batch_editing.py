@@ -218,7 +218,6 @@ class BatchProcessingDialog(QDialog):
         self.lbl_summary.setWordWrap(True)
         self.lbl_summary.setTextFormat(Qt.TextFormat.RichText)
         self.lbl_summary.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
-        self.lbl_summary.setStyleSheet("QLabel { color: #ddd; }") 
         
         sum_layout.addWidget(self.lbl_summary)
         sum_layout.addStretch() 
