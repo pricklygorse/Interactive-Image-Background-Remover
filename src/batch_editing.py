@@ -24,7 +24,7 @@ def process_batch_image(file_path, output_dir, model_manager,
         
         # 2. Apply Adjustments (Tone/Sharpness)
         # Use adjustment_source_np from session for better performance
-        processed_np = apply_tone_sharpness(session.adjustment_source_np, adj_settings)
+        processed_np = apply_tone_sharpness(session.source_image_np, adj_settings)
         # Convert back to PIL
         working_orig_image = Image.fromarray(cv2.cvtColor(processed_np, cv2.COLOR_BGRA2RGBA))
         

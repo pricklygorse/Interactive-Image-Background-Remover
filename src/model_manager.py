@@ -18,7 +18,7 @@ class ModelManager:
         self.cache_root_dir = cache_root_dir
         
         # Cache Containers
-        self.loaded_whole_models = {}
+        self.loaded_automatic_models = {}
         self.loaded_sam_models = {}
         self.loaded_matting_models = {}
         
@@ -127,7 +127,7 @@ class ModelManager:
         # should probably re-export the models instead...
         model_payload = model_path
         model_id_lower = model_id_name.lower()
-        print(model_path)
+        
         if provider_str == "OpenVINOExecutionProvider":
             if "sam2" in model_id_lower:
                 try:
@@ -206,10 +206,10 @@ class ModelManager:
     # Automatic Models
 
     def clear_auto_cache(self):
-        if self.loaded_whole_models:
-            for key in list(self.loaded_whole_models.keys()):
-                del self.loaded_whole_models[key]
-            self.loaded_whole_models.clear()
+        if self.loaded_automatic_models:
+            for key in list(self.loaded_automatic_models.keys()):
+                del self.loaded_automatic_models[key]
+            self.loaded_automatic_models.clear()
 
         # grouping matting into automatic models for simplicity
         if self.loaded_matting_models:
@@ -225,8 +225,8 @@ class ModelManager:
         session = None
         load_time = 0.0
 
-        if self.auto_cache_mode > 0 and cache_key in self.loaded_whole_models:
-            return self.loaded_whole_models[cache_key], 0.0
+        if self.auto_cache_mode > 0 and cache_key in self.loaded_automatic_models:
+            return self.loaded_automatic_models[cache_key], 0.0
 
         t_start = timer()
 
@@ -238,7 +238,7 @@ class ModelManager:
         load_time = (timer() - t_start) * 1000
         
         if self.auto_cache_mode > 0:
-            self.loaded_whole_models[cache_key] = session
+            self.loaded_automatic_models[cache_key] = session
             
         return session, load_time
     
@@ -715,8 +715,8 @@ class ModelManager:
         model_path = os.path.join(self.model_root_dir, model_name + ".onnx")
         cache_key = f"{model_name}_{prov_code}"
 
-        if self.auto_cache_mode > 0 and cache_key in self.loaded_whole_models:
-             return self.loaded_whole_models[cache_key]
+        if self.auto_cache_mode > 0 and cache_key in self.loaded_automatic_models:
+             return self.loaded_automatic_models[cache_key]
         
         if self.auto_cache_mode < 2:
             self.clear_auto_cache()
@@ -724,7 +724,7 @@ class ModelManager:
         session = self._create_inference_session(model_path, prov_str, prov_opts, model_name)
         
         if self.auto_cache_mode > 0:
-            self.loaded_whole_models[cache_key] = session
+            self.loaded_automatic_models[cache_key] = session
             
         return session
 

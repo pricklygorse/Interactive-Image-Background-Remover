@@ -300,15 +300,15 @@ def sanitise_filename_for_windows(path: str) -> str:
     return os.path.join(directory, cleaned)
 
 
-def get_current_crop_bbox(working_mask, drop_shadow, sl_s_x, sl_s_y, sl_s_r):
+def get_current_crop_bbox(mask, drop_shadow, sl_s_x, sl_s_y, sl_s_r):
     """
     Calculates the bounding box of the current mask, including shadows if enabled.
     Returns (min_x, min_y, max_x, max_y) or None if the mask is empty.
     """
-    if not working_mask:
+    if not mask:
         return None
 
-    bbox = working_mask.getbbox()
+    bbox = mask.getbbox()
     if not bbox:
         return None
 
@@ -331,7 +331,7 @@ def get_current_crop_bbox(working_mask, drop_shadow, sl_s_x, sl_s_y, sl_s_r):
         max_y = max(max_y, s_max_y)
 
     # Clamp to image boundaries
-    orig_w, orig_h = working_mask.size
+    orig_w, orig_h = mask.size
     final_min_x = max(0, int(min_x))
     final_min_y = max(0, int(min_y))
     final_max_x = min(orig_w, int(max_x))
@@ -594,11 +594,11 @@ def apply_subject_tint(image_pil, color_tuple, amount):
     
     return Image.fromarray(img_np.astype(np.uint8), "RGBA")
 
-def compose_final_image(original_image, mask, settings, model_manager=None, 
-                       precomputed_cutout=None, precomputed_bg=None):
+def compose_final_image(original_image, mask, settings, model_manager=None,
+                        cached_foreground=None, precomputed_bg=None):
     """
     Composes the final image based on the original image, mask, and settings.
-    Supports injecting precomputed layers (cutout, background) for caching in GUI.
+    Supports injecting precomputed layers (foreground_layer, background) for caching in GUI.
     Otherwise generates layers for use in batch processing
     """
     
@@ -607,24 +607,24 @@ def compose_final_image(original_image, mask, settings, model_manager=None,
         current_mask = clean_alpha(current_mask)
 
     # 2. Prepare Cutout (Foreground)
-    cutout = precomputed_cutout
+    foreground_layer = cached_foreground
     
-    if cutout is None:
+    if foreground_layer is None:
         fg_settings = settings.get("foreground_correction", {})
         if fg_settings.get("enabled", False) and model_manager:
             algo = fg_settings.get("algorithm", "ml")
-            cutout = model_manager.estimate_foreground(original_image, current_mask, algo)
+            foreground_layer = model_manager.estimate_foreground(original_image, current_mask, algo)
         else:
-            cutout = original_image.convert("RGBA")
-            cutout.putalpha(current_mask)
+            foreground_layer = original_image.convert("RGBA")
+            foreground_layer.putalpha(current_mask)
 
     # Apply Effects to Cutout
     
     # Tint
     tint_settings = settings.get("tint", {})
     if tint_settings.get("enabled", False):
-        cutout = apply_subject_tint(
-            cutout, 
+        foreground_layer = apply_subject_tint(
+            foreground_layer,
             tint_settings.get("color"),
             tint_settings.get("amount")
         )
@@ -639,7 +639,7 @@ def compose_final_image(original_image, mask, settings, model_manager=None,
             threshold=outline_settings.get("threshold"),
             opacity=outline_settings.get("opacity")
         )
-        cutout = Image.alpha_composite(outline_layer, cutout)
+        foreground_layer = Image.alpha_composite(outline_layer, foreground_layer)
 
     # Drop Shadow
     shadow_settings = settings.get("shadow", {})
@@ -652,7 +652,7 @@ def compose_final_image(original_image, mask, settings, model_manager=None,
             offset_y=shadow_settings.get("y"),
             shadow_downscale=shadow_settings.get("downscale", 0.125)
         )
-        cutout = Image.alpha_composite(shadow_layer, cutout)
+        foreground_layer = Image.alpha_composite(shadow_layer, foreground_layer)
 
     # Compose with Background
     bg_settings = settings.get("background", {})
@@ -661,10 +661,10 @@ def compose_final_image(original_image, mask, settings, model_manager=None,
     final = None
     
     if bg_type == "Transparent":
-        final = cutout
+        final = foreground_layer
     elif bg_type == "Original Image":
         final = original_image.convert("RGBA")
-        final.alpha_composite(cutout)
+        final.alpha_composite(foreground_layer)
     elif "Blur" in bg_type:
         if precomputed_bg:
             final = precomputed_bg.copy()
@@ -674,7 +674,7 @@ def compose_final_image(original_image, mask, settings, model_manager=None,
                 current_mask, 
                 bg_settings.get("blur_radius", 30)
             )
-        final.alpha_composite(cutout)
+        final.alpha_composite(foreground_layer)
     else:
         # Solid Color
         color = bg_settings.get("color", (0, 0, 0)) # Default black
@@ -684,7 +684,7 @@ def compose_final_image(original_image, mask, settings, model_manager=None,
         else:
              final = Image.new("RGBA", original_image.size, color)
              
-        final.alpha_composite(cutout)
+        final.alpha_composite(foreground_layer)
 
     # Inner Glow
     ig_settings = settings.get("inner_glow", {})

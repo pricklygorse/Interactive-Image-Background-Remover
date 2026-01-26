@@ -79,7 +79,7 @@ def apply_theme(main_ui_window, mode):
             QLabel { color: black; background: transparent; border: none; }
         """
     
-    main_ui_window.commit_zone.setStyleSheet(commit_style)
+    main_ui_window.mask_action_panel.setStyleSheet(commit_style)
     
     # Update components that have internal theme logic
     if hasattr(main_ui_window, 'hw_options_frame'):
