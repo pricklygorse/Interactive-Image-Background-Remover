@@ -1,4 +1,4 @@
-from PyQt6.QtGui import (QPixmap, QImage)
+from PyQt6.QtGui import (QPixmap, QImage, QPainterPath)
 import numpy as np
 import cv2
 import math
@@ -742,3 +742,30 @@ def refine_mask(base_mask, image, settings, model_manager, trimap_np=None):
         processed_mask = Image.fromarray((arr*255).astype(np.uint8))
         
     return processed_mask
+
+
+def generate_mask_outline_path(mask):
+    """Generates a QPainterPath for the mask's outline."""
+    if mask is None:
+        return QPainterPath()
+    
+    # Convert mask to numpy array for contour detection
+    mask_np = np.array(mask)
+            
+    # Outset the outline slightly using dilation
+    kernel = np.ones((69, 69), np.uint8)
+    thresh = cv2.dilate(mask_np, kernel, iterations=1)
+
+    # Find contours
+    contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    
+    path = QPainterPath()
+    for contour in contours:
+        if len(contour) < 3:
+            continue
+        # Start a new subpath
+        path.moveTo(float(contour[0][0][0]), float(contour[0][0][1]))
+        for i in range(1, len(contour)):
+            path.lineTo(float(contour[i][0][0]), float(contour[i][0][1]))
+        path.closeSubpath()
+    return path

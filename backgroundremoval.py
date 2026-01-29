@@ -34,13 +34,13 @@ except: pass
 
 import src.settings_download_manager as settings_download_manager
 from src.ui_styles import apply_theme
-from src.ui_widgets import CollapsibleFrame, SynchronisedGraphicsView, ThumbnailList, OrientationSplitter
+from src.ui_widgets import CollapsibleFrame, SynchronisedGraphicsView, ThumbnailList, OrientationSplitter, MarchingAntsItem
 from src.ui_dialogs import InpaintingDialog
 from src.trimap_editor import TrimapEditorDialog
 from src.utils import pil2pixmap, numpy_to_pixmap, apply_tone_sharpness, generate_drop_shadow, \
     generate_blurred_background, sanitise_filename_for_windows, get_current_crop_bbox, generate_trimap_from_mask, clean_alpha, generate_alpha_map, \
-    generate_outline, generate_inner_glow, apply_subject_tint, compose_final_image, refine_mask
-from src.constants import PAINT_BRUSH_SCREEN_SIZE, UNDO_STEPS, SOFTEN_RADIUS
+    generate_outline, generate_inner_glow, apply_subject_tint, compose_final_image, refine_mask, generate_mask_outline_path
+from src.constants import PAINT_BRUSH_SCREEN_SIZE, SOFTEN_RADIUS
 
 try: pyi_splash.update_text("Loading pymatting (Compiles on first run, approx 1-2 minutes)")
 except: pass
@@ -127,6 +127,13 @@ class BackgroundRemoverGUI(QMainWindow):
         self.output_refresh_timer.timeout.connect(self.update_output_preview)
         self.output_refresh_timer.timeout.connect(self.trigger_refinement_update)
 
+        # Marching ants for the temporary mask bounding box
+        self.marching_ants_timer = QTimer()
+        self.marching_ants_timer.setInterval(100)
+        self.marching_ants_timer.timeout.connect(self.update_marching_ants)
+        self.marching_ants_offset = 0
+
+
         try: pyi_splash.update_text("Loading UI")
         except: pass
         self.init_ui()
@@ -174,6 +181,15 @@ class BackgroundRemoverGUI(QMainWindow):
         # 50ms seems long enough on my PC
         if self.image_paths:
             QTimer.singleShot(50, lambda: self.load_image(self.image_paths[0]))
+            
+            if cli_args.load_mask:
+                QTimer.singleShot(60, lambda: self.load_associated_mask(self.image_paths[0]))
+
+            if cli_args.load_trimap:
+                QTimer.singleShot(70, lambda: self.load_associated_trimap(self.image_paths[0]))
+            
+            self.update_thumbnail_strip()
+
         else:
             self.load_blank_image()
         
@@ -182,16 +198,6 @@ class BackgroundRemoverGUI(QMainWindow):
         # Delay model pre-loading
         QTimer.singleShot(100, self.preload_startup_models)
 
-        if self.image_paths:
-            self.update_thumbnail_strip()
-            QTimer.singleShot(50, lambda: self.load_image(self.image_paths[0]))
-            
-            if cli_args.load_mask:
-                QTimer.singleShot(60, lambda: self.load_associated_mask(self.image_paths[0]))
-
-            if cli_args.load_trimap:
-                QTimer.singleShot(70, lambda: self.load_associated_trimap(self.image_paths[0]))
-        
         saved_theme = self.settings.value("theme", "dark")
         self.set_theme(saved_theme)
 
@@ -316,6 +322,12 @@ class BackgroundRemoverGUI(QMainWindow):
         self.output_crop_overlay.setZValue(1000) # Ensure it is above the image
         self.output_crop_overlay.hide()
         self.scene_output.addItem(self.output_crop_overlay)
+
+        # Temporary mask bounding box overlay
+        self.output_temp_mask_overlay = MarchingAntsItem()
+        self.output_temp_mask_overlay.hide()
+        self.output_temp_mask_overlay.setOpacity(0.5)
+        self.scene_output.addItem(self.output_temp_mask_overlay)
 
         self.in_out_splitter.addWidget(self.view_output)
 
@@ -1273,11 +1285,10 @@ class BackgroundRemoverGUI(QMainWindow):
             if self.session.model_output_mask:
                 self.modify_mask(op="live_preview")
         else:
-            # Clear refined preview and reset UI opacity
+            # Clear refined preview and hide marching ants
             self.session.model_output_refined = None
-            self.input_pixmap_item.show()
-            self.input_pixmap_item.setOpacity(1.0)
             self.show_mask_overlay()
+            self.update_output_preview()
     
     def trigger_refinement_update(self):
         """Debounced trigger for updating the live preview mask."""
@@ -1584,24 +1595,12 @@ class BackgroundRemoverGUI(QMainWindow):
         h_preview.setContentsMargins(0, 5, 0, 5)
 
         self.chk_live_preview = QCheckBox("Live Preview Refine")
+        self.chk_live_preview.setChecked(True)
         self.chk_live_preview.setToolTip("Automatically run softening/matting etc on the mask for previewing before committing.")
         self.chk_live_preview.toggled.connect(self.handle_live_preview_toggle)
         
-        self.sl_live_opacity = QSlider(Qt.Orientation.Horizontal)
-        self.sl_live_opacity.setRange(0, 30) 
-        self.sl_live_opacity.setValue(30)
-        #self.sl_live_opacity.setFixedWidth(70)
-        self.sl_live_opacity.setToolTip("Adjust the dimming of the original image background during preview.")
-        self.sl_live_opacity.valueChanged.connect(self.show_mask_overlay)
-        self.sl_live_opacity.setEnabled(False)
-
-        self.chk_live_preview.toggled.connect(self.sl_live_opacity.setEnabled)
-
         h_preview.addWidget(self.chk_live_preview)
-        h_preview.addStretch()
-        h_preview.addWidget(QLabel("Dim:"))
-        h_preview.addWidget(self.sl_live_opacity)
-        
+
         layout.addLayout(h_preview)
 
         h_btns = QHBoxLayout()
@@ -2466,41 +2465,22 @@ class BackgroundRemoverGUI(QMainWindow):
             QTimer.singleShot(0, lambda: self.modify_mask(op="live_preview"))
         else:
             self.show_mask_overlay()
+            self.update_output_preview()  # Show temporary cutout on output canvas
         
 
         self.update_commit_button_states()
 
 
     def show_mask_overlay(self):
-        is_live = self.chk_live_preview.isChecked()
         mask_only = self.chk_input_mask_only.isChecked()
-
-        live_preview_alpha = self.sl_live_opacity.value() / 100.0
         
-        # Determine which mask to display
-        active_mask = self.session.model_output_refined if is_live and self.session.model_output_refined else self.session.model_output_mask
+        # Determine which mask to display (use refined if available, otherwise model output)
+        active_mask = self.session.model_output_refined if self.session.model_output_refined else self.session.model_output_mask
 
-        if is_live and self.session.model_output_refined:
-            # live preview logic
-            self.input_pixmap_item.show()
-            
-            if mask_only:
-                # show the high-res alpha mask in grayscale
-                self.input_pixmap_item.setOpacity(0.0)
-                self.overlay_pixmap_item.setOpacity(1.0)
-                self.overlay_pixmap_item.setPixmap(pil2pixmap(active_mask))
-            else:
-                # image cutout over dimmed background
-                self.input_pixmap_item.setOpacity(live_preview_alpha) # Dim the original
-                self.overlay_pixmap_item.setOpacity(1.0)
-                
-                cutout = self.session.active_image.convert("RGBA")
-                cutout.putalpha(active_mask)
-                self.overlay_pixmap_item.setPixmap(pil2pixmap(cutout))
-        else:
-            # original blue overlay mode
-            self.input_pixmap_item.setOpacity(1.0)
-            
+        # Input canvas always shows blue overlay (no live preview cutout here anymore)
+        self.input_pixmap_item.setOpacity(1.0)
+        
+        if active_mask:  # Only show overlay if we have a mask
             if mask_only:
                 self.overlay_pixmap_item.setOpacity(1.0)
                 self.overlay_pixmap_item.setPixmap(pil2pixmap(active_mask))
@@ -2513,6 +2493,9 @@ class BackgroundRemoverGUI(QMainWindow):
                 overlay = blue.convert("RGBA")
                 overlay.putalpha(active_mask)
                 self.overlay_pixmap_item.setPixmap(pil2pixmap(overlay))
+        else:
+            # No mask to show, clear the overlay
+            self.overlay_pixmap_item.setPixmap(QPixmap())
         
         self.update_trimap_preview()
 
@@ -2520,9 +2503,16 @@ class BackgroundRemoverGUI(QMainWindow):
         self.session.sam_coordinates = []
         self.session.sam_labels = []
         self.session.model_output_mask = None
+        self.session.model_output_refined = None  # Also clear refined preview
         self.overlay_pixmap_item.setPixmap(QPixmap())
         self.trimap_overlay_item.setPixmap(QPixmap())
+        
+        # Hide marching ants and stop timer
+        self.output_temp_mask_overlay.hide()
+        self.marching_ants_timer.stop()
+        
         self.update_commit_button_states()
+        self.update_output_preview()  # Update output to remove temporary cutout
 
         # Clear the invisible paint scratchpad
         if self.session and self.session.paint_image:
@@ -2847,11 +2837,13 @@ class BackgroundRemoverGUI(QMainWindow):
         if not op == "live_preview":
             # commit refined mask to composite_mask
             self.session.composite_mask = op(self.session.composite_mask, processed_mask)
+            self.clear_overlay()
             self.update_output_preview()
         else:
-            # show live preview
+            # show live preview on output canvas with marching ants
             self.session.model_output_refined = processed_mask
             self.show_mask_overlay()
+            self.update_output_preview()  # Show temporary cutout on output canvas
             self.update_commit_button_states()
         self.set_loading(False, "Ready")
 
@@ -2880,7 +2872,17 @@ class BackgroundRemoverGUI(QMainWindow):
         # Inject downscale for GUI performance (not in base settings as batch might want full quality)
         settings['shadow']['downscale'] = shadow_downscale
 
-        current_mask = self.session.composite_mask
+        # Use temporary preview mask if available, otherwise use composite mask
+        # When showing temporary preview, combine it with the existing composite to show what the final result would be
+        # Priority: model_output_refined (live preview) > model_output_mask (generated mask) > composite_mask (committed)
+        if self.session.model_output_refined:
+            # Combine composite with refined preview to show final result
+            current_mask = ImageChops.add(self.session.composite_mask, self.session.model_output_refined)
+        elif self.session.model_output_mask:
+            # Combine composite with generated mask to show final result
+            current_mask = ImageChops.add(self.session.composite_mask, self.session.model_output_mask)
+        else:
+            current_mask = self.session.composite_mask
         if settings["clean_alpha"]:
             current_mask = clean_alpha(current_mask)
 
@@ -2930,7 +2932,7 @@ class BackgroundRemoverGUI(QMainWindow):
 
         final = compose_final_image(
             self.session.active_image,
-            self.session.composite_mask,
+            current_mask,  # Use the temporary mask if available
             settings, 
             model_manager=self.model_manager,
             cached_foreground=cached_foreground,
@@ -2943,7 +2945,7 @@ class BackgroundRemoverGUI(QMainWindow):
     
 
     def update_output_preview(self):
-
+        
         if self.chk_show_mask.isChecked(): 
             
             mask = self.session.composite_mask
@@ -2960,6 +2962,21 @@ class BackgroundRemoverGUI(QMainWindow):
         
         self.output_pixmap_item.setPixmap(pil2pixmap(final))
         self.view_output.setSceneRect(self.view_input.sceneRect())
+
+        # Show marching ants around temporary preview mask if a model output exists
+        # Use refined mask if available (from live preview), otherwise use model_output_mask
+        preview_mask = self.session.model_output_refined if self.session.model_output_refined else self.session.model_output_mask
+        
+        if preview_mask and not self.chk_show_mask.isChecked():
+            path = generate_mask_outline_path(preview_mask)
+            self.output_temp_mask_overlay.setPath(path)
+            self.output_temp_mask_overlay.show()
+            # Start marching ants animation if not already running
+            if not self.marching_ants_timer.isActive():
+                self.marching_ants_timer.start()
+        else:
+            self.output_temp_mask_overlay.hide()
+            self.marching_ants_timer.stop()
 
         # Update the Auto-Trim visual overlay
         if self.chk_export_trim.isChecked() and not self.chk_show_mask.isChecked():
@@ -2988,6 +3005,14 @@ class BackgroundRemoverGUI(QMainWindow):
                 self.output_crop_overlay.hide()
         else:
             self.output_crop_overlay.hide()
+
+
+    def update_marching_ants(self):
+        """Updates the dash offset for the 'marching ants' animation."""
+        # Loop smoothly by using the sum of the dash pattern (4+4=8)
+        self.marching_ants_offset = (self.marching_ants_offset + 1) % 8
+        if hasattr(self, 'output_temp_mask_overlay'):
+            self.output_temp_mask_overlay.set_dash_offset(self.marching_ants_offset)
 
     def reset_all(self):
         self.clear_overlay()
@@ -3239,6 +3264,17 @@ class BackgroundRemoverGUI(QMainWindow):
 
     def save_image(self, quick_save=False, clipboard = False):
         if not self.image_paths: return
+        
+        # Check for uncommitted temporary selections
+        if self.session.model_output_mask or self.session.model_output_refined:
+            QMessageBox.information(
+                self, 
+                "Uncommitted Temporary Selection", 
+                "You have an uncommitted temporary selection.\n\n"
+                "Please commit the selection by clicking 'Add to Mask' or 'Subtract from Mask', "
+                "or clear it with 'C' before saving."
+            )
+            return
         
         fmt = self.combo_export_fmt.currentData()
         quality = self.sl_export_quality.value()

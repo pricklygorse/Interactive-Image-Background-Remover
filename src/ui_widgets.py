@@ -724,3 +724,39 @@ class ThumbnailList(QListWidget):
         item.setData(Qt.ItemDataRole.UserRole, file_path)
         item.setToolTip(file_path)
         self.addItem(item)
+
+
+    
+class MarchingAntsItem(QGraphicsPathItem):
+    """
+    A custom graphics item that draws high-contrast 'Marching Ants'
+    using a dual-stroke technique (Black line + Animated White Dashes).
+    """
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._dash_offset = 0
+        self.setZValue(1001)
+        
+    def set_dash_offset(self, offset):
+        self._dash_offset = offset
+        self.update() # Trigger repaint
+
+    def paint(self, painter, option, widget):
+        # We ignore the pen set on the item itself and draw our own layered strokes
+        path = self.path()
+        if path.isEmpty():
+            return
+
+        # 1. Draw solid black base line
+        pen_black = QPen(Qt.GlobalColor.black, 2, Qt.PenStyle.SolidLine)
+        pen_black.setCosmetic(True)
+        painter.setPen(pen_black)
+        painter.drawPath(path)
+
+        # 2. Draw dashed white line on top
+        pen_white = QPen(Qt.GlobalColor.white, 2)
+        pen_white.setDashPattern([4, 4])
+        pen_white.setDashOffset(self._dash_offset)
+        pen_white.setCosmetic(True)
+        painter.setPen(pen_white)
+        painter.drawPath(path)
