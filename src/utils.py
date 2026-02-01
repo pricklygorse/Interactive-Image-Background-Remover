@@ -769,3 +769,24 @@ def generate_mask_outline_path(mask):
             path.lineTo(float(contour[i][0][0]), float(contour[i][0][1]))
         path.closeSubpath()
     return path
+
+
+def expand_contract_mask(mask_pil, amount):
+    """
+    Expands (dilates) or contracts (erodes) a mask.
+    amount > 0: Expand
+    amount < 0: Contract
+    """
+    if amount == 0:
+        return mask_pil
+
+    mask_np = np.array(mask_pil)
+    kernel_size = abs(amount) * 2 + 1
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (kernel_size, kernel_size))
+
+    if amount > 0:
+        mask_np = cv2.dilate(mask_np, kernel, iterations=1)
+    else:
+        mask_np = cv2.erode(mask_np, kernel, iterations=1)
+
+    return Image.fromarray(mask_np)

@@ -39,7 +39,7 @@ from src.ui_dialogs import InpaintingDialog
 from src.trimap_editor import TrimapEditorDialog
 from src.utils import pil2pixmap, numpy_to_pixmap, apply_tone_sharpness, generate_drop_shadow, \
     generate_blurred_background, sanitise_filename_for_windows, get_current_crop_bbox, generate_trimap_from_mask, clean_alpha, generate_alpha_map, \
-    generate_outline, generate_inner_glow, apply_subject_tint, compose_final_image, refine_mask, generate_mask_outline_path
+    generate_outline, generate_inner_glow, apply_subject_tint, compose_final_image, refine_mask, generate_mask_outline_path, expand_contract_mask
 from src.constants import PAINT_BRUSH_SCREEN_SIZE, SOFTEN_RADIUS
 
 try: pyi_splash.update_text("Loading pymatting (Compiles on first run, approx 1-2 minutes)")
@@ -1116,6 +1116,19 @@ class BackgroundRemoverGUI(QMainWindow):
         self.chk_binarise_mask = QCheckBox("Remove Mask Partial Transparency")
         self.chk_binarise_mask.toggled.connect(self.trigger_refinement_update)
         indent_layout.addWidget(self.chk_binarise_mask)
+
+        h_expand_layout = QHBoxLayout()
+        self.lbl_mask_expand = QLabel("Expand/Contract: 0")
+        self.lbl_mask_expand.setMinimumWidth(120)
+        self.sl_mask_expand = QSlider(Qt.Orientation.Horizontal)
+        self.sl_mask_expand.setRange(-50, 50)
+        self.sl_mask_expand.setValue(0)
+        self.sl_mask_expand.setToolTip("Positive values expand the mask boundary, negative values shrink it.")
+        self.sl_mask_expand.valueChanged.connect(lambda v: self.lbl_mask_expand.setText(f"Expand/Contract: {v}"))
+        self.sl_mask_expand.valueChanged.connect(self.trigger_refinement_update)
+        h_expand_layout.addWidget(self.lbl_mask_expand)
+        h_expand_layout.addWidget(self.sl_mask_expand)
+        indent_layout.addLayout(h_expand_layout)
 
         self.chk_soften = QCheckBox("Soften Mask/Paintbrush Edges")
         soften_checked = self.settings.value("soften_mask", False, type=bool)
@@ -2758,8 +2771,11 @@ class BackgroundRemoverGUI(QMainWindow):
                 self.set_loading(False)
                 return
 
-        def _do_modify_work(model_manager, base_mask, matting_enabled, soften_enabled, binary_enabled, m_params):
+        def _do_modify_work(model_manager, base_mask, matting_enabled, soften_enabled, binary_enabled, expand_amount, m_params):
             processed_mask = base_mask
+
+            if expand_amount != 0:
+                processed_mask = expand_contract_mask(processed_mask, expand_amount)
 
             if matting_enabled and m_params:
                 
@@ -2828,6 +2844,7 @@ class BackgroundRemoverGUI(QMainWindow):
             apply_matting, 
             self.chk_soften.isChecked(), 
             self.chk_binarise_mask.isChecked(), 
+            self.sl_mask_expand.value(),
             matting_params
         )
         self.worker.finished.connect(lambda result_mask: self._on_modify_mask_finished(result_mask, op))
