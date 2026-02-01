@@ -925,21 +925,75 @@ class BackgroundRemoverGUI(QMainWindow):
         # Run Model Button and layout adjustment
         h_whole_model = QHBoxLayout()
         self.btn_whole = QPushButton("Run Model (M)"); self.btn_whole.clicked.connect(lambda: self.run_automatic_model())
+        self.btn_whole.setStyleSheet("""
+            QPushButton {
+                background-color: #0078d4;
+                color: white;
+                font-weight: bold;
+                border-radius: 4px;
+                border: 1px solid #005a9e;
+                padding: 5px 15px;
+            }
+            QPushButton:hover {
+                background-color: #106ebe;
+            }
+            QPushButton:pressed {
+                background-color: #005a9e;
+            }
+            QPushButton:disabled {
+                background-color: #c8c8c8;
+                color: #a1a1a1;
+                border: 1px solid #c8c8c8;
+            }
+        """)
         h_whole_model.addWidget(self.combo_whole)
         h_whole_model.addWidget(self.btn_whole)
         layout.addLayout(h_whole_model)
 
-        self.chk_2step_auto = QCheckBox("2-Step (Find -> Re-run)")
+        self.chk_2step_auto = QCheckBox("2-Step (Find Subject -> Re-run)")
         self.chk_2step_auto.setToolTip("Runs the model twice: first on the entire image to find the subject,\n "
                                        "then a second time on a zoomed crop of the subject for maximum detail."
-                                       "\n\nNOTE: This is different to typical usage, where the model is run on what you are currently zoomed in to,\n"
+                                       "\n\nNOTE: This is different to typical usage, where the model is run on the view that you are currently zoomed in to,\n"
                                        "which may instead be the optimal way to get a higher quality mask")
         layout.addWidget(self.chk_2step_auto)
 
         layout.addSpacing(20)
 
+        lbl_mat_gen = QLabel("<b>DRAW AND REFINE (Matting)</b>")
+        #lbl_mat_gen.setToolTip("Draw a mask and let the model calculate the difficult areas.")
+        layout.addWidget(lbl_mat_gen)
+        
+        lbl_mat_note = QLabel("Draw a rough initial mask/trimap and let models calculate the tricky bits such as hair.")
+        lbl_mat_note.setWordWrap(True)
+        lbl_mat_note.setToolTip("If you have a mask generated from another model, the editor will inherit this as a starting point.")
+        layout.addWidget(lbl_mat_note)
 
-        layout.addSpacing(20)
+        h_mat_btn_layout = QHBoxLayout()
+        
+        self.btn_open_trimap_gen = QPushButton("1. Draw Trimap")
+        self.btn_open_trimap_gen.clicked.connect(self.open_trimap_editor)
+        self.btn_open_trimap_gen.setToolTip("Open the editor to draw where the foreground and background are.")
+
+        h_mat_algo_layout = QHBoxLayout()
+        h_mat_algo_layout.addWidget(QLabel("Matting Model:"))
+        
+        self.combo_matting_gen = QComboBox()
+        self.combo_matting_gen.setToolTip("Select the specialized matting model to use.")
+        self.combo_matting_gen.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+        self.combo_matting_gen.setMinimumContentsLength(1)
+        h_mat_algo_layout.addWidget(self.combo_matting_gen)
+        layout.addLayout(h_mat_algo_layout)
+        
+        self.btn_run_matting_gen = QPushButton("2. Run Matting")
+        self.btn_run_matting_gen.setToolTip("Runs the selected matting model using your hand-drawn trimap.")
+        self.btn_run_matting_gen.clicked.connect(self.run_matting_on_custom_trimap)
+        self.btn_run_matting_gen.setStyleSheet("font-weight: bold; background-color: #444; color: white;")
+        
+        h_mat_btn_layout.addWidget(self.btn_open_trimap_gen)
+        h_mat_btn_layout.addWidget(self.btn_run_matting_gen)
+        layout.addLayout(h_mat_btn_layout)
+
+        layout.addSpacing(40)
 
 
         btn_clr = QPushButton("Clear SAM Clicks/ Model Masks (C)"); btn_clr.clicked.connect(self.clear_overlay)
@@ -1058,6 +1112,60 @@ class BackgroundRemoverGUI(QMainWindow):
         layout.addStretch()
         scroll.setWidget(container)
         return scroll
+
+    def run_matting_on_custom_trimap(self):
+        """Runs the matting model on the current view/viewport using a custom user-drawn trimap."""
+        if not self.session or not self.session.active_image:
+            return
+
+        if not self.session.user_trimap:
+            ret = QMessageBox.question(self, "No Trimap", 
+                "You haven't drawn a trimap yet. Would you like to open the Trimap Editor?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+            if ret == QMessageBox.StandardButton.Yes:
+                self.open_trimap_editor()
+            return
+
+        if self.is_busy(): return
+
+        model_name = self.combo_matting_gen.currentText()
+        if "PyMatting" in model_name:
+            ret = QMessageBox.question(
+                self, 
+                "Slow Model Warning", 
+                "PyMatting can be very slow for large images/large unknown areas.\n\n"
+                "For better results, download ViTMatte via Settings.\n\n"
+                "Do you want to proceed with PyMatting?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.Yes
+            )
+            if ret == QMessageBox.StandardButton.No:
+                return
+            
+        self.set_loading(True, f"Running {model_name} on custom trimap...")
+        
+        # Determine crop based on viewport (consistent with other models)
+        image_crop, x_off, y_off = self.get_viewport_crop()
+        trimap_crop = self.session.user_trimap.crop((x_off, y_off, x_off + image_crop.width, y_off + image_crop.height))
+        trimap_np = np.array(trimap_crop)
+
+        provider_data = self.combo_auto_model_EP.currentData()
+        limit = int(self.settings.value("matting_longest_edge", 1024))
+
+        def _do_matting_gen(model_manager, name, img, tri_np, prov, lim):
+            matted_alpha_arr = model_manager.run_matting(
+                name, img, tri_np, prov, longest_edge_limit=lim
+            )
+            # convert PIL result back to numpy for consistent worker output
+            return {"mask": np.array(matted_alpha_arr), "status": f"Matting ({name}) Finished"}
+
+        self.worker = InferenceWorker(
+            _do_matting_gen, self.model_manager, 
+            model_name, image_crop, trimap_np, provider_data, limit
+        )
+        self.worker.finished.connect(lambda res: self._on_inference_finished(res, x_off, y_off))
+        self.worker.error.connect(lambda msg: (self.set_loading(False), QMessageBox.critical(self, "Matting Error", msg)))
+        self.worker.start()
 
     def create_refine_tab(self):
         scroll = QScrollArea()
@@ -1196,7 +1304,8 @@ class BackgroundRemoverGUI(QMainWindow):
         lbl_tri_src.setToolTip("A trimap is a guidance mask that specifies what is definite foreground, definite background, and 'unknown/mixed' for the model to calculate")
         am_layout.addWidget(lbl_tri_src)
         self.trimap_mode_group = QButtonGroup(self)
-        self.rb_trimap_auto = QRadioButton("Automatic \n (model output border expand)")
+        self.rb_trimap_auto = QRadioButton("Automatic\n(expand fg/bg edge)")
+        self.rb_trimap_auto.setToolTip("Expands the border between the foreground and background to create a unknown region for the model to calculate the mask.")
         self.rb_trimap_custom = QRadioButton("Custom (user-drawn)")
         
         self.trimap_mode_group.addButton(self.rb_trimap_auto)
@@ -2007,24 +2116,36 @@ class BackgroundRemoverGUI(QMainWindow):
         else: self.combo_whole.addItem("No Models Found")
 
     def populate_matting_models(self):
-        self.combo_matting_algorithm.clear()
+        # Create a list of combo boxes to populate
+        combos = []
+        if hasattr(self, 'combo_matting_algorithm'): combos.append(self.combo_matting_algorithm)
+        if hasattr(self, 'combo_matting_gen'): combos.append(self.combo_matting_gen)
 
-        # Scan for ViTMatte (and in the future, more models)
+        for cb in combos:
+            cb.blockSignals(True)
+            cb.clear()
+
+        # Scan for models
+        found_models = []
         matting_models = ["vitmatte"]
         if os.path.exists(self.model_root_dir):
             for filename in os.listdir(self.model_root_dir):
                 for partial in matting_models:
                     if partial in filename and filename.endswith(".onnx"):
-                        model_name = filename.replace(".onnx", "")
-                        self.combo_matting_algorithm.addItem(model_name)
+                        found_models.append(filename.replace(".onnx", ""))
 
         # Add the older and weaker indexnet model below Vitmatte, if present
         if os.path.exists(os.path.join(self.model_root_dir, "indexnet.onnx")):
-            self.combo_matting_algorithm.addItem("indexnet")
+            found_models.append("indexnet")
         
         # PyMatting is always an option, and often the worst option
         # but i'm importing anyway for estimate_foreground_ml, may as well offer estimate_alpha_cf here
-        self.combo_matting_algorithm.addItem("PyMatting (CPU)")
+        found_models.append("PyMatting (CPU)")
+
+        # Add items to all combos
+        for cb in combos:
+            cb.addItems(found_models)
+            cb.blockSignals(False)
 
     def setup_keybindings(self):
         QShortcut(QKeySequence("A"), self).activated.connect(self.add_mask)
@@ -2626,8 +2747,8 @@ class BackgroundRemoverGUI(QMainWindow):
             trimap_np = generate_trimap_from_mask(self.session.model_output_mask, fg_erode, bg_erode)
             initial_trimap = Image.fromarray(trimap_np)
         else:
-            # If there's no mask at all, start with a blank (all unknown) trimap.
-            initial_trimap = Image.new("L", self.session.active_image.size, 128)
+            # If there's no mask at all, start with a blank (all background) trimap.
+            initial_trimap = Image.new("L", self.session.active_image.size, 0)
 
         dialog = TrimapEditorDialog(self.session.active_image, initial_trimap, self)
         if dialog.exec():
