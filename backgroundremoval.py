@@ -1598,6 +1598,8 @@ class BackgroundRemoverGUI(QMainWindow):
         self.chk_live_preview.setChecked(True)
         self.chk_live_preview.setToolTip("Automatically run softening/matting etc on the mask for previewing before committing.")
         self.chk_live_preview.toggled.connect(self.handle_live_preview_toggle)
+        # for now hide the button and keep the code, but probably this entire toggle is redundant
+        self.chk_live_preview.setVisible(False)
         
         h_preview.addWidget(self.chk_live_preview)
 
@@ -2495,7 +2497,9 @@ class BackgroundRemoverGUI(QMainWindow):
                 self.overlay_pixmap_item.setPixmap(pil2pixmap(overlay))
         else:
             # No mask to show, clear the overlay
+            self.input_pixmap_item.show()
             self.overlay_pixmap_item.setPixmap(QPixmap())
+            self.update_trimap_preview()
         
         self.update_trimap_preview()
 
@@ -2542,6 +2546,8 @@ class BackgroundRemoverGUI(QMainWindow):
                 
         for item in items_to_remove:
             self.scene_input.removeItem(item)
+
+        self.input_pixmap_item.show()
 
     def clear_visible_area(self):
         if not self.session.composite_mask:
