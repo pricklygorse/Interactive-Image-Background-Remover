@@ -3325,6 +3325,10 @@ class BackgroundRemoverGUI(QMainWindow):
             stroke_mask_np = arr[:, :, 0].copy()
 
             if self.is_smart_refine:
+                if "PyMatting" in self.combo_matting_algorithm.currentText():
+                    QMessageBox.information(self,"Error","PyMatting is very inconsistent with Smart Refine. Please download VitMatte from the settings")
+                    return
+                
                 coords = np.column_stack(np.where(stroke_mask_np > 0))
                 if coords.size == 0: return
                 
@@ -3341,9 +3345,24 @@ class BackgroundRemoverGUI(QMainWindow):
                 mask_patch_np = np.array(self.session.composite_mask.crop((x1, y1, x2, y2)))
                 local_stroke_np = stroke_mask_np[y1:y2, x1:x2]
 
-                # 128 for brush area. Anything over 220 assi,e os foreground
-                trimap_np = np.where(mask_patch_np > 220, 255, 0).astype(np.uint8)
+                # Initialise an empty trimap with zero for background
+                trimap_np = np.zeros(mask_patch_np.shape, dtype=np.uint8)
+
+                # Use composite_mask to specify definite foreground
+                trimap_np[mask_patch_np > 230] = 255
+
+                # Anything between 20 and 230 is unknown (existing soft edges in composite_mask)
+                trimap_np[(mask_patch_np >= 20) & (mask_patch_np <= 230)] = 128
+
+                # Force anything the user just painted to Unknown
                 trimap_np[local_stroke_np > 0] = 128
+
+                # debug check what is going into the model
+                # img_bgr = cv2.cvtColor(np.array(image_patch), cv2.COLOR_RGB2BGR)
+                # cv2.imwrite("debug_patch.jpg", img_bgr)
+                # cv2.imwrite("debug_patch_mask.jpg", mask_patch_np)
+                # cv2.imwrite("debug_patch_stroke.jpg", local_stroke_np)
+                # cv2.imwrite("debug_trimap.jpg", trimap_np)
                 
                 self.set_loading(True, "Smart Refining...")
                 
