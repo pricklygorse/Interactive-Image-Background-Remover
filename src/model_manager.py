@@ -868,4 +868,85 @@ class ModelManager:
 
         return final_patch.convert("RGBA"), 0
 
+
+
+
+
+    def run_matting_tiled(self, algorithm_name, image_pil, trimap_np, provider_data, tile_size=512, overlap=128):
+        """
+        Runs matting at 1:1 scale using overlapping tiles and linear blending.
+        """
+
+        s = timer()
+        w, h = image_pil.size
+        # Use float32 for accumulation to handle blending weights
+        acc_alpha = np.zeros((h, w), dtype=np.float32)
+        acc_weight = np.zeros((h, w), dtype=np.float32)
+
+        # Pre-calculate a 2D linear ramp weight map for the tile
+        # 1.0 in the center, 0.0 at the extreme edges of the overlap
+        ramp = np.linspace(0, 1, overlap)
+        single_ramp = np.ones(tile_size + 2 * overlap, dtype=np.float32)
+        single_ramp[:overlap] = ramp
+        single_ramp[-overlap:] = ramp[::-1]
+        
+        # 2D weight mask (H, W)
+        weight_tile_base = np.outer(single_ramp, single_ramp)
+
+        steps_x = range(0, w, tile_size)
+        steps_y = range(0, h, tile_size)
+
+        for ty in steps_y:
+            for tx in steps_x:
+                
+                # Define the Patch with Overlap
+                py1 = max(0, ty - overlap)
+                py2 = min(h, ty + tile_size + overlap)
+                px1 = max(0, tx - overlap)
+                px2 = min(w, tx + tile_size + overlap)
+
+                # Skip tiles that are 100% Background (0) or 100% Foreground (255)
+                tile_trimap = trimap_np[py1:py2, px1:px2]
+                if not np.any(tile_trimap == 128):
+                    # Just copy the trimap value (already definite)
+                    acc_alpha[py1:py2, px1:px2] += tile_trimap.astype(np.float32)
+                    acc_weight[py1:py2, px1:px2] += 1.0
+                    print("Tile", ty, tx,"Skipped")
+                    continue
+                
+                print("Tile", ty, tx)
+
+                patch_img = image_pil.crop((px1, py1, px2, py2))
+                
+                # Inference, passing a high limit to ensure no resizing of the patch
+                res_alpha_pil = self.run_matting(algorithm_name, patch_img, tile_trimap, 
+                                                provider_data, longest_edge_limit=2048)
+                res_alpha = np.array(res_alpha_pil).astype(np.float32)
+
+                # Apply Weights for Blending
+                # Crop weight mask if patch is smaller than standard (at image edges)
+                ph, pw = res_alpha.shape
+                
+                # Use a slice of our pre-calculated weight tile
+                # This ensures we don't fade out at the true image boundaries
+                w_h, w_w = weight_tile_base.shape
+                # If we are at the top edge, we don't want to fade the top
+                curr_weight = weight_tile_base.copy()
+                if ty == 0: curr_weight[:overlap, :] = 1.0
+                if tx == 0: curr_weight[:, :overlap] = 1.0
+                if ty + tile_size >= h: curr_weight[-(w_h - (h-ty+overlap)):, :] = 1.0
+                if tx + tile_size >= w: curr_weight[:, -(w_w - (w-tx+overlap)):] = 1.0
+                
+                # Crop weight to match actual patch size
+                curr_weight = curr_weight[:ph, :pw]
+
+                # Accumulate
+                acc_alpha[py1:py2, px1:px2] += (res_alpha * curr_weight)
+                acc_weight[py1:py2, px1:px2] += curr_weight
+
+        # Normalize and convert back to uint8
+        final_alpha = acc_alpha / (acc_weight + 1e-8)
+
+        print("Tiled Matting Time:", timer()-s)
+        return Image.fromarray(np.clip(final_alpha, 0, 255).astype(np.uint8))
   

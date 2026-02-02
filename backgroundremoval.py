@@ -993,6 +993,13 @@ class BackgroundRemoverGUI(QMainWindow):
         h_mat_btn_layout.addWidget(self.btn_run_matting_gen)
         layout.addLayout(h_mat_btn_layout)
 
+        self.chk_tiled_matting = QCheckBox("Use Tiled Matting (1:1 Detail, Slower)")
+        self.chk_tiled_matting.setToolTip("Processes the image in small overlapping tiles at full resolution for a higher quality mask.\n"
+                                          "Much lower VRAM usage compared to setting a larger matting resolution limit in the settings")
+        self.chk_tiled_matting.setChecked(self.settings.value("tiled_matting_enabled", False, type=bool))
+        self.chk_tiled_matting.toggled.connect(lambda c: self.settings.setValue("tiled_matting_enabled", c))
+        layout.addWidget(self.chk_tiled_matting)
+
         layout.addSpacing(40)
 
 
@@ -1114,7 +1121,11 @@ class BackgroundRemoverGUI(QMainWindow):
         return scroll
 
     def run_matting_on_custom_trimap(self):
-        """Runs the matting model on the current view/viewport using a custom user-drawn trimap."""
+        """
+        Runs the matting model on the current view/viewport using a custom user-drawn trimap.
+        TODO: Update status bar with which tile is being processed.
+
+        """
         if not self.session or not self.session.active_image:
             return
 
@@ -1129,7 +1140,9 @@ class BackgroundRemoverGUI(QMainWindow):
         if self.is_busy(): return
 
         model_name = self.combo_matting_gen.currentText()
-        if "PyMatting" in model_name:
+        use_tiled = self.chk_tiled_matting.isChecked()
+        
+        if "PyMatting" in model_name and not use_tiled:
             ret = QMessageBox.question(
                 self, 
                 "Slow Model Warning", 
@@ -1141,29 +1154,38 @@ class BackgroundRemoverGUI(QMainWindow):
             )
             if ret == QMessageBox.StandardButton.No:
                 return
+        elif "PyMatting" in model_name and use_tiled:
+            QMessageBox.information(self,"Error","PyMatting is incompatible with Tiled Matting. Please download VitMatte from the settings")
+            return
+
             
-        self.set_loading(True, f"Running {model_name} on custom trimap...")
-        
-        # Determine crop based on viewport (consistent with other models)
-        image_crop, x_off, y_off = self.get_viewport_crop()
-        trimap_crop = self.session.user_trimap.crop((x_off, y_off, x_off + image_crop.width, y_off + image_crop.height))
-        trimap_np = np.array(trimap_crop)
+        self.set_loading(True, f"Running {'Tiled ' if use_tiled else ''}{model_name}...")
 
         provider_data = self.combo_auto_model_EP.currentData()
-        limit = int(self.settings.value("matting_longest_edge", 1024))
+        
+        # Viewport coordinates (for positioning result later)
+        _, vx, vy = self.get_viewport_crop()
 
-        def _do_matting_gen(model_manager, name, img, tri_np, prov, lim):
-            matted_alpha_arr = model_manager.run_matting(
-                name, img, tri_np, prov, longest_edge_limit=lim
-            )
-            # convert PIL result back to numpy for consistent worker output
-            return {"mask": np.array(matted_alpha_arr), "status": f"Matting ({name}) Finished"}
+        def _do_matting_gen(model_manager, name, sess, prov, tiled):
+            if tiled:
+                # Process full image
+                res_pil = model_manager.run_matting_tiled(
+                    name, sess.active_image, np.array(sess.user_trimap), prov
+                )
+                return {"mask": np.array(res_pil), "status": "Tiled Matting Complete", "is_full": True}
+            else:
+                # Standard Viewport Crop
+                image_crop, x_off, y_off = self.get_viewport_crop()
+                trimap_crop = sess.user_trimap.crop((x_off, y_off, x_off + image_crop.width, y_off + image_crop.height))
+                res_pil = model_manager.run_matting(
+                    name, image_crop, np.array(trimap_crop), prov, longest_edge_limit=1024
+                )
+                return {"mask": np.array(res_pil), "status": "Viewport Matting Complete", "is_full": False}
 
-        self.worker = InferenceWorker(
-            _do_matting_gen, self.model_manager, 
-            model_name, image_crop, trimap_np, provider_data, limit
-        )
-        self.worker.finished.connect(lambda res: self._on_inference_finished(res, x_off, y_off))
+        self.worker = InferenceWorker(_do_matting_gen, self.model_manager, model_name, self.session, provider_data, use_tiled)
+        
+        # When tiled, x_off/y_off are 0 because the result is already full-size
+        self.worker.finished.connect(lambda res: self._on_inference_finished(res, 0 if res["is_full"] else vx, 0 if res["is_full"] else vy))
         self.worker.error.connect(lambda msg: (self.set_loading(False), QMessageBox.critical(self, "Matting Error", msg)))
         self.worker.start()
 
