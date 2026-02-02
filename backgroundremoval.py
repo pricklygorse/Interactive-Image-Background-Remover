@@ -1484,38 +1484,6 @@ class BackgroundRemoverGUI(QMainWindow):
 
         # end alpha matting
 
-        def make_brush_refine_slider(label_text, min_v, max_v, def_v, callback=None):
-            h_layout = QHBoxLayout()
-            label = QLabel(f"{label_text}: {def_v}")
-            label.setMinimumWidth(120)
-            slider = QSlider(Qt.Orientation.Horizontal)
-            slider.setRange(min_v, max_v)
-            slider.setValue(def_v)
-            
-            def update_val(val):
-                label.setText(f"{label_text}: {val}")
-                if callback:
-                    callback()
-
-            slider.valueChanged.connect(update_val)
-            h_layout.addWidget(label)
-            h_layout.addWidget(slider)
-            return label, slider, h_layout
-        
-        indent_layout.addSpacing(10)
-
-        lbl_brush_refine = QLabel("<b>Smart Refine Brush (Experimental)</b>")
-        indent_layout.addWidget(lbl_brush_refine)
-        
-        lbl_brush_hint = QLabel("Hold <b>Ctrl + Paint</b> to locally refine edges such as hair on the <i>output</i> image.")
-        lbl_brush_hint.setWordWrap(True)
-        #lbl_brush_hint.setStyleSheet("color: #2a82da;")
-        indent_layout.addWidget(lbl_brush_hint)
-
-        self.lbl_smart_padding, self.sl_smart_padding, pad_l = make_brush_refine_slider(
-            "Context Padding", 1, 5, 3)
-        self.sl_smart_padding.setToolTip("Determines how much 'Definite' background and foreground the AI sees around your brush stroke.\nCan have small impact on output quality")
-        indent_layout.addLayout(pad_l)
 
         layout.addWidget(indent_container)
 
@@ -3452,7 +3420,7 @@ class BackgroundRemoverGUI(QMainWindow):
                 if coords.size == 0: return
                 
                 # padding to ensure the AI sees enough 'definite' FG/BG pixels
-                padding = int(self.brush_width * self.sl_smart_padding.value())
+                padding = int(self.brush_width * self.settings.value("smart_refine_padding", 3, type=int))
 
                 y1, x1 = np.min(coords, axis=0) - padding
                 y2, x2 = np.max(coords, axis=0) + padding

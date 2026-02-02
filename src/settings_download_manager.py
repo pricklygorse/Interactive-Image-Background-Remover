@@ -3,7 +3,7 @@ import sys
 import requests
 from PyQt6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, 
                              QProgressBar, QScrollArea, QWidget, QMessageBox, QFrame, 
-                             QSizePolicy,QStackedWidget,QCheckBox, QComboBox,QLineEdit, QFileDialog)
+                             QSizePolicy,QStackedWidget,QCheckBox, QComboBox,QLineEdit, QFileDialog, QSlider)
 from PyQt6.QtWidgets import QTabWidget
 from PyQt6.QtCore import (QThread, pyqtSignal, Qt, QSize)
 
@@ -585,6 +585,32 @@ class SettingsDialog(QDialog):
         fg_layout.addWidget(self.fg_combo)
         fg_layout.addStretch()
         refine_layout.addLayout(fg_layout)
+
+        # Smart Refine Context Padding
+        pad_layout = QHBoxLayout()
+        pad_label = QLabel("Smart Refine PaintBrush Context Padding (Experimental):")
+        pad_label.setToolTip("Determines how much 'Definite' background and foreground the AI sees around your brush stroke.\nCan have small impact on output quality")
+        
+        self.pad_slider = QSlider(Qt.Orientation.Horizontal)
+        self.pad_slider.setRange(1, 5)
+        self.pad_slider.setFixedWidth(150)
+        
+        current_pad = self.settings.value("smart_refine_padding", 3, type=int) if self.settings else 3
+        self.pad_slider.setValue(current_pad)
+        
+        pad_val_label = QLabel(str(current_pad))
+        pad_val_label.setFixedWidth(30)
+        
+        self.pad_slider.valueChanged.connect(lambda v: pad_val_label.setText(str(v)))
+        self.pad_slider.valueChanged.connect(
+             lambda v: self.settings.setValue("smart_refine_padding", v) if self.settings else None
+        )
+
+        pad_layout.addWidget(pad_label)
+        pad_layout.addWidget(self.pad_slider)
+        pad_layout.addWidget(pad_val_label)
+        pad_layout.addStretch()
+        refine_layout.addLayout(pad_layout)
 
         layout.addWidget(refine_group)
 
