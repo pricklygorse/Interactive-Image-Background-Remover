@@ -368,7 +368,8 @@ class BackgroundRemoverGUI(QMainWindow):
         
         bottom_strip_layout.addWidget(self.btn_batch)
 
-        # Add the splitter to the top, thumbnails to the bottom
+        # Add the settings panel + splitter to the top, thumbnails to the bottom
+        views_thumbs_layout.addWidget(self.create_paint_settings_panel())
         views_thumbs_layout.addWidget(self.in_out_splitter, 1) # '1' ensures views take most space
         views_thumbs_layout.addWidget(bottom_strip_widget)
 
@@ -408,6 +409,105 @@ class BackgroundRemoverGUI(QMainWindow):
         )
         
         self.toggle_splitter_orientation(initial_setup=True)
+
+
+    def create_paint_settings_panel(self):
+        self.paint_settings_panel = QFrame()
+
+        self.paint_settings_panel.setFixedHeight(50)
+        
+        layout = QHBoxLayout(self.paint_settings_panel)
+        layout.setContentsMargins(10, 2, 10, 2)
+        layout.setSpacing(15)
+
+        layout.addWidget(QLabel("🎨 PAINT TOOLS"))
+        
+        # Mode Selection
+        self.paint_mode_group = QButtonGroup(self)
+        self.paint_mode_group.setExclusive(True)
+        
+        btn_style = """
+            QPushButton {
+                padding: 5px 10px;
+                border: 1px solid #777;
+                border-radius: 3px;
+                background-color: #cccccc; 
+                color: #050505; /* Light text for dark mode default */
+            }
+            QPushButton:checked {
+                background-color: #2a82da;
+                color: white;
+                border: 1px solid #2a82da;
+            }
+            QPushButton:hover {
+                border: 1px solid #999;
+            }
+        """
+
+        self.btn_draw_mode = QPushButton("Paint")
+        self.btn_draw_mode.setCheckable(True)
+        self.btn_draw_mode.setChecked(True)
+        self.btn_draw_mode.setStyleSheet(btn_style)
+        
+        self.btn_erase_mode = QPushButton("Erase")
+        self.btn_erase_mode.setCheckable(True)
+        self.btn_erase_mode.setStyleSheet(btn_style)
+        
+        self.btn_smart_refine = QPushButton("Smart Refine")
+        self.btn_smart_refine.setCheckable(True)
+        self.btn_smart_refine.setToolTip("Uses Alpha Matting locally to refine edges (Ctrl+Paint)")
+        self.btn_smart_refine.setStyleSheet(btn_style)
+
+        self.paint_mode_group.addButton(self.btn_draw_mode)
+        self.paint_mode_group.addButton(self.btn_erase_mode)
+        self.paint_mode_group.addButton(self.btn_smart_refine)
+        
+        layout.addWidget(self.btn_draw_mode)
+        layout.addWidget(self.btn_erase_mode)
+        layout.addWidget(self.btn_smart_refine)
+
+        # Smart Refine Model Combobox
+        self.combo_smart_refine_model = QComboBox()
+        self.combo_smart_refine_model.setToolTip("Select the matting model to use for Smart Refine.")
+        self.combo_smart_refine_model.setFixedWidth(120)
+        self.combo_smart_refine_model.setVisible(False) # Hidden by default
+        
+        # Toggle visibility
+        self.btn_smart_refine.toggled.connect(self.combo_smart_refine_model.setVisible)
+        
+        layout.addWidget(self.combo_smart_refine_model)
+        
+        # Brush Size
+        layout.addWidget(QLabel("   Size:"))
+        self.sl_brush_size = QSlider(Qt.Orientation.Horizontal)
+        self.sl_brush_size.setRange(5, 200)
+        self.sl_brush_size.setValue(PAINT_BRUSH_SCREEN_SIZE)
+        self.sl_brush_size.setFixedWidth(150)
+        self.sl_brush_size.valueChanged.connect(self.update_paint_brush_size)
+                
+        layout.addWidget(self.sl_brush_size)
+        
+        self.chk_paint_soften = QCheckBox("Soften Edges")
+        
+        layout.addWidget(self.chk_paint_soften)
+        
+        layout.addStretch()
+        
+        self.paint_settings_panel.hide()
+        
+        QTimer.singleShot(100, self.populate_matting_models)
+        
+        return self.paint_settings_panel
+
+    def update_paint_brush_size(self, val):
+        self.brush_size = val
+        
+        # Force update cursor visualisation
+        cursor_pos = self.view_input.mapFromGlobal(QCursor.pos())
+        scene_pos = self.view_input.mapToScene(cursor_pos)
+        self.view_input.update_brush_cursor(scene_pos)
+        self.view_output.update_brush_cursor(scene_pos)
+
     
     def create_global_toolbar(self):
         toolbar = QToolBar("Session Control")
@@ -450,11 +550,11 @@ class BackgroundRemoverGUI(QMainWindow):
         toolbar.addSeparator()
 
         # Global Toggle
-        self.chk_paint = QCheckBox("Paintbrush/Smart Refine (P)")
-        self.chk_paint.setToolTip("Manually draw to touch-up areas. Hold CTRL while painting for Smart Refinement of that area")
-
-        toolbar.addWidget(self.chk_paint)
-        self.chk_paint.toggled.connect(self.toggle_paint_mode)
+        self.act_paint_mode = QAction(QIcon(), "Paint Mode (P)", self)
+        self.act_paint_mode.setCheckable(True)
+        self.act_paint_mode.setToolTip("Manually draw to touch-up areas. Opens Paint Tools panel.")
+        self.act_paint_mode.toggled.connect(self.toggle_paint_mode)
+        toolbar.addAction(self.act_paint_mode)
         spacer = QWidget()
         spacer.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         toolbar.addWidget(spacer)
@@ -2142,6 +2242,7 @@ class BackgroundRemoverGUI(QMainWindow):
         combos = []
         if hasattr(self, 'combo_matting_algorithm'): combos.append(self.combo_matting_algorithm)
         if hasattr(self, 'combo_matting_gen'): combos.append(self.combo_matting_gen)
+        if hasattr(self, 'combo_smart_refine_model'): combos.append(self.combo_smart_refine_model) # Add new combo
 
         for cb in combos:
             cb.blockSignals(True)
@@ -2179,8 +2280,8 @@ class BackgroundRemoverGUI(QMainWindow):
         QShortcut(QKeySequence("Ctrl+Z"), self).activated.connect(self.undo)
         QShortcut(QKeySequence("Ctrl+Y"), self).activated.connect(self.redo)
         QShortcut(QKeySequence("Ctrl+O"), self).activated.connect(self.load_image_dialog)
-        QShortcut(QKeySequence("P"), self).activated.connect(self.chk_paint.toggle)
-        QShortcut(QKeySequence("Ctrl+P"), self).activated.connect(self.chk_paint.toggle)
+        QShortcut(QKeySequence("P"), self).activated.connect(self.act_paint_mode.toggle)
+        QShortcut(QKeySequence("Ctrl+P"), self).activated.connect(self.act_paint_mode.toggle)
         QShortcut(QKeySequence("Ctrl+S"), self).activated.connect(self.save_image)
         QShortcut(QKeySequence("Ctrl+Shift+S"), self).activated.connect(lambda: self.save_image(quick_save=True)) # Quick Save JPG
         QShortcut(QKeySequence("Ctrl+C"), self).activated.connect(lambda: self.save_image(clipboard=True))
@@ -3210,6 +3311,9 @@ class BackgroundRemoverGUI(QMainWindow):
         self.view_input.setCursor(Qt.CursorShape.CrossCursor if enabled else Qt.CursorShape.ArrowCursor)
         self.view_output.setCursor(Qt.CursorShape.CrossCursor if enabled else Qt.CursorShape.ArrowCursor)
         
+        if hasattr(self, 'paint_settings_panel'):
+            self.paint_settings_panel.setVisible(enabled)
+
         # Update cursor on both views
         cursor_pos = self.view_input.mapFromGlobal(QCursor.pos())
         scene_pos = self.view_input.mapToScene(cursor_pos)
@@ -3233,14 +3337,32 @@ class BackgroundRemoverGUI(QMainWindow):
 
         modifiers = QApplication.keyboardModifiers()
         buttons = QApplication.mouseButtons()
-        self.is_erasing = bool(buttons & Qt.MouseButton.RightButton)
-        self.is_smart_refine = bool(modifiers & Qt.KeyboardModifier.ControlModifier) and not self.is_erasing
+        
+        # Determine mode based on active button
+        self.is_erasing = False
+        self.is_smart_refine = False
+
+        if hasattr(self, 'btn_erase_mode') and self.btn_erase_mode.isChecked():
+            self.is_erasing = True
+        elif hasattr(self, 'btn_smart_refine') and self.btn_smart_refine.isChecked():
+             self.is_smart_refine = True
+        
+        # Override with Right Click -> Erase
+        if buttons & Qt.MouseButton.RightButton:
+            self.is_erasing = True
+            # If we were in smart refine, erase takes precedence for the action for temporary erasing 
+            self.is_smart_refine = False 
+
+        # Override with Ctrl -> Smart Refine (Classic)
+        if (modifiers & Qt.KeyboardModifier.ControlModifier):  # and not self.is_erasing:
+             self.is_smart_refine = True
         
         zoom = self.view_input.transform().m11()
         if zoom == 0: zoom = 1
         
         # Calculate width in scene coordinates
-        self.brush_width = PAINT_BRUSH_SCREEN_SIZE / zoom
+        base_size = self.sl_brush_size.value() if hasattr(self, 'sl_brush_size') else PAINT_BRUSH_SCREEN_SIZE
+        self.brush_width = base_size / zoom
         
         # Temporary vector path for performance
         self.current_path = QPainterPath()
@@ -3251,7 +3373,7 @@ class BackgroundRemoverGUI(QMainWindow):
         self.temp_path_item = QGraphicsPathItem()
         self.temp_path_item.setPath(self.current_path)
         
-        # Red for Paint, White for Erase
+        # Red for Paint, White for Erase, Cyan for Smart Refine
         if self.is_smart_refine:
             color = QColor(0, 255, 255, 200) # Cyan
         else:
@@ -3325,10 +3447,7 @@ class BackgroundRemoverGUI(QMainWindow):
             stroke_mask_np = arr[:, :, 0].copy()
 
             if self.is_smart_refine:
-                if "PyMatting" in self.combo_matting_algorithm.currentText():
-                    QMessageBox.information(self,"Error","PyMatting is very inconsistent with Smart Refine. Please download VitMatte from the settings")
-                    return
-                
+              
                 coords = np.column_stack(np.where(stroke_mask_np > 0))
                 if coords.size == 0: return
                 
@@ -3364,14 +3483,23 @@ class BackgroundRemoverGUI(QMainWindow):
                 # cv2.imwrite("debug_patch_stroke.jpg", local_stroke_np)
                 # cv2.imwrite("debug_trimap.jpg", trimap_np)
                 
-                self.set_loading(True, "Smart Refining...")
                 
+                algorithm_name = self.combo_matting_algorithm.currentText()
+                if hasattr(self, 'combo_smart_refine_model') and self.combo_smart_refine_model.currentText():
+                    algorithm_name = self.combo_smart_refine_model.currentText()
+                
+                if "PyMatting" in algorithm_name:
+                    QMessageBox.information(self,"Error","PyMatting is very inconsistent with Smart Refine. Please download VitMatte from the settings")
+                    return
+                
+                self.set_loading(True, f"Smart Refining with {algorithm_name}")
+
                 limit = int(self.settings.value("matting_longest_edge", 1024))
                 matting_params = {
                     'image_crop': image_patch,
                     'trimap_np': trimap_np,
                     'x_off': x1, 'y_off': y1,
-                    'algorithm': self.combo_matting_algorithm.currentText(),
+                    'algorithm': algorithm_name,
                     'provider_data': self.combo_auto_model_EP.currentData(),
                     'longest_edge_limit': limit,
                     'local_stroke_np': local_stroke_np # Pass this to the handler

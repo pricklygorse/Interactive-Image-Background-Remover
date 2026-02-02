@@ -500,7 +500,12 @@ class SynchronisedGraphicsView(QGraphicsView):
             
         zoom = self.transform().m11()
         if zoom == 0: zoom = 1
-        scene_dia = PAINT_BRUSH_SCREEN_SIZE / zoom
+        
+        base_size = PAINT_BRUSH_SCREEN_SIZE
+        if self.controller and hasattr(self.controller, 'sl_brush_size'):
+            base_size = self.controller.sl_brush_size.value()
+            
+        scene_dia = base_size / zoom
         r = scene_dia / 2
         
         rect_centered = QRectF(-r, -r, scene_dia, scene_dia)
