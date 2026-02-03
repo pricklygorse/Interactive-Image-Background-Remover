@@ -979,6 +979,10 @@ class BackgroundRemoverGUI(QMainWindow):
         self.btn_download.setToolTip("Download Models...")
         self.btn_download.clicked.connect(self.open_settings)
         layout.addWidget(self.btn_download)
+
+        lbl_models_download = QLabel("Models are run on the current view. Zoom and position your subject for best results")
+        lbl_models_download.setWordWrap(True)
+        layout.addWidget(lbl_models_download)
         
         layout.addSpacing(20)
 
@@ -1360,7 +1364,7 @@ class BackgroundRemoverGUI(QMainWindow):
         h_expand_layout.addWidget(self.sl_mask_expand)
         indent_layout.addLayout(h_expand_layout)
 
-        self.chk_soften = QCheckBox("Soften Mask/Paintbrush Edges")
+        self.chk_soften = QCheckBox("Soften Mask")
         soften_checked = self.settings.value("soften_mask", False, type=bool)
         self.chk_soften.setChecked(soften_checked)
         self.chk_soften.toggled.connect(lambda checked: self.settings.setValue("soften_mask", checked))

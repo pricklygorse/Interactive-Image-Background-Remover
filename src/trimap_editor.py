@@ -149,7 +149,7 @@ class TrimapEditorDialog(QDialog):
 
         self.lbl_brush_size = QLabel(f"Size: {self.brush_size}")
         self.slider_brush_size = QSlider(Qt.Orientation.Horizontal)
-        self.slider_brush_size.setRange(1, 200); self.slider_brush_size.setValue(self.brush_size)
+        self.slider_brush_size.setRange(1, 400); self.slider_brush_size.setValue(self.brush_size)
         self.slider_brush_size.valueChanged.connect(self.set_brush_size)
         toolbar_layout.addWidget(self.lbl_brush_size); toolbar_layout.addWidget(self.slider_brush_size)
         toolbar_layout.addStretch()
