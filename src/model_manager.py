@@ -371,7 +371,7 @@ class ModelManager:
         
         # Check active session
         if self.sam_model_path == model_path and self.sam_encoder:
-            return True, "Ready"
+            return True, " | Model Load: Cached"
 
         prov_str, prov_opts, prov_code = provider_data
         cache_key = f"{model_name}_{prov_code}"
@@ -380,9 +380,10 @@ class ModelManager:
             self.sam_encoder, self.sam_decoder = self.loaded_sam_models[cache_key]
             self.sam_model_path = model_path
             self.encoder_output = None
-            return True, "Cached RAM"
+            return True, " | Model Load: Cached"
 
         try:
+            s = timer()
             enc = self._create_inference_session(model_path + ".encoder.onnx", prov_str, prov_opts, model_name)
             dec = self._create_inference_session(model_path + ".decoder.onnx", prov_str, prov_opts, model_name)
             
@@ -398,8 +399,10 @@ class ModelManager:
             if prov_str == "TensorrtExecutionProvider" and cache_key not in self._sam_trt_warmed:
                 self._warmup_sam(model_name)
                 self._sam_trt_warmed.add(cache_key)
-                
-            return True, "Loaded"
+
+            load_time = int((timer() - s) * 1000)
+            
+            return True, f" | Model Load {load_time}ms"
         except Exception as e:
             print(f"SAM Load Error: {e}")
             return False, str(e)

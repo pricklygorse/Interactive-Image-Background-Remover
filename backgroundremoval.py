@@ -2583,16 +2583,18 @@ class BackgroundRemoverGUI(QMainWindow):
         
         def _do_sam_work(model_manager, model_name, provider_data, crop, valid_coords, valid_labels, current_crop_rect):
             
+            # msg returns load time if successful
             success, msg = model_manager.init_sam_session(model_name, provider_data)
             if not success: raise Exception(msg)
             
+            # status is the encoder and decoder inference times
             prov_code = provider_data[2]
             if "sam2" in model_name:
                 mask_arr, status = model_manager.run_sam2(crop, valid_coords, valid_labels, current_crop_rect, prov_code)
             else:
                 mask_arr, status = model_manager.run_sam1(crop, valid_coords, valid_labels, current_crop_rect, prov_code)
             
-            return {"mask": mask_arr, "status": status}
+            return {"mask": mask_arr, "status": status + msg}
 
 
         self.worker = InferenceWorker(
@@ -2682,7 +2684,7 @@ class BackgroundRemoverGUI(QMainWindow):
             self.worker = None
 
         mask_arr = result["mask"]
-        status_msg = result["status"]
+        self.status_msg = result["status"]
 
         # Paste the viewport mask into the correct place
         self.session.model_output_mask = Image.new("L", self.session.active_image.size, 0)
@@ -2691,7 +2693,7 @@ class BackgroundRemoverGUI(QMainWindow):
         
         self.update_cached_model_icons()
         
-        self.set_loading(False, status_msg)
+        self.set_loading(False, self.status_msg)
 
         # Update UI
         if self.chk_live_preview.isChecked():
@@ -2945,6 +2947,9 @@ class BackgroundRemoverGUI(QMainWindow):
 
         self.add_undo_step()
 
+
+        self.refine_start_time = timer()
+
         # Capture state for the worker thread 
         mask_to_process = self.session.model_output_mask.copy()
         apply_matting = self.chk_alpha_matting.isChecked()
@@ -3088,7 +3093,8 @@ class BackgroundRemoverGUI(QMainWindow):
             self.show_mask_overlay()
             self.update_output_preview()  # Show temporary cutout on output canvas
             self.update_commit_button_states()
-        self.set_loading(False, "Ready")
+        
+        self.set_loading(False, self.status_msg + f"     Refinement: {int((timer() - self.refine_start_time)*1000)}ms")
 
     
     def update_commit_button_states(self):
