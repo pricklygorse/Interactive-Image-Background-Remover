@@ -175,7 +175,7 @@ class BackgroundRemoverGUI(QMainWindow):
         self.refinement_timer = QTimer()
         self.refinement_timer.setSingleShot(True)
         self.refinement_timer.setInterval(500) # 500ms delay to prevent spamming ONNX models
-        self.refinement_timer.timeout.connect(lambda: self.modify_mask(op="live_preview"))
+        self.refinement_timer.timeout.connect(lambda: self.modify_mask())
 
         # Let the UI build before loading image, so the correct display zoom is shown
         # 50ms seems long enough on my PC
@@ -1338,7 +1338,7 @@ class BackgroundRemoverGUI(QMainWindow):
         lbl_modifiers.setContentsMargins(3, 0, 0, 0)
         layout.addWidget(lbl_modifiers)
 
-        lbl_desc = QLabel("Applied to the AI model's mask when adding or subtracting to the output image.")
+        lbl_desc = QLabel("Applied to the AI model's output mask.")
         lbl_desc.setWordWrap(True)
         layout.addWidget(lbl_desc)
 
@@ -1378,11 +1378,11 @@ class BackgroundRemoverGUI(QMainWindow):
         indent_layout.addSpacing(20)
 
 
-        matt_tt = "Uses a matting algorithm to estimate the transparency of mask edges.\n" + "This can improve the quality of detailed edges such as hair, especially when using binary mask models like SAM.\n" + "This requires a trimap (a foreground, unknown, background mask), either estimated from a SAM or automatic models, or manually drawn.\n" + "Alpha matting is computationally expensive and is only applied when 'Add' or 'Subtract' is clicked. Undo if the effect is unsatisfactory"
+        matt_tt = "Runs a second pass with a matting model to estimate the transparency of mask edges.\n" + "This can improve the quality of detailed edges such as hair, especially when using binary mask models like SAM.\n" + "This requires a trimap (a foreground, unknown, background mask), either estimated from a SAM or automatic models, or manually drawn.\n" + "Alpha matting is computationally expensive and is only applied when 'Add' or 'Subtract' is clicked. Undo if the effect is unsatisfactory"
         lbl_alpha = QLabel("<b>SMART REFINE (Alpha Matting)</b>")
         lbl_alpha.setToolTip(matt_tt)
         indent_layout.addWidget(lbl_alpha)
-        lbl_alpha_desc = QLabel("Uses specialised algorithms to refine difficult areas like hair and fur. ViTMatte is recommended")
+        lbl_alpha_desc = QLabel("Runs the model output through a specialised model to refine difficult areas like hair and fur. ViTMatte is recommended")
         lbl_alpha_desc.setWordWrap(True)
         lbl_alpha_desc.setToolTip(matt_tt)
         indent_layout.addWidget(lbl_alpha_desc)
@@ -1499,20 +1499,9 @@ class BackgroundRemoverGUI(QMainWindow):
         scroll.setWidget(container)
         return scroll
     
-    def handle_live_preview_toggle(self, checked):
-        """Handles the live preview checkbox toggle."""
-        if checked:
-            if self.session.model_output_mask:
-                self.modify_mask(op="live_preview")
-        else:
-            # Clear refined preview and hide marching ants
-            self.session.model_output_refined = None
-            self.show_mask_overlay()
-            self.update_output_preview()
-    
     def trigger_refinement_update(self):
         """Debounced trigger for updating the live preview mask."""
-        if self.chk_live_preview.isChecked() and self.session.model_output_mask and not self.is_busy():
+        if self.session.model_output_mask and not self.is_busy():
             self.refinement_timer.start()
 
     def create_export_tab(self):
@@ -1813,15 +1802,6 @@ class BackgroundRemoverGUI(QMainWindow):
 
         h_preview = QHBoxLayout()
         h_preview.setContentsMargins(0, 5, 0, 5)
-
-        self.chk_live_preview = QCheckBox("Live Preview Refine")
-        self.chk_live_preview.setChecked(True)
-        self.chk_live_preview.setToolTip("Automatically run softening/matting etc on the mask for previewing before committing.")
-        self.chk_live_preview.toggled.connect(self.handle_live_preview_toggle)
-        # for now hide the button and keep the code, but probably this entire toggle is redundant
-        self.chk_live_preview.setVisible(False)
-        
-        h_preview.addWidget(self.chk_live_preview)
 
         layout.addLayout(h_preview)
 
@@ -2695,15 +2675,9 @@ class BackgroundRemoverGUI(QMainWindow):
         
         self.set_loading(False, self.status_msg)
 
-        # Update UI
-        if self.chk_live_preview.isChecked():
-            # Automatically start the refinement thread
-            # Qtimer to allow the event loop to process status label updates before starting the next thread
-            QTimer.singleShot(0, lambda: self.modify_mask(op="live_preview"))
-        else:
-            self.show_mask_overlay()
-            self.update_output_preview()  # Show temporary cutout on output canvas
-        
+        # Automatically start the refinement thread
+        # Qtimer to allow the event loop to process status bar updates before starting the next thread
+        QTimer.singleShot(0, lambda: self.modify_mask())       
 
         self.update_commit_button_states()
 
@@ -2819,8 +2793,19 @@ class BackgroundRemoverGUI(QMainWindow):
 
 
 
-    def add_mask(self): self.modify_mask(ImageChops.add)
-    def subtract_mask(self): self.modify_mask(ImageChops.subtract)
+    def add_mask(self): 
+        if self.btn_add.isEnabled(): 
+            self.add_undo_step()
+            self.session.composite_mask = ImageChops.add(self.session.composite_mask, self.session.model_output_refined)
+            self.clear_overlay()
+            self.update_output_preview()
+        
+    def subtract_mask(self): 
+        if self.btn_sub.isEnabled():
+            self.add_undo_step()
+            self.session.composite_mask = ImageChops.subtract(self.session.composite_mask, self.session.model_output_refined)
+            self.clear_overlay()
+            self.update_output_preview()
 
     def on_trimap_mode_changed(self):
         """Shows or hides UI elements based on the selected trimap mode."""
@@ -2874,9 +2859,6 @@ class BackgroundRemoverGUI(QMainWindow):
         self.alpha_matting_frame.setVisible(checked)
         if checked:
             self.update_trimap_preview()
-            # only show trimap immediately when live preview is off, otherwise difficult to a/b test
-            if not self.chk_live_preview.isChecked():
-                self.chk_show_trimap.setChecked(True)
         else:
             # If unchecked, also uncheck the trimap view so it's off if re-enabled
             self.chk_show_trimap.setChecked(False)
@@ -2935,20 +2917,14 @@ class BackgroundRemoverGUI(QMainWindow):
 
             
 
-    def modify_mask(self, op):
+    def modify_mask(self):
         """
         Apply modifiers to the mask outputted by the models. Entire pipeline is threaded
-        
-        :param op: imagechops operation: add or subtract
         """
         
         if not self.session.model_output_mask: return
         if self.is_busy(): return # Prevent multiple threads
 
-        self.add_undo_step()
-
-
-        self.refine_start_time = timer()
 
         # Capture state for the worker thread 
         mask_to_process = self.session.model_output_mask.copy()
@@ -2957,6 +2933,8 @@ class BackgroundRemoverGUI(QMainWindow):
         msg = " Alpha matting can take a while" if apply_matting else ""
         self.set_loading(True, "Refining mask..." + msg)
         
+        self.refine_start_time = timer()
+
         matting_params = {}
         if apply_matting:
             try:
@@ -3072,29 +3050,29 @@ class BackgroundRemoverGUI(QMainWindow):
             self.sl_mask_expand.value(),
             matting_params
         )
-        self.worker.finished.connect(lambda result_mask: self._on_modify_mask_finished(result_mask, op))
+        self.worker.finished.connect(lambda result_mask: self._on_modify_mask_finished(result_mask))
         self.worker.error.connect(lambda msg: (self.set_loading(False), QMessageBox.critical(self, "Mask Processing Error", msg)))
         self.worker.start()
 
-    def _on_modify_mask_finished(self, processed_mask, op):
+    def _on_modify_mask_finished(self, processed_mask):
         """Handles the result from the mask modification worker."""
+        ref_timer = int((timer() - self.refine_start_time)*1000)
+        # if less than 10ms, likely no refinement was applied. lazy check to avoid adding a modify_mask bypass....
+        ref_msg = f"      Refinement: {ref_timer}ms" if ref_timer > 10 else ""
+
         if hasattr(self, 'worker') and self.worker:
             self.worker.deleteLater()
             self.worker = None
 
-        if not op == "live_preview":
-            # commit refined mask to composite_mask
-            self.session.composite_mask = op(self.session.composite_mask, processed_mask)
-            self.clear_overlay()
-            self.update_output_preview()
-        else:
-            # show live preview on output canvas with marching ants
-            self.session.model_output_refined = processed_mask
-            self.show_mask_overlay()
-            self.update_output_preview()  # Show temporary cutout on output canvas
-            self.update_commit_button_states()
+        # show live preview on output canvas with marching ants
+        self.session.model_output_refined = processed_mask
+
+
+        self.show_mask_overlay()
+        self.update_output_preview()  # Show temporary cutout on output canvas
+        self.update_commit_button_states()
         
-        self.set_loading(False, self.status_msg + f"     Refinement: {int((timer() - self.refine_start_time)*1000)}ms")
+        self.set_loading(False, self.status_msg + ref_msg)
 
     
     def update_commit_button_states(self):
