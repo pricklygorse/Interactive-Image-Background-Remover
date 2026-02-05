@@ -491,6 +491,9 @@ class BackgroundRemoverGUI(QMainWindow):
         
         layout.addWidget(self.chk_paint_soften)
         
+        self.chk_paint_soften.setChecked(self.settings.value("chk_paint_soften", True, type=bool))
+        self.chk_paint_soften.toggled.connect(lambda checked: self.settings.setValue("chk_paint_soften", checked))
+
         layout.addStretch()
         
         self.paint_settings_panel.hide()
@@ -907,9 +910,10 @@ class BackgroundRemoverGUI(QMainWindow):
             
         # Check for models
         root = self.model_manager.model_root_dir
-        lama_exists = (self.model_manager.check_is_cached("lama", self.settings.value("exec_short_code", "cpu")) or 
-                       os.path.exists(os.path.join(root, "lama.onnx")))
-        
+       
+        if os.path.exists(os.path.join(root, f"lama.onnx")):
+                lama_exists = True
+
         deepfill_exists = False
         df_variants = [
             'deepfillv2_celeba_256x256',
