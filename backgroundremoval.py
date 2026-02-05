@@ -1345,12 +1345,6 @@ class BackgroundRemoverGUI(QMainWindow):
         indent_layout = QVBoxLayout(indent_container)
         indent_layout.setContentsMargins(10, 0, 0, 0)
 
-
-
-        self.chk_binarise_mask = QCheckBox("Remove Mask Partial Transparency")
-        self.chk_binarise_mask.toggled.connect(self.trigger_refinement_update)
-        indent_layout.addWidget(self.chk_binarise_mask)
-
         h_expand_layout = QHBoxLayout()
         self.lbl_mask_expand = QLabel("Expand/Contract: 0")
         self.lbl_mask_expand.setMinimumWidth(120)
@@ -1363,6 +1357,12 @@ class BackgroundRemoverGUI(QMainWindow):
         h_expand_layout.addWidget(self.lbl_mask_expand)
         h_expand_layout.addWidget(self.sl_mask_expand)
         indent_layout.addLayout(h_expand_layout)
+
+
+        self.chk_binarise_mask = QCheckBox("Remove Mask Partial Transparency")
+        self.chk_binarise_mask.toggled.connect(self.trigger_refinement_update)
+        indent_layout.addWidget(self.chk_binarise_mask)
+
 
         self.chk_soften = QCheckBox("Soften Mask")
         soften_checked = self.settings.value("soften_mask", False, type=bool)
@@ -3492,7 +3492,7 @@ class BackgroundRemoverGUI(QMainWindow):
                 self.worker.start()
                 return 
 
-            if self.chk_soften.isChecked():
+            if self.chk_paint_soften.isChecked():
                 # ksize (0,0) allows OpenCV to compute the kernel size automatically from sigma
                 stroke_mask_np = cv2.GaussianBlur(stroke_mask_np, (0, 0), sigmaX=SOFTEN_RADIUS)
             
