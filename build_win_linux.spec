@@ -1,16 +1,18 @@
 # -*- mode: python ; coding: utf-8 -*-
+from PyInstaller.utils.hooks import collect_all 
 
+datas_pymatting, binaries_pymatting, hiddenimports_pymatting = collect_all('pymatting')
 
 a = Analysis(
     ['backgroundremoval.py'],
     pathex=[],
-    binaries=[],
-    datas=[],
-    hiddenimports=[],
+    binaries=binaries_pymatting,
+    datas=datas_pymatting, 
+    hiddenimports=hiddenimports_pymatting, 
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=['torch'],
+    excludes=['torch','PyQt5'],
     noarchive=False,
     optimize=0,
 )
@@ -21,7 +23,7 @@ splash = Splash(
     datas=a.datas,
     text_pos=(10, 30),
     text_size=12,
-    text_color='white',
+    text_color='black',
     minify_script=True,
     always_on_top=False,
 )
