@@ -137,9 +137,9 @@ class TrimapEditorDialog(QDialog):
         toolbar_layout = QHBoxLayout(toolbar)
         
         self.brush_group = QButtonGroup(self)
-        self.rb_fg = QRadioButton("Definite Foreground"); self.rb_fg.setChecked(True)
-        self.rb_bg = QRadioButton("Definite Background")
-        self.rb_unknown = QRadioButton("Unknown/mixed (e.g. hair, semi transparent areas)")
+        self.rb_fg = QRadioButton("Definite Foreground (White)"); self.rb_fg.setChecked(True)
+        self.rb_bg = QRadioButton("Definite Background (Dark)")
+        self.rb_unknown = QRadioButton("Unknown/mixed (Blue)\ne.g. hair, semi transparent areas")
         self.brush_group.addButton(self.rb_fg, 255)
         self.brush_group.addButton(self.rb_bg, 0)
         self.brush_group.addButton(self.rb_unknown, 128)

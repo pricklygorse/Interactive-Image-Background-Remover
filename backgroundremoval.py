@@ -2858,6 +2858,11 @@ class BackgroundRemoverGUI(QMainWindow):
             bg_erode = self.sl_bg_erode.value()
             trimap_np = generate_trimap_from_mask(self.session.model_output_mask, fg_erode, bg_erode)
             initial_trimap = Image.fromarray(trimap_np)
+        elif self.session.composite_mask:
+            fg_erode = self.sl_fg_erode.value()
+            bg_erode = self.sl_bg_erode.value()
+            trimap_np = generate_trimap_from_mask(self.session.composite_mask, fg_erode, bg_erode)
+            initial_trimap = Image.fromarray(trimap_np)
         else:
             # If there's no mask at all, start with a blank (all background) trimap.
             initial_trimap = Image.new("L", self.session.active_image.size, 0)
