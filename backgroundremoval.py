@@ -2337,6 +2337,7 @@ class BackgroundRemoverGUI(QMainWindow):
             print(f"Error loading blank image: {e}")
 
     def load_clipboard(self):
+        # Try loading image bitmap data
         try:
             self.session = ImageSession("Clipboard").load()
             self.image_paths = ["Clipboard"]
@@ -2352,9 +2353,34 @@ class BackgroundRemoverGUI(QMainWindow):
 
             self.view_input.set_placeholder(None)
             self.view_output.set_placeholder(None)
+            return 
             
-        except ValueError as e:
-            QMessageBox.information(self, "Clipboard Empty", str(e))
+        except ValueError:
+            # Check for local file paths
+            clipboard = QGuiApplication.clipboard()
+            mime_data = clipboard.mimeData()
+            
+            valid_images = []
+            supported_exts = {'.png', '.jpg', '.jpeg', '.webp', '.bmp', '.tif', '.tiff'}
+            
+            if mime_data.hasText():
+                text = mime_data.text()
+
+                for line in text.splitlines():
+                    line = line.strip().replace("'", "").replace('"', "")
+                    if os.path.exists(line) and os.path.isfile(line):
+                        _, ext = os.path.splitext(line)
+                        if ext.lower() in supported_exts:
+                            valid_images.append(line)
+        
+            if valid_images:
+                self.image_paths = valid_images
+                self.current_image_index = 0
+                self.update_thumbnail_strip()
+                self.load_image(self.image_paths[0])
+            else:
+                QMessageBox.information(self, "Clipboard Empty", "No image data or valid image paths found on the clipboard.")
+
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Could not load from clipboard: {e}")
 
