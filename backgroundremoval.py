@@ -1005,7 +1005,8 @@ class BackgroundRemoverGUI(QMainWindow):
         self.combo_sam.setToolTip(lbl_sam.toolTip())
         self.populate_sam_models()
         self.combo_sam.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
-        self.combo_sam.setMinimumContentsLength(1) 
+        self.combo_sam.setMinimumContentsLength(1)
+        self.combo_sam.currentTextChanged.connect(lambda t: self.settings.setValue("last_sam_model", t) if t else None)
         layout.addWidget(self.combo_sam)
 
         # Add vertical space after the SAM elements
@@ -1028,6 +1029,7 @@ class BackgroundRemoverGUI(QMainWindow):
         self.populate_whole_models()
         self.combo_whole.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
         self.combo_whole.setMinimumContentsLength(1)
+        self.combo_whole.currentTextChanged.connect(lambda t: self.settings.setValue("last_auto_model", t) if t else None)
         layout.addWidget(self.combo_whole)
         
         # Run Model Button and layout adjustment
@@ -2172,13 +2174,27 @@ class BackgroundRemoverGUI(QMainWindow):
                 for partial in sam_models:
                     if partial in filename and ".onnx" in filename:
                         matches.append(filename.replace(".encoder.onnx","").replace(".decoder.onnx",""))
+        
+        last_used = self.settings.value("last_sam_model", "")
+        
+        self.combo_sam.blockSignals(True)
         self.combo_sam.clear()
         if matches:
             self.combo_sam.addItems(sorted(list(set(matches))))
-            # Mobile SAM has near instant results even on CPU, so we set as the default if available
-            idx = self.combo_sam.findText("mobile_sam", Qt.MatchFlag.MatchContains)
-            if idx >= 0: self.combo_sam.setCurrentIndex(idx)
+            
+            # Restore last used or default to mobile_sam
+            idx = -1
+            if last_used:
+                idx = self.combo_sam.findText(last_used)
+            
+            if idx >= 0:
+                 self.combo_sam.setCurrentIndex(idx)
+            else:
+                # Mobile SAM has near instant results even on CPU, so we set as the default if available
+                idx = self.combo_sam.findText("mobile_sam", Qt.MatchFlag.MatchContains)
+                if idx >= 0: self.combo_sam.setCurrentIndex(idx)
         else: self.combo_sam.addItem("No Models Found")
+        self.combo_sam.blockSignals(False)
 
     def populate_whole_models(self):
         # should change these to read from the download manager, but this is easiest for me testing variations of new models atm
@@ -2189,9 +2205,20 @@ class BackgroundRemoverGUI(QMainWindow):
                 for partial in whole_models:
                     if partial in filename and ".onnx" in filename:
                         matches.append(filename.replace(".onnx",""))
+        
+        last_used = self.settings.value("last_auto_model", "")
+
+        self.combo_whole.blockSignals(True)
         self.combo_whole.clear()
-        if matches: self.combo_whole.addItems(sorted(list(set(matches))))
+        if matches: 
+            self.combo_whole.addItems(sorted(list(set(matches))))
+            
+            if last_used:
+                idx = self.combo_whole.findText(last_used)
+                if idx >= 0:
+                    self.combo_whole.setCurrentIndex(idx)
         else: self.combo_whole.addItem("No Models Found")
+        self.combo_whole.blockSignals(False)
 
     def populate_matting_models(self):
         # Create a list of combo boxes to populate
