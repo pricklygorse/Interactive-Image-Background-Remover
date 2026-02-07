@@ -814,9 +814,9 @@ class BackgroundRemoverGUI(QMainWindow):
             self.status_label.setText("CROP MODE | Drag to draw crop area | Click 'Apply Crop' to finish")
             self.btn_apply_crop.show()
             self.btn_apply_crop.setEnabled(True)
-            self.chk_paint.setEnabled(False)
-            if self.chk_paint.isChecked():
-                self.chk_paint.setChecked(False)
+            self.act_paint_mode.setEnabled(False)
+            if self.act_paint_mode.isChecked():
+                self.act_paint_mode.setChecked(False)
             
             # Disable SAM interactions visually
             self.combo_sam.setEnabled(False)
@@ -827,7 +827,7 @@ class BackgroundRemoverGUI(QMainWindow):
             self.status_label.setText("Ready")
             self.btn_apply_crop.hide()
             self.btn_apply_crop.setEnabled(False)
-            self.chk_paint.setEnabled(True)
+            self.act_paint_mode.setEnabled(True)
             self.combo_sam.setEnabled(True)
             
             # Hide the rect in the view
