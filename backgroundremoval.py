@@ -39,7 +39,7 @@ from src.ui_dialogs import InpaintingDialog
 from src.trimap_editor import TrimapEditorDialog
 from src.utils import pil2pixmap, numpy_to_pixmap, apply_tone_sharpness, generate_drop_shadow, \
     generate_blurred_background, sanitise_filename_for_windows, get_current_crop_bbox, generate_trimap_from_mask, clean_alpha, generate_alpha_map, \
-    generate_outline, generate_inner_glow, apply_subject_tint, compose_final_image, refine_mask, generate_mask_outline_path, expand_contract_mask
+    generate_outline, generate_inner_glow, apply_subject_tint, compose_final_image, refine_mask, generate_mask_outline_path, expand_contract_mask, guided_filter
 from src.constants import PAINT_BRUSH_SCREEN_SIZE, SOFTEN_RADIUS
 
 try: pyi_splash.update_text("Loading pymatting (Compiles on first run, approx 1-2 minutes)")
@@ -2251,6 +2251,11 @@ class BackgroundRemoverGUI(QMainWindow):
         # Add items to all combos
         for cb in combos:
             cb.addItems(found_models)
+            
+            # Special case for Smart Refine - Add Guided Filter (Fast)
+            if hasattr(self, 'combo_smart_refine_model') and cb == self.combo_smart_refine_model:
+                cb.addItem("Guided Filter (Fast)")
+                
             cb.blockSignals(False)
 
     def setup_keybindings(self):
@@ -3480,6 +3485,11 @@ class BackgroundRemoverGUI(QMainWindow):
 
                 image_patch = self.session.active_image.crop((x1, y1, x2, y2))
                 mask_patch_np = np.array(self.session.composite_mask.crop((x1, y1, x2, y2)))
+
+                if np.max(mask_patch_np) <= 30:
+                    QMessageBox.information(self, "Smart Refine", "No output image to refine. Apply the output of a SAM or Automatic model to generate a starting image to refine.")
+                    return
+
                 local_stroke_np = stroke_mask_np[y1:y2, x1:x2]
 
                 # Initialise an empty trimap with zero for background
@@ -3513,24 +3523,59 @@ class BackgroundRemoverGUI(QMainWindow):
                 self.set_loading(True, f"Smart Refining with {algorithm_name}")
 
                 limit = int(self.settings.value("matting_longest_edge", 1024))
+                gf_radius = self.settings.value("gf_radius", 10, type=int)
+                gf_eps_exp = self.settings.value("gf_epsilon_exponent", 6, type=int)
+                gf_eps = 10**(-gf_eps_exp)
+                
+                # De-halo settings
+                gf_cutoff = self.settings.value("gf_halo_cutoff", 40, type=int)
+                gf_limit = self.settings.value("gf_halo_limit", 255, type=int)
+
                 matting_params = {
                     'image_crop': image_patch,
                     'trimap_np': trimap_np,
+                    'mask': mask_patch_np,
                     'x_off': x1, 'y_off': y1,
                     'algorithm': algorithm_name,
                     'provider_data': self.combo_auto_model_EP.currentData(),
                     'longest_edge_limit': limit,
-                    'local_stroke_np': local_stroke_np # Pass this to the handler
+                    'local_stroke_np': local_stroke_np, # Pass this to the handler
+                    'gf_radius': gf_radius,
+                    'gf_eps': gf_eps,
+                    'gf_cutoff': gf_cutoff / 255.0,
+                    'gf_limit': gf_limit / 255.0
                 }
-
                 def _do_smart_refine_work(model_manager, m_params):
-                    refined_patch = model_manager.run_matting(
-                        m_params['algorithm'], 
-                        m_params['image_crop'], 
-                        m_params['trimap_np'], 
-                        m_params['provider_data'],
-                        m_params['longest_edge_limit']
-                    )
+                    if m_params['algorithm'] == "Guided Filter (Fast)":
+                        guide = np.array(m_params['image_crop']).astype(np.float32) / 255.0
+                        src = m_params['mask'].astype(np.float32) / 255.0
+
+                        alpha = guided_filter(guide, src, radius=m_params['gf_radius'], eps=m_params['gf_eps'])
+                        
+                        # De-halo (Halo Suppression) logic
+                        cutoff = m_params['gf_cutoff']
+                        limit = m_params['gf_limit']
+                        if cutoff > 0:
+                            # Remap values between cutoff and limit to [0, limit]
+                            # Values above limit stay as they are.
+                            if limit > cutoff:
+                                scale = limit / (limit - cutoff)
+                                ramp_mask = (alpha >= cutoff) & (alpha < limit)
+                                alpha[alpha < cutoff] = 0
+                                alpha[ramp_mask] = (alpha[ramp_mask] - cutoff) * scale
+                            else:
+                                # Fallback if limit is invalid (equal or less than cutoff)
+                                alpha[alpha < cutoff] = 0
+
+                        refined_patch = Image.fromarray((alpha * 255).astype(np.uint8), mode="L")
+                    else:
+                        refined_patch = model_manager.run_matting(
+                            m_params['algorithm'], 
+                            m_params['image_crop'], 
+                            m_params['trimap_np'], 
+                            m_params['provider_data'],
+                            m_params['longest_edge_limit']
+                        )
                     return refined_patch, m_params
 
                 self.worker = InferenceWorker(_do_smart_refine_work, self.model_manager, matting_params)

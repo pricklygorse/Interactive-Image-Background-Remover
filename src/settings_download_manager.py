@@ -614,6 +614,122 @@ class SettingsDialog(QDialog):
 
         layout.addWidget(refine_group)
 
+        # Guided Filter Settings
+        gf_group = QFrame()
+        gf_group.setFrameShape(QFrame.Shape.StyledPanel)
+        gf_layout = QVBoxLayout(gf_group)
+        
+        gf_label = QLabel("<b>Guided Filter Settings (Smart Refine):</b>")
+        gf_layout.addWidget(gf_label)
+
+        # GF Radius
+        gfr_layout = QHBoxLayout()
+        gfr_label = QLabel("Radius:")
+        gfr_label.setToolTip("Neighborhood size for the guided filter. Higher values sample a larger area but can cause haloing.")
+        
+        self.gfr_slider = QSlider(Qt.Orientation.Horizontal)
+        self.gfr_slider.setRange(1, 50)
+        self.gfr_slider.setFixedWidth(150)
+        
+        current_gfr = self.settings.value("gf_radius", 10, type=int) if self.settings else 10
+        self.gfr_slider.setValue(current_gfr)
+        
+        gfr_val_label = QLabel(str(current_gfr))
+        gfr_val_label.setFixedWidth(30)
+        
+        self.gfr_slider.valueChanged.connect(lambda v: gfr_val_label.setText(str(v)))
+        self.gfr_slider.valueChanged.connect(
+             lambda v: self.settings.setValue("gf_radius", v) if self.settings else None
+        )
+
+        gfr_layout.addWidget(gfr_label)
+        gfr_layout.addWidget(self.gfr_slider)
+        gfr_layout.addWidget(gfr_val_label)
+        gfr_layout.addStretch()
+        gf_layout.addLayout(gfr_layout)
+
+        # GF Epsilon
+        gfe_layout = QHBoxLayout()
+        gfe_label = QLabel("Epsilon (Regularization):")
+        gfe_label.setToolTip("Regularization parameter. Lower values (e.g. 1e-8) make the filter sharper and more edge-following. Higher values (e.g. 1e-4) are smoother.")
+        
+        self.gfe_slider = QSlider(Qt.Orientation.Horizontal)
+        self.gfe_slider.setRange(4, 8) # representing 1e-4 to 1e-8
+        self.gfe_slider.setFixedWidth(150)
+        
+        current_gfe_exp = self.settings.value("gf_epsilon_exponent", 6, type=int) if self.settings else 6
+        self.gfe_slider.setValue(current_gfe_exp)
+        
+        gfe_val_label = QLabel(f"1e-{current_gfe_exp}")
+        gfe_val_label.setFixedWidth(50)
+        
+        self.gfe_slider.valueChanged.connect(lambda v: gfe_val_label.setText(f"1e-{v}"))
+        self.gfe_slider.valueChanged.connect(
+             lambda v: self.settings.setValue("gf_epsilon_exponent", v) if self.settings else None
+        )
+
+        gfe_layout.addWidget(gfe_label)
+        gfe_layout.addWidget(self.gfe_slider)
+        gfe_layout.addWidget(gfe_val_label)
+        gfe_layout.addStretch()
+        gf_layout.addLayout(gfe_layout)
+
+
+        # GF De-halo (Halo Suppression)
+        # Cutoff
+        gfhc_layout = QHBoxLayout()
+        gfhc_label = QLabel("Halo Suppression Cutoff:")
+        gfhc_label.setToolTip("Any alpha value below this will be set to 0. Useful for removing faint ghosting/halos.")
+        
+        self.gfhc_slider = QSlider(Qt.Orientation.Horizontal)
+        self.gfhc_slider.setRange(0, 150)
+        self.gfhc_slider.setFixedWidth(150)
+        
+        current_gfhc = self.settings.value("gf_halo_cutoff", 40, type=int) if self.settings else 40
+        self.gfhc_slider.setValue(current_gfhc)
+        
+        gfhc_val_label = QLabel(str(current_gfhc))
+        gfhc_val_label.setFixedWidth(30)
+        
+        self.gfhc_slider.valueChanged.connect(lambda v: gfhc_val_label.setText(str(v)))
+        self.gfhc_slider.valueChanged.connect(
+             lambda v: self.settings.setValue("gf_halo_cutoff", v) if self.settings else None
+        )
+
+        gfhc_layout.addWidget(gfhc_label)
+        gfhc_layout.addWidget(self.gfhc_slider)
+        gfhc_layout.addWidget(gfhc_val_label)
+        gfhc_layout.addStretch()
+        gf_layout.addLayout(gfhc_layout)
+
+        # Limit
+        gfhl_layout = QHBoxLayout()
+        gfhl_label = QLabel("Halo Suppression Limit:")
+        gfhl_label.setToolTip("Alpha values between the Cutoff and this Limit will be ramped linearly. Values above this remain untouched.")
+        
+        self.gfhl_slider = QSlider(Qt.Orientation.Horizontal)
+        self.gfhl_slider.setRange(0, 255)
+        self.gfhl_slider.setFixedWidth(150)
+        
+        current_gfhl = self.settings.value("gf_halo_limit", 255, type=int) if self.settings else 255
+        self.gfhl_slider.setValue(current_gfhl)
+        
+        gfhl_val_label = QLabel(str(current_gfhl))
+        gfhl_val_label.setFixedWidth(30)
+        
+        self.gfhl_slider.valueChanged.connect(lambda v: gfhl_val_label.setText(str(v)))
+        self.gfhl_slider.valueChanged.connect(
+             lambda v: self.settings.setValue("gf_halo_limit", v) if self.settings else None
+        )
+
+        gfhl_layout.addWidget(gfhl_label)
+        gfhl_layout.addWidget(self.gfhl_slider)
+        gfhl_layout.addWidget(gfhl_val_label)
+        gfhl_layout.addStretch()
+        gf_layout.addLayout(gfhl_layout)
+
+        layout.addWidget(gf_group)
+
 
 
 
