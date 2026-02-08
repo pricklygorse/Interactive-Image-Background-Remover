@@ -3,7 +3,7 @@ import gc
 import cv2
 import sys
 import numpy as np
-import onnx
+#import onnx
 import onnxruntime as ort
 from PIL import Image
 from timeit import default_timer as timer

@@ -2,13 +2,14 @@
 from PyInstaller.utils.hooks import collect_all 
 
 datas_pymatting, binaries_pymatting, hiddenimports_pymatting = collect_all('pymatting')
+datas_ort, binaries_ort, hidden_ort = collect_all('onnxruntime')
 
 a = Analysis(
     ['backgroundremoval.py'],
     pathex=[],
-    binaries=binaries_pymatting,
-    datas=datas_pymatting, 
-    hiddenimports=hiddenimports_pymatting, 
+    binaries=binaries_pymatting + binaries_ort,
+    datas=datas_pymatting + datas_ort, 
+    hiddenimports=hiddenimports_pymatting + hidden_ort, 
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
@@ -38,7 +39,7 @@ exe = EXE(
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
-    upx=True,
+    upx=False,
     console=False,
     disable_windowed_traceback=False,
     argv_emulation=False,
@@ -52,7 +53,7 @@ coll = COLLECT(
     a.datas,
     splash.binaries,
     strip=False,
-    upx=True,
+    upx=False,
     upx_exclude=[],
     name='Interactive-BG-Remover',
 )
