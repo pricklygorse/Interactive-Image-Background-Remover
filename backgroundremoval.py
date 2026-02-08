@@ -57,11 +57,11 @@ from src.image_session import ImageSession
 
 class InferenceWorker(QThread):
     """Super simple threaded worker that can take functions"""
-    finished = pyqtSignal(object)  # Success result (mask, image, etc.)
+    result_ready = pyqtSignal(object)  # Success result (mask, image, etc.)
     error = pyqtSignal(str)       # Error message
 
-    def __init__(self, task_fn, *args, **kwargs):
-        super().__init__()
+    def __init__(self, parent, task_fn, *args, **kwargs):
+        super().__init__(parent)
         self.task_fn = task_fn
         self.args = args
         self.kwargs = kwargs
@@ -69,7 +69,7 @@ class InferenceWorker(QThread):
     def run(self):
         try:
             result = self.task_fn(*self.args, **self.kwargs)
-            self.finished.emit(result)
+            self.result_ready.emit(result)
         except Exception as e:
             self.error.emit(str(e))
 
@@ -1292,10 +1292,12 @@ class BackgroundRemoverGUI(QMainWindow):
                 )
                 return {"mask": np.array(res_pil), "status": "Viewport Matting Complete", "is_full": False}
 
-        self.worker = InferenceWorker(_do_matting_gen, self.model_manager, model_name, self.session, provider_data, use_tiled)
+        self.worker = InferenceWorker(self, _do_matting_gen, self.model_manager, model_name, self.session, provider_data, use_tiled)
         
         # When tiled, x_off/y_off are 0 because the result is already full-size
-        self.worker.finished.connect(lambda res: self._on_inference_finished(res, 0 if res["is_full"] else vx, 0 if res["is_full"] else vy))
+        self.worker.result_ready.connect(lambda res: self._on_inference_finished(res, 0 if res["is_full"] else vx, 0 if res["is_full"] else vy))
+        self.worker.finished.connect(self.worker.deleteLater)
+        self.worker.finished.connect(lambda: setattr(self, 'worker', None))
         self.worker.error.connect(lambda msg: (self.set_loading(False), QMessageBox.critical(self, "Matting Error", msg)))
         self.worker.start()
 
@@ -2294,7 +2296,8 @@ class BackgroundRemoverGUI(QMainWindow):
                                          min=1, max=100)
             if ok:
                 self.blur_radius = val
-        self.update_output_preview()
+        if self.session:
+            self.update_output_preview()
 
     def load_image(self, path):
         try:
@@ -2636,12 +2639,15 @@ class BackgroundRemoverGUI(QMainWindow):
 
 
         self.worker = InferenceWorker(
+            self,
             _do_sam_work, 
             self.model_manager, model_name, provider_data, 
             crop, valid_coords, valid_labels, current_crop_rect
         )
         
-        self.worker.finished.connect(lambda res: self._on_inference_finished(res, x_off, y_off))
+        self.worker.result_ready.connect(lambda res: self._on_inference_finished(res, x_off, y_off))
+        self.worker.finished.connect(self.worker.deleteLater)
+        self.worker.finished.connect(lambda: setattr(self, 'worker', None))
         self.worker.error.connect(lambda msg: (self.set_loading(False), QMessageBox.critical(self, "SAM Error", msg)))
         self.worker.start()
 
@@ -2702,25 +2708,22 @@ class BackgroundRemoverGUI(QMainWindow):
                 
             return {"mask": mask_arr, "status": status}
 
-        self.worker = InferenceWorker(_do_auto_work, 
+        self.worker = InferenceWorker(self, _do_auto_work, 
                                       self.model_manager, 
                                       model_name, 
                                       provider_data, 
                                       image_to_process, use_2step)
         # Clear overlay to remove any SAM points since we are in auto model mode
         # TODO: clear only sam points, since this means the mask overlay is removed while refinement processes, visually unappealing for quick comparisons
-        self.worker.finished.connect(self.clear_overlay)
-        self.worker.finished.connect(lambda res: self._on_inference_finished(res, x_off, y_off))
-        self.worker.error.connect(lambda msg: (self.set_loading(False), QMessageBox.critical(self, "Error", msg)))
+        self.worker.result_ready.connect(lambda res: (self.clear_overlay(), self._on_inference_finished(res, x_off, y_off)))
+        self.worker.finished.connect(self.worker.deleteLater)
+        self.worker.finished.connect(lambda: setattr(self, 'worker', None))
+        self.worker.error.connect(lambda msg: (self.set_loading(False), QMessageBox.critical(self, "Auto Model Error", msg)))
         self.worker.start()
 
     def _on_inference_finished(self, result, x_off, y_off):
         """Processes model output masks into a overlay, and updates UI"""
         
-        if hasattr(self, 'worker') and self.worker:
-            self.worker.deleteLater()
-            self.worker = None
-
         mask_arr = result["mask"]
         self.status_msg = result["status"]
 
@@ -3104,6 +3107,7 @@ class BackgroundRemoverGUI(QMainWindow):
 
         # Create and start the worker
         self.worker = InferenceWorker(
+            self,
             _do_modify_work,
             self.model_manager, 
             mask_to_process,
@@ -3113,7 +3117,9 @@ class BackgroundRemoverGUI(QMainWindow):
             self.sl_mask_expand.value(),
             matting_params
         )
-        self.worker.finished.connect(lambda result_mask: self._on_modify_mask_finished(result_mask))
+        self.worker.result_ready.connect(lambda result_mask: self._on_modify_mask_finished(result_mask))
+        self.worker.finished.connect(self.worker.deleteLater)
+        self.worker.finished.connect(lambda: setattr(self, 'worker', None))
         self.worker.error.connect(lambda msg: (self.set_loading(False), QMessageBox.critical(self, "Mask Processing Error", msg)))
         self.worker.start()
 
@@ -3122,10 +3128,6 @@ class BackgroundRemoverGUI(QMainWindow):
         ref_timer = int((timer() - self.refine_start_time)*1000)
         # if less than 10ms, likely no refinement was applied. lazy check to avoid adding a modify_mask bypass....
         ref_msg = f"      Refinement: {ref_timer}ms" if ref_timer > 10 else ""
-
-        if hasattr(self, 'worker') and self.worker:
-            self.worker.deleteLater()
-            self.worker = None
 
         # show live preview on output canvas with marching ants
         self.session.model_output_refined = processed_mask
@@ -3578,8 +3580,10 @@ class BackgroundRemoverGUI(QMainWindow):
                         )
                     return refined_patch, m_params
 
-                self.worker = InferenceWorker(_do_smart_refine_work, self.model_manager, matting_params)
-                self.worker.finished.connect(self._on_smart_refine_finished)
+                self.worker = InferenceWorker(self, _do_smart_refine_work, self.model_manager, matting_params)
+                self.worker.result_ready.connect(self._on_smart_refine_finished)
+                self.worker.finished.connect(self.worker.deleteLater)
+                self.worker.finished.connect(lambda: setattr(self, 'worker', None))
                 self.worker.start()
                 return 
 
