@@ -18,15 +18,16 @@ jobs:
     strategy:
       matrix:
         config:
+          # Pin onnxruntime to 1.23 or 1.23.2 for now until pyinstaller plays well with 1.24
           # Linux Builds
-          - { os: ubuntu-latest, provider: "cpu", ort_package: "onnxruntime", name: "linux-cpu" }
-          - { os: ubuntu-latest, provider: "gpu", ort_package: "onnxruntime-gpu", name: "linux-nvidia" }
-          - { os: ubuntu-latest, provider: "openvino", ort_package: "onnxruntime-openvino", name: "linux-intel-openvino" }
+          - { os: ubuntu-latest, provider: "cpu", ort_package: "'onnxruntime<1.24'", name: "linux-cpu" }
+          - { os: ubuntu-latest, provider: "gpu", ort_package: "'onnxruntime-gpu<1.24'", name: "linux-nvidia" }
+          - { os: ubuntu-latest, provider: "openvino", ort_package: "'onnxruntime-openvino<1.24'", name: "linux-intel-openvino" }
           # Windows Builds
-          - { os: windows-latest, provider: "cpu", ort_package: "onnxruntime", name: "windows-cpu" }
-          - { os: windows-latest, provider: "gpu", ort_package: "onnxruntime-gpu", name: "windows-nvidia" }
-          - { os: windows-latest, provider: "directml", ort_package: "onnxruntime-directml", name: "windows-DX12-directml" }
-          #- { os: windows-latest, provider: "openvino", ort_package: "onnxruntime-openvino", name: "windows-openvino" }
+          - { os: windows-latest, provider: "cpu", ort_package: "'onnxruntime<1.24'", name: "windows-cpu" }
+          - { os: windows-latest, provider: "gpu", ort_package: "'onnxruntime-gpu<1.24'", name: "windows-nvidia" }
+          - { os: windows-latest, provider: "directml", ort_package: "'onnxruntime-directml<1.24'", name: "windows-DX12-directml" }
+          - { os: windows-latest, provider: "openvino", ort_package: "onnxruntime-openvino", name: "windows-openvino" }
           # macOS Build
           - { os: macos-latest, provider: "cpu", ort_package: "onnxruntime", name: "macos-cpu" }
 
@@ -43,8 +44,7 @@ jobs:
         shell: bash
         run: |
           python -m pip install --upgrade pip
-          pip install pyinstaller pyqt6 ${{ matrix.config.ort_package }} onnx
-          pip install pillow numpy opencv-python requests pymatting
+          pip install 'pyinstaller==6.17.0' 'pyinstaller-hooks-contrib==2025.10' 'pyqt6==6.10.1' ${{ matrix.config.ort_package }} 'pillow==12.0.0' 'numpy==2.2.6' 'opencv-python==4.12.0.88' 'requests==2.32.5' 'pymatting==1.1.14' 'onnx==1.20.0'
 
       - name: Build executable (Linux/Windows)
         if: runner.os != 'macOS'
