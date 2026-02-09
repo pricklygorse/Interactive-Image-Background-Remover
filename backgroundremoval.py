@@ -3518,9 +3518,10 @@ class BackgroundRemoverGUI(QMainWindow):
                 if hasattr(self, 'combo_smart_refine_model') and self.combo_smart_refine_model.currentText():
                     algorithm_name = self.combo_smart_refine_model.currentText()
                 
-                if "PyMatting" in algorithm_name:
-                    QMessageBox.information(self,"Error","PyMatting is very inconsistent with Smart Refine. Please download VitMatte from the settings")
-                    return
+                # changing to estimate_alpha_sm works more reliably than estimate_alpha_cf
+                # if "PyMatting" in algorithm_name:
+                #     QMessageBox.information(self,"Error","PyMatting is very inconsistent with Smart Refine. Please download VitMatte from the settings")
+                #     return
                 
                 self.set_loading(True, f"Smart Refining with {algorithm_name}")
 

@@ -7,7 +7,7 @@ import onnx
 import onnxruntime as ort
 from PIL import Image
 from timeit import default_timer as timer
-from pymatting import estimate_alpha_cf, estimate_foreground_ml, estimate_foreground_cf
+from pymatting import estimate_alpha_sm, estimate_foreground_ml, estimate_foreground_cf
 
 from .constants import SAM_TRT_WARMUP_POINTS
 
@@ -640,13 +640,13 @@ class ModelManager:
         img_normalised = img_resized / 255.0
         trimap_normalised = tri_resized / 255.0
 
-        alpha = estimate_alpha_cf(img_normalised, trimap_normalised)
+        alpha = estimate_alpha_sm(img_normalised, trimap_normalised)
         alpha = np.clip(alpha * 255, 0, 255).astype(np.uint8)
 
         if alpha.shape[::-1] != original_size:
             alpha = cv2.resize(alpha, original_size, interpolation=cv2.INTER_LINEAR)
             
-        print(f"PyMatting CF | Size: {img_resized.shape[::-1]} | Time: {timer()-s:.1f}s")
+        print(f"PyMatting Shared Matting | Size: {img_resized.shape[::-1]} | Time: {timer()-s:.1f}s")
         return Image.fromarray(alpha, mode="L")
 
     def _run_vitmatte_inference(self, session, img_resized, tri_resized, original_size):
