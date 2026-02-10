@@ -2155,7 +2155,7 @@ class BackgroundRemoverGUI(QMainWindow):
             main_app_instance=self, 
             parent=self
         )
-        dlg.exec()
+        dlg.show()
 
     def update_model_root_dir(self, new_dir):
         """Updates the path in the main application and synchronises the model manager."""
