@@ -2345,6 +2345,7 @@ class BackgroundRemoverGUI(QMainWindow):
             # Special case for Smart Refine - Add Guided Filter (Fast)
             if hasattr(self, 'combo_smart_refine_model') and cb == self.combo_smart_refine_model:
                 cb.addItem("Guided Filter (Fast)")
+                cb.addItem("Simple Sharpen (Fast)")
                 
             cb.blockSignals(False)
 
@@ -3661,6 +3662,11 @@ class BackgroundRemoverGUI(QMainWindow):
                                 alpha[alpha < cutoff] = 0
 
                         refined_patch = Image.fromarray((alpha * 255).astype(np.uint8), mode="L")
+                    elif m_params['algorithm'] == "Simple Sharpen (Fast)":
+                        src_mask = Image.fromarray(m_params['mask'], mode="L")
+                        refined_patch = src_mask.filter(
+                            ImageFilter.UnsharpMask(radius=2, percent=50, threshold=0)
+                        )
                     else:
                         refined_patch = model_manager.run_matting(
                             m_params['algorithm'], 
