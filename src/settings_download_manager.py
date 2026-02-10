@@ -566,26 +566,6 @@ class SettingsDialog(QDialog):
         res_desc.setWordWrap(True)
         refine_layout.addWidget(res_desc)
 
-        # Foreground Estimation Algorithm
-        fg_layout = QHBoxLayout()
-        fg_label = QLabel("FG Colour Correction:")
-        fg_label.setToolTip("Choose the algorithm used to remove background halos from the foreground edges.")
-        self.fg_combo = QComboBox()
-        self.fg_combo.addItem("Multi-Level (Fastest)", "ml")
-        self.fg_combo.addItem("Closed Form (Extremely slow)", "cf")
-        
-        current_fg = self.settings.value("fg_correction_algo", "ml") if self.settings else "ml"
-        idx = self.fg_combo.findData(current_fg)
-        self.fg_combo.setCurrentIndex(idx if idx >= 0 else 0)
-        self.fg_combo.currentIndexChanged.connect(
-            lambda i: self.settings.setValue("fg_correction_algo", self.fg_combo.itemData(i)) if self.settings else None
-        )
-
-        fg_layout.addWidget(fg_label)
-        fg_layout.addWidget(self.fg_combo)
-        fg_layout.addStretch()
-        refine_layout.addLayout(fg_layout)
-
         # Smart Refine Context Padding
         pad_layout = QHBoxLayout()
         pad_label = QLabel("Smart Refine PaintBrush Context Padding (Experimental):")

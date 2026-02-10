@@ -8,6 +8,7 @@ import onnxruntime as ort
 from PIL import Image
 from timeit import default_timer as timer
 from pymatting import estimate_alpha_sm, estimate_foreground_ml, estimate_foreground_cf
+from src.utils import estimate_fg_blur_fusion
 
 from .constants import SAM_TRT_WARMUP_POINTS
 
@@ -689,15 +690,32 @@ class ModelManager:
         # Final resize and trimap constraint
         return Image.fromarray(alpha_final, mode="L")
 
-    def estimate_foreground(self, image_pil, alpha_mask_pil, algorithm='ml'):
+    def estimate_foreground(self, image_pil, alpha_mask_pil, algorithm='ml', radius = 90):
         """Refines foreground colors to remove background halos."""
         img_rgb = np.array(image_pil.convert("RGB")) / 255.0
         alpha = np.array(alpha_mask_pil.convert("L")) / 255.0
         
-        if algorithm == 'cf':
+      
+        if algorithm == 'ml':
+            s=timer()
+            fg_rgb = estimate_foreground_ml(img_rgb, alpha)
+            print("pymatting estimate_foreground_ml",timer()-s)
+
+        elif algorithm == 'blur_fusion_2':
+            fg_rgb = estimate_fg_blur_fusion(img_rgb, alpha, radius=radius, refine_radius=6, downscale=0.5)
+
+        elif algorithm == 'blur_fusion_1':
+            fg_rgb = estimate_fg_blur_fusion(img_rgb, alpha, radius=radius, refine_radius=None, downscale=0.5)
+
+        elif algorithm == 'cf':
             fg_rgb = estimate_foreground_cf(img_rgb, alpha)
         else:
-            fg_rgb = estimate_foreground_ml(img_rgb, alpha)
+            print("Invalid foreground estimation model choice. Check your settings and try again")
+            return None
+
+
+
+
         fg_rgb = np.clip(fg_rgb * 255, 0, 255).astype(np.uint8)
         
         # Return as RGBA PIL image

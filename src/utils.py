@@ -790,3 +790,70 @@ def expand_contract_mask(mask_pil, amount):
         mask_np = cv2.erode(mask_np, kernel, iterations=1)
 
     return Image.fromarray(mask_np)
+
+
+
+
+def estimate_fg_blur_fusion(image, alpha, radius=90, refine_radius=6, downscale=1.0):
+    """
+    Based on Approximate Fast Foreground Colour Estimation - Forte 2021
+    with downscale option for increased performance
+    At 0.5 downscale, matches or beats pymatting compiled version 
+    of fast foreground multilevel with almost no quality loss compared to no downscale
+    """
+    s = timer()
+    
+    if alpha.ndim == 2:
+        alpha = alpha[:, :, None]
+    
+    original_shape = image.shape[:2]
+    
+    if downscale < 1.0:
+        new_height = int(original_shape[0] * downscale)
+        new_width = int(original_shape[1] * downscale)
+        
+        image_scaled = cv2.resize(image, (new_width, new_height), interpolation=cv2.INTER_LINEAR)
+        alpha_scaled = cv2.resize(alpha, (new_width, new_height), interpolation=cv2.INTER_LINEAR)
+        
+        if alpha_scaled.ndim == 2:
+            alpha_scaled = alpha_scaled[:, :, None]
+        
+        initial_radius_scaled = max(1, int(radius * downscale))
+        refinement_radius_scaled = max(1, int(refine_radius * downscale)) if refine_radius else None
+    else:
+        image_scaled = image
+        alpha_scaled = alpha
+        initial_radius_scaled = radius
+        refinement_radius_scaled = refine_radius
+    
+    # Initial correction pass
+    F, blur_B = _blur_fusion_pass(image_scaled, image_scaled, image_scaled, 
+                                    alpha_scaled, initial_radius_scaled)
+    
+    # Refinement pass 
+    if refinement_radius_scaled is not None:
+        F, _ = _blur_fusion_pass(image_scaled, F, blur_B, 
+                                  alpha_scaled, refinement_radius_scaled)
+    
+    if downscale < 1.0:
+        correction = F - image_scaled
+        
+        correction_fullres = cv2.resize(correction, (original_shape[1], original_shape[0]), 
+                                       interpolation=cv2.INTER_LINEAR)
+        
+        F = image + correction_fullres
+        F = np.clip(F, 0, 1)
+    
+    print(f"Blur Fusion radius {radius} refine radius {refine_radius} scale {downscale} time {timer() - s}")
+    return F
+
+
+def _blur_fusion_pass(image, F, B, alpha, r):
+    blurred_alpha = cv2.blur(alpha, (r, r))[:, :, None]
+    blurred_FA = cv2.blur(F * alpha, (r, r))
+    blurred_F = blurred_FA / (blurred_alpha + 1e-5)
+    blurred_B1A = cv2.blur(B * (1 - alpha), (r, r))
+    blurred_B = blurred_B1A / ((1 - blurred_alpha) + 1e-5)
+    F = blurred_F + alpha * (image - alpha * blurred_F - (1 - alpha) * blurred_B)
+    F = np.clip(F, 0, 1)
+    return F, blurred_B

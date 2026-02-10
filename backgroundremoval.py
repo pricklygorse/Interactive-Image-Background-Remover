@@ -613,7 +613,8 @@ class BackgroundRemoverGUI(QMainWindow):
             "clean_alpha": self.chk_clean_alpha.isChecked(),
             "foreground_correction": {
                 "enabled": self.chk_estimate_foreground.isChecked(),
-                "algorithm": self.settings.value("fg_correction_algo", "ml")
+                "algorithm": self.settings.value("fg_correction_algo", "ml"),
+                "radius": int(self.settings.value("fg_correction_radius", 100))
             },
             "tint": {
                 "enabled": self.chk_tint.isChecked(),
@@ -1330,11 +1331,98 @@ class BackgroundRemoverGUI(QMainWindow):
         self.chk_clean_alpha.toggled.connect(self.update_output_preview)
         layout.addWidget(self.chk_clean_alpha)
 
-        self.chk_estimate_foreground = QCheckBox("Foreground Edge \nColour Correction (Slow)")
-        self.chk_estimate_foreground.setToolTip("Recalculates edge colors to remove halos or fringes from the original background.\n"
-                                                "Recommended for soft edges such as hair")
+        self.chk_estimate_foreground = QCheckBox("Background Colour Bleed\n Correction (Recommended, slow)")
+        self.chk_estimate_foreground.setToolTip("Recalculates the colours of the foreground cutout to remove background colours that bleed through semi transparent areas.\n"
+                                                "Recommended for soft edges such as hair when overlaying onto a different coloured background.")
         layout.addWidget(self.chk_estimate_foreground)
+        self.chk_estimate_foreground.setChecked(self.settings.value("estimate_foreground", False, type=bool))    
         self.chk_estimate_foreground.toggled.connect(self.update_output_preview)
+        self.chk_estimate_foreground.toggled.connect(
+            lambda checked: self.settings.setValue("estimate_foreground", checked)
+        )
+        
+
+        self.fg_container = QWidget()
+        fg_main_layout = QVBoxLayout(self.fg_container)
+        fg_main_layout.setSpacing(0)
+        fg_main_layout.setContentsMargins(20, 0, 0, 0)
+
+        # first row: label + combo
+        top_row = QHBoxLayout()
+        #fg_label = QLabel("FG Colour Correction:")
+        self.fg_combo = QComboBox()
+        self.fg_combo.setToolTip("Algorithm used to remove background colour bleed from the foreground image.")
+        self.fg_combo.addItem("Multi-Level", "ml")
+        self.fg_combo.addItem("Blur Fusion", "blur_fusion_2")
+        self.fg_combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContents)
+
+        current_fg = self.settings.value("fg_correction_algo", "ml") if self.settings else "ml"
+        idx = self.fg_combo.findData(current_fg)
+        self.fg_combo.setCurrentIndex(idx if idx >= 0 else 0)
+        def on_fg_algo_changed(index: int):
+            data = self.fg_combo.itemData(index)
+            self.radius_slider.setVisible(data != "ml")
+            if self.settings:
+                self.settings.setValue("fg_correction_algo", data)
+            self.update_output_preview()
+
+        self.fg_combo.currentIndexChanged.connect(on_fg_algo_changed)
+        
+        #top_row.addWidget(fg_label)
+        top_row.addWidget(self.fg_combo)
+        #top_row.addStretch()
+
+        R_MIN = 60
+        R_MAX = 1500
+
+        self.radius_slider = QSlider(Qt.Orientation.Horizontal)
+        self.radius_slider.setRange(0, 100)
+        self.radius_slider.setToolTip("Larger values sample a larger area of possible background colours to remove from the foreground.")
+
+        # load saved radius (natural value)
+        natural_radius = int(self.settings.value("fg_correction_radius", 90)) if self.settings else 90
+
+        def natural_to_slider(r: float) -> int:
+            r = max(R_MIN, min(R_MAX, r))
+            t = (math.log10(r) - math.log10(R_MIN)) / (math.log10(R_MAX) - math.log10(R_MIN))
+            return int(round(t * 100))
+
+        def slider_to_natural(pos: int) -> float:
+            t = pos / 100.0
+            log_r = math.log10(R_MIN) + t * (math.log10(R_MAX) - math.log10(R_MIN))
+            return 10 ** log_r
+
+        # initalise slider from saved radius
+        self.radius_slider.setValue(natural_to_slider(natural_radius))
+
+        self.radius_timer = QTimer(self)
+        self.radius_timer.setSingleShot(True)
+        self.radius_timer.setInterval(50)
+
+        def on_radius_slider_changed(pos: int):
+            r = slider_to_natural(pos)
+            if self.settings:
+                self.settings.setValue("fg_correction_radius", int(round(r)))
+                print(r)
+            self.radius_timer.start()
+
+        self.radius_slider.valueChanged.connect(on_radius_slider_changed)
+        self.radius_timer.timeout.connect(self.update_output_preview)
+
+        top_row.addWidget(self.radius_slider)
+        fg_main_layout.addLayout(top_row)
+        #fg_main_layout.addWidget(self.radius_slider)
+
+        self.fg_container.setVisible(self.chk_estimate_foreground.isChecked())
+        self.radius_slider.setVisible(self.fg_combo.currentData() != "ml")
+        layout.addWidget(self.fg_container)
+
+        self.chk_estimate_foreground.toggled.connect(
+            lambda checked: self.fg_container.setVisible(checked)
+        )
+        
+
+
 
         layout.addSpacing(10)
 
@@ -3189,12 +3277,14 @@ class BackgroundRemoverGUI(QMainWindow):
              try:
                 current_mask_hash = hash(current_mask.tobytes())
                 fg_algo = settings["foreground_correction"]["algorithm"]
-                current_state_key = (current_mask_hash, adj_hash, fg_algo)
+                fg_radius = settings["foreground_correction"]["radius"]
+
+                current_state_key = (current_mask_hash, adj_hash, fg_algo,fg_radius)
 
                 if current_state_key != self.session.composite_mask_hash:
                     self.set_loading(True, f"Estimating foreground colour correction ({fg_algo.upper()})")
                     # We compute it here to cache it on the instance
-                    cached_foreground = self.model_manager.estimate_foreground(self.session.active_image, current_mask, fg_algo)
+                    cached_foreground = self.model_manager.estimate_foreground(self.session.active_image, current_mask, fg_algo, fg_radius)
                     self.set_loading(False)
                     
                     self.session.composite_mask_hash = current_state_key
