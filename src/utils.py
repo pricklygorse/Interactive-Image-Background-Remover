@@ -417,14 +417,55 @@ def generate_trimap_from_mask(mask_pil, fg_erode_size, bg_erode_size):
     return trimap
 
 
-def clean_alpha(mask):
+def clean_alpha(mask, min_area=20):
     """
-    Filters out alpha <5 and > 250
+    Cleans alpha mask by:
+    - Clamping alpha <5 to 0 and >250 to 255
+    - Removing small disconnected foreground islands
+    
+    Parameters:
+        mask: numpy array or PIL Image (grayscale alpha mask)
+        min_area: minimum pixel area to keep a connected component
+    
+    Returns:
+        Same type as input (numpy array or PIL Image)
     """
-    alpha_np = np.array(mask)
+
+    input_is_pil = isinstance(mask, Image.Image)
+
+    if input_is_pil:
+        alpha_np = np.array(mask)
+    elif isinstance(mask, np.ndarray):
+        alpha_np = mask.copy()
+    else:
+        raise TypeError("mask must be a numpy array or PIL Image")
+
+    if alpha_np.dtype != np.uint8:
+        alpha_np = alpha_np.astype(np.uint8)
+
+    # Threshold near-transparent and near-opaque
     alpha_np[alpha_np > 250] = 255
     alpha_np[alpha_np < 5] = 0
-    return Image.fromarray(alpha_np)
+
+    # Binarise for connected component filtering
+    binary = (alpha_np > 0).astype(np.uint8) * 255
+
+    num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(binary, connectivity=8)
+
+    cleaned_binary = np.zeros_like(binary)
+
+    for i in range(1, num_labels):  
+        if stats[i, cv2.CC_STAT_AREA] >= min_area:
+            cleaned_binary[labels == i] = 255
+
+    # Zero out removed regions but preserve original alpha in kept regions
+    alpha_np[cleaned_binary == 0] = 0
+
+    if input_is_pil:
+        return Image.fromarray(alpha_np)
+    return alpha_np
+
+
 
 def generate_alpha_map(mask):
         """
