@@ -562,7 +562,7 @@ class SettingsDialog(QDialog):
         res_layout.addWidget(self.res_combo)
         res_layout.addStretch()
         refine_layout.addLayout(res_layout)
-        res_desc = QLabel("Higher resolutions can result in a higher quality alpha mask, but at the cost of substantially increased processing time.")
+        res_desc = QLabel("Higher resolutions can result in a higher quality alpha mask, but at the cost of substantially increased processing time. 1024px recommended as this matches the output size of most mask generation models, so the quality should not be degraded")
         res_desc.setWordWrap(True)
         refine_layout.addWidget(res_desc)
 
