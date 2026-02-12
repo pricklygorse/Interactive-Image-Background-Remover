@@ -2974,7 +2974,7 @@ class BackgroundRemoverGUI(QMainWindow):
     def add_mask(self): 
         if self.btn_add.isEnabled(): 
             self.add_undo_step()
-            self.img_session.composite_mask = ImageChops.add(self.img_session.composite_mask, self.img_session.model_output_refined)
+            self.img_session.composite_mask = ImageChops.lighter(self.img_session.composite_mask, self.img_session.model_output_refined)
             self.clear_overlay()
             self.update_output_preview()
         
@@ -3176,10 +3176,10 @@ class BackgroundRemoverGUI(QMainWindow):
         # Use model output mask (refined) if available combined with composite mask, otherwise use composite mask
         if self.img_session.model_output_refined:
             # Combine composite with refined preview to show final result
-            current_mask = ImageChops.add(self.img_session.composite_mask, self.img_session.model_output_refined)
+            current_mask = ImageChops.lighter(self.img_session.composite_mask, self.img_session.model_output_refined)
         elif self.img_session.model_output_mask:
             # Combine composite with generated mask to show final result
-            current_mask = ImageChops.add(self.img_session.composite_mask, self.img_session.model_output_mask)
+            current_mask = ImageChops.lighter(self.img_session.composite_mask, self.img_session.model_output_mask)
         else:
             current_mask = self.img_session.composite_mask
 
@@ -3617,7 +3617,7 @@ class BackgroundRemoverGUI(QMainWindow):
                     self.img_session.composite_mask = ImageChops.subtract(self.img_session.composite_mask, stroke_mask)
                 else:
                     # Left Click: Add to composite (Paint from original image)
-                    self.img_session.composite_mask = ImageChops.add(self.img_session.composite_mask, stroke_mask)
+                    self.img_session.composite_mask = ImageChops.lighter(self.img_session.composite_mask, stroke_mask)
                 
                 self.update_output_preview()
             else:
@@ -3626,7 +3626,7 @@ class BackgroundRemoverGUI(QMainWindow):
                 if self.is_erasing:
                     self.img_session.model_output_mask = ImageChops.subtract(self.img_session.model_output_mask, stroke_mask)
                 else:
-                    self.img_session.model_output_mask = ImageChops.add(self.img_session.model_output_mask, stroke_mask)
+                    self.img_session.model_output_mask = ImageChops.lighter(self.img_session.model_output_mask, stroke_mask)
                 self.show_mask_overlay()
             
             self.update_output_preview()
