@@ -607,9 +607,6 @@ class BackgroundRemoverGUI(QMainWindow):
         }
     
     def get_render_settings(self):
-        """
-        Captures all current UI settings related to image composition into a dictionary.
-        """
         return {
             "clean_alpha": self.chk_clean_alpha.isChecked(),
             "foreground_correction": {
@@ -3660,19 +3657,21 @@ class BackgroundRemoverGUI(QMainWindow):
             )
             return
         
-        fmt = self.combo_export_fmt.currentData()
-        quality = self.sl_export_quality.value()
-        save_mask = self.chk_export_mask.isChecked()
-        trim = self.chk_export_trim.isChecked()
+        export_settings = self.get_export_settings()
+        render_settings = self.get_render_settings()
+
+        if quick_save:
+            export_settings.update({"format": "jpeg", "quality": 95, "trim": False})
+            render_settings["background"].update({"type": "white", "color": "white"})
+        
+        fmt = export_settings["format"]
+        quality = export_settings["quality"]
+        save_mask = export_settings["save_mask"]
+        trim = export_settings["trim"]
         
         ext_map = {"png": "png", "webp_lossless": "webp", "webp_lossy": "webp", "jpeg": "jpg"}
         default_ext = ext_map[fmt]
         
-        if quick_save:
-            default_ext= "jpg"
-            quality = 95
-            fmt = "jpeg"
-
         if not clipboard:
             initial_name = os.path.splitext(self.image_paths[self.current_image_index])[0] + "_nobg." + default_ext
             initial_name = sanitise_filename_for_windows(initial_name)
@@ -3685,8 +3684,18 @@ class BackgroundRemoverGUI(QMainWindow):
             if not fname.lower().endswith(f".{default_ext}"): fname += f".{default_ext}"
 
         self.set_loading(True, "Exporting...")
-        # use cached generated image for speed
-        final_image = self.last_render
+
+        if quick_save:
+            # Fresh render to ensure the white background setting is applied
+            final_image = compose_final_image(
+                self.session.active_image,
+                self.session.composite_mask,
+                render_settings,
+                model_manager=self.model_manager
+            )
+        else:
+            # Use cached generated image for speed for normal exports
+            final_image = self.last_render
 
         # Zero out RGB data in transparent areas for export.
         # Do this now instead of in render_output_image to speed up display time
