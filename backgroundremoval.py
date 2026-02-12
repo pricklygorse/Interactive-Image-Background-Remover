@@ -1287,7 +1287,7 @@ class BackgroundRemoverGUI(QMainWindow):
                 image_crop, x_off, y_off = self.get_viewport_crop()
                 trimap_crop = sess.user_trimap.crop((x_off, y_off, x_off + image_crop.width, y_off + image_crop.height))
                 res_pil = model_manager.run_matting(
-                    name, image_crop, np.array(trimap_crop), prov, longest_edge_limit=1024
+                    name, image_crop, np.array(trimap_crop), prov, longest_edge_limit=int(self.settings.value("matting_longest_edge", 1024))
                 )
                 return {"mask": np.array(res_pil), "status": "Viewport Matting Complete", "is_full": False}
 
@@ -1792,6 +1792,8 @@ class BackgroundRemoverGUI(QMainWindow):
 
         # Checkboxes
         self.chk_export_mask = QCheckBox("Save Mask (appends _mask.png)")
+        self.chk_export_mask.setChecked(self.settings.value("export_mask", False, type=bool))
+        self.chk_export_mask.toggled.connect(lambda checked: self.settings.setValue("export_mask", checked))
         layout.addWidget(self.chk_export_mask)
 
         self.chk_export_trim = QCheckBox("Trim Transparent Pixels (Auto-Crop)")
