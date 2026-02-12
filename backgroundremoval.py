@@ -104,7 +104,7 @@ class BackgroundRemoverGUI(QMainWindow):
         self.setWindowTitle("Interactive Image Background Remover")
         self.resize(1600, 900)
 
-        self.session = None # Current active image session
+        self.img_session = None # Current active image session
         
         self.paint_mode = False
         self.crop_mode = False
@@ -786,18 +786,18 @@ class BackgroundRemoverGUI(QMainWindow):
         return {param: slider.value() for param, slider in self.adj_sliders.items()}
 
     def apply_adjustments(self):
-        if not self.session or self.session.source_image_np is None:
+        if not self.img_session or self.img_session.source_image_np is None:
             return
 
         params = self.get_adjustment_params()
         
-        processed_np = apply_tone_sharpness(self.session.source_image_np, params)
+        processed_np = apply_tone_sharpness(self.img_session.source_image_np, params)
 
         # Clear sam encoder, since the results depend on the src image
         self.model_manager.clear_sam_cache(clear_loaded_models=False)
         
         # inefficient, but until I remove all legacy PIL image operations, it is necessary
-        self.session.active_image = Image.fromarray(cv2.cvtColor(processed_np, cv2.COLOR_BGRA2RGBA))
+        self.img_session.active_image = Image.fromarray(cv2.cvtColor(processed_np, cv2.COLOR_BGRA2RGBA))
         
         self.update_input_view(reset_zoom=False)
         
@@ -834,7 +834,7 @@ class BackgroundRemoverGUI(QMainWindow):
                 self.view_input.crop_rect_item.hide()
 
     def apply_crop(self):
-        if not self.crop_mode or not self.session: return
+        if not self.crop_mode or not self.img_session: return
         
         # Get the rect from the view item
         rect_item = self.view_input.crop_rect_item
@@ -851,7 +851,7 @@ class BackgroundRemoverGUI(QMainWindow):
         if w <= 0 or h <= 0: return
         
         # Clamp to image size
-        img_w, img_h = self.session.source_image.size
+        img_w, img_h = self.img_session.source_image.size
         x = max(0, x)
         y = max(0, y)
         w = min(w, img_w - x)
@@ -861,7 +861,7 @@ class BackgroundRemoverGUI(QMainWindow):
 
         # Perform the Crop
         box = (x, y, x+w, y+h)
-        self.session.crop(box)
+        self.img_session.crop(box)
         
         # Generate the new self.original_image
         self.apply_adjustments()
@@ -878,7 +878,7 @@ class BackgroundRemoverGUI(QMainWindow):
         self.status_label.setText(f"Image Cropped to {w}x{h}")
 
     def rotate_image(self, direction):
-        if not self.session or not self.session.source_image:
+        if not self.img_session or not self.img_session.source_image:
             return
 
         QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
@@ -890,7 +890,7 @@ class BackgroundRemoverGUI(QMainWindow):
                 pil_transpose = Image.Transpose.ROTATE_270
                 cv2_code = cv2.ROTATE_90_CLOCKWISE
 
-            self.session.rotate(pil_transpose, cv2_code)
+            self.img_session.rotate(pil_transpose, cv2_code)
 
             # Re-apply adjustments to update self.session.working_orig_image
             self.apply_adjustments()
@@ -904,7 +904,7 @@ class BackgroundRemoverGUI(QMainWindow):
             QApplication.restoreOverrideCursor()
 
     def open_inpainting_dialog(self):
-        if not self.session or self.session.active_image is None:
+        if not self.img_session or self.img_session.active_image is None:
             return
             
         # Check for models
@@ -933,12 +933,12 @@ class BackgroundRemoverGUI(QMainWindow):
         provider_data = self.combo_auto_model_EP.currentData()
         
         # Apply current adjustments to get the image as seen on screen
-        if self.session.source_image_np is not None:
+        if self.img_session.source_image_np is not None:
              params = self.get_adjustment_params()
-             processed_np = apply_tone_sharpness(self.session.source_image_np, params)
+             processed_np = apply_tone_sharpness(self.img_session.source_image_np, params)
              img_to_edit = Image.fromarray(cv2.cvtColor(processed_np, cv2.COLOR_BGRA2RGBA))
         else:
-             img_to_edit = self.session.active_image.copy()
+             img_to_edit = self.img_session.active_image.copy()
 
         dlg = InpaintingDialog(img_to_edit, self.model_manager, provider_data, self)
         
@@ -948,11 +948,11 @@ class BackgroundRemoverGUI(QMainWindow):
             
             if new_image:
                 # Update the Master (raw image) with the inpainted result
-                self.session.active_image = new_image
-                self.session.source_image = new_image
+                self.img_session.active_image = new_image
+                self.img_session.source_image = new_image
                 
-                self.session.source_image_np = np.ascontiguousarray(
-                    cv2.cvtColor(np.array(self.session.active_image), cv2.COLOR_RGBA2BGRA)
+                self.img_session.source_image_np = np.ascontiguousarray(
+                    cv2.cvtColor(np.array(self.img_session.active_image), cv2.COLOR_RGBA2BGRA)
                 )
                 
                 # Since we applied adjustments, reset here
@@ -1235,10 +1235,10 @@ class BackgroundRemoverGUI(QMainWindow):
         TODO: Update status bar with which tile is being processed.
 
         """
-        if not self.session or not self.session.active_image:
+        if not self.img_session or not self.img_session.active_image:
             return
 
-        if not self.session.user_trimap:
+        if not self.img_session.user_trimap:
             ret = QMessageBox.question(self, "No Trimap", 
                 "You haven't drawn a trimap yet. Would you like to open the Trimap Editor?",
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
@@ -1291,7 +1291,7 @@ class BackgroundRemoverGUI(QMainWindow):
                 )
                 return {"mask": np.array(res_pil), "status": "Viewport Matting Complete", "is_full": False}
 
-        self.worker = InferenceWorker(self, _do_matting_gen, self.model_manager, model_name, self.session, provider_data, use_tiled)
+        self.worker = InferenceWorker(self, _do_matting_gen, self.model_manager, model_name, self.img_session, provider_data, use_tiled)
         
         # When tiled, x_off/y_off are 0 because the result is already full-size
         self.worker.result_ready.connect(lambda res: self._on_inference_finished(res, 0 if res["is_full"] else vx, 0 if res["is_full"] else vy))
@@ -1591,7 +1591,7 @@ class BackgroundRemoverGUI(QMainWindow):
     
     def trigger_refinement_update(self):
         """Debounced trigger for updating the live preview mask."""
-        if self.session.model_output_mask and not self.is_busy():
+        if self.img_session.model_output_mask and not self.is_busy():
             self.refinement_timer.start()
 
     def create_export_tab(self):
@@ -1950,9 +1950,9 @@ class BackgroundRemoverGUI(QMainWindow):
 
     def is_mask_modified(self):
         """Checks if the working mask has data or history."""
-        if not self.session: return False
+        if not self.img_session: return False
 
-        return self.session.is_mask_modified()
+        return self.img_session.is_mask_modified()
 
     def check_proceed_if_modified(self):
         """Prompts user if mask is modified. Returns True to proceed."""
@@ -2383,19 +2383,19 @@ class BackgroundRemoverGUI(QMainWindow):
                                          min=1, max=100)
             if ok:
                 self.blur_radius = val
-        if self.session:
+        if self.img_session:
             self.update_output_preview()
 
     def load_image(self, path):
         try:
-            self.session = ImageSession(path).load()
+            self.img_session = ImageSession(path).load()
             
             self.reset_adjustment_sliders()
             self.update_input_view()
             self.update_output_preview()
             # self.clear_overlay()
             
-            self.status_label.setText(f"Loaded: {self.session.filename} [{self.current_image_index + 1}/{len(self.image_paths)}] {'Loaded transparency as global mask' if self.session.inherited_alpha else ''}")
+            self.status_label.setText(f"Loaded: {self.img_session.filename} [{self.current_image_index + 1}/{len(self.image_paths)}] {'Loaded transparency as global mask' if self.img_session.inherited_alpha else ''}")
             self.update_window_title()
 
             self.view_input.set_placeholder(None)
@@ -2409,14 +2409,14 @@ class BackgroundRemoverGUI(QMainWindow):
             QMessageBox.critical(self, "Error", f"Could not load image: {e}")
 
     def load_associated_mask(self, image_path):
-        if not self.session: return
+        if not self.img_session: return
         mask_path = os.path.splitext(image_path)[0] + "_nobg_mask.png"
         if os.path.exists(mask_path):
             try:
                 mask = Image.open(mask_path).convert("L")
-                if mask.size == self.session.size:
+                if mask.size == self.img_session.size:
                     self.add_undo_step()
-                    self.session.composite_mask = mask
+                    self.img_session.composite_mask = mask
                     self.update_output_preview()
                     self.status_label.setText(f"Loaded associated mask: {os.path.basename(mask_path)}")
                 else:
@@ -2429,13 +2429,13 @@ class BackgroundRemoverGUI(QMainWindow):
         Looks for a file named [image_name]_trimap.png and loads it into 
         the custom trimap buffer without enabling alpha matting.
         """
-        if not self.session: return
+        if not self.img_session: return
         trimap_path = os.path.splitext(image_path)[0] + "_trimap.png"
         if os.path.exists(trimap_path):
             try:
                 trimap = Image.open(trimap_path).convert("L")
-                if trimap.size == self.session.size:
-                    self.session.user_trimap = trimap
+                if trimap.size == self.img_session.size:
+                    self.img_session.user_trimap = trimap
                     
                     # Set UI to Custom mode but don't enable alpha matting or display yet
                     # This is so it doesnt get overwritten by automatic trimap editing
@@ -2452,7 +2452,7 @@ class BackgroundRemoverGUI(QMainWindow):
     def load_blank_image(self):
         # For UI consistency, create an "Empty" session.
         try:
-            self.session = ImageSession("None").load()
+            self.img_session = ImageSession("None").load()
             self.update_input_view()
             self.update_output_preview()
         except Exception as e:
@@ -2461,7 +2461,7 @@ class BackgroundRemoverGUI(QMainWindow):
     def load_clipboard(self):
         # Try loading image bitmap data
         try:
-            self.session = ImageSession("Clipboard").load()
+            self.img_session = ImageSession("Clipboard").load()
             self.image_paths = ["Clipboard"]
             
             self.reset_adjustment_sliders()
@@ -2519,9 +2519,9 @@ class BackgroundRemoverGUI(QMainWindow):
         fname, _ = QFileDialog.getOpenFileName(self, "Open Mask", "", "Images (*.png)")
         if fname:
             mask = Image.open(fname).convert("L")
-            if mask.size == self.session.active_image.size:
+            if mask.size == self.img_session.active_image.size:
                 self.add_undo_step()
-                self.session.composite_mask = mask
+                self.img_session.composite_mask = mask
                 self.update_output_preview()
     
     def preload_startup_models(self):
@@ -2555,9 +2555,9 @@ class BackgroundRemoverGUI(QMainWindow):
 
 
     def update_input_view(self, reset_zoom=True):
-        if self.session.active_image:
+        if self.img_session.active_image:
             # 1. Update the Pixmap
-            self.input_pixmap_item.setPixmap(pil2pixmap(self.session.active_image))
+            self.input_pixmap_item.setPixmap(pil2pixmap(self.img_session.active_image))
             rect = self.input_pixmap_item.boundingRect()
             self.view_input.setSceneRect(rect)
 
@@ -2598,14 +2598,14 @@ class BackgroundRemoverGUI(QMainWindow):
     def get_viewport_crop(self):
         vp = self.view_input.viewport().rect()
         sr = self.view_input.mapToScene(vp).boundingRect()
-        ir = QRectF(0, 0, self.session.active_image.width, self.session.active_image.height)
+        ir = QRectF(0, 0, self.img_session.active_image.width, self.img_session.active_image.height)
         cr = sr.intersected(ir)
         x = int(round(cr.x()))
         y = int(round(cr.y()))
         w = int(round(cr.width()))
         h = int(round(cr.height()))
-        if w <= 0 or h <= 0: return self.session.active_image, 0, 0
-        return self.session.active_image.crop((x, y, x + w, y + h)), x, y
+        if w <= 0 or h <= 0: return self.img_session.active_image, 0, 0
+        return self.img_session.active_image.crop((x, y, x + w, y + h)), x, y
 
     
 
@@ -2614,8 +2614,8 @@ class BackgroundRemoverGUI(QMainWindow):
         if self.is_busy():
             return # Interaction blocked during inference
         
-        self.session.sam_coordinates.append([scene_pos.x(), scene_pos.y()])
-        self.session.sam_labels.append(1 if is_positive else 0)
+        self.img_session.sam_coordinates.append([scene_pos.x(), scene_pos.y()])
+        self.img_session.sam_labels.append(1 if is_positive else 0)
         c = Qt.GlobalColor.green if is_positive else Qt.GlobalColor.red
         
         radius = 5  # Base radius (on screen pixels)
@@ -2632,18 +2632,18 @@ class BackgroundRemoverGUI(QMainWindow):
         
         self.view_input.update_point_scales()
 
-        self.run_sam_inference(self.session.sam_coordinates, self.session.sam_labels)
+        self.run_sam_inference(self.img_session.sam_coordinates, self.img_session.sam_labels)
 
     def handle_sam_box(self, rect):
         
         if self.is_busy():
             return # Interaction blocked during inference
     
-        self.session.sam_coordinates = [[rect.left(), rect.top()], [rect.right(), rect.bottom()]]
-        self.session.sam_labels = [2, 3]
-        self.run_sam_inference(self.session.sam_coordinates, self.session.sam_labels)
-        self.session.sam_coordinates = []
-        self.session.sam_labels = []
+        self.img_session.sam_coordinates = [[rect.left(), rect.top()], [rect.right(), rect.bottom()]]
+        self.img_session.sam_labels = [2, 3]
+        self.run_sam_inference(self.img_session.sam_coordinates, self.img_session.sam_labels)
+        self.img_session.sam_coordinates = []
+        self.img_session.sam_labels = []
 
     def _process_sam_points(self, coords, labels):
         """
@@ -2653,7 +2653,7 @@ class BackgroundRemoverGUI(QMainWindow):
         - Translates coordinates to be relative to the crop.
         - Returns crop, offsets, and valid coordinates, or None if no valid points.
         """
-        if not self.session: return None
+        if not self.img_session: return None
         
         crop, x_off, y_off = self.get_viewport_crop()
         if crop.width == 0 or crop.height == 0:
@@ -2679,7 +2679,7 @@ class BackgroundRemoverGUI(QMainWindow):
                     valid_labels.append(label)
 
         if not valid_coords or not valid_labels:
-            self.session.model_output_mask = None
+            self.img_session.model_output_mask = None
             self.overlay_pixmap_item.setPixmap(QPixmap())
             self.status_label.setText("Ready (No points in view)")
             return None
@@ -2746,7 +2746,7 @@ class BackgroundRemoverGUI(QMainWindow):
         """
         is_running = hasattr(self, 'worker') and self.worker is not None and self.worker.isRunning()
         # If no session or no images, we are "busy" in the sense that we can't process anything
-        return is_running or not self.session or not self.image_paths
+        return is_running or not self.img_session or not self.image_paths
 
     def run_automatic_model(self, model_name=None):
         
@@ -2773,7 +2773,7 @@ class BackgroundRemoverGUI(QMainWindow):
         
         if use_2step:
             # use the full size original image first
-            image_to_process = self.session.active_image
+            image_to_process = self.img_session.active_image
             x_off, y_off = 0, 0
         else:
             image_to_process, x_off, y_off = self.get_viewport_crop()
@@ -2818,13 +2818,13 @@ class BackgroundRemoverGUI(QMainWindow):
 
         # unsure if needed
         h, w = mask_arr.shape
-        self.session.last_inference_region = (x_off, y_off, w, h)
-        self.session.last_inference_output = mask_arr
+        self.img_session.last_inference_region = (x_off, y_off, w, h)
+        self.img_session.last_inference_output = mask_arr
 
         # Paste the viewport mask into the correct place
-        self.session.model_output_mask = Image.new("L", self.session.active_image.size, 0)
-        self.session.model_output_mask.paste(Image.fromarray(mask_arr, mode="L"), (x_off, y_off))
-        self.session.model_output_refined = None
+        self.img_session.model_output_mask = Image.new("L", self.img_session.active_image.size, 0)
+        self.img_session.model_output_mask.paste(Image.fromarray(mask_arr, mode="L"), (x_off, y_off))
+        self.img_session.model_output_refined = None
         
         self.update_cached_model_icons()
         
@@ -2841,7 +2841,7 @@ class BackgroundRemoverGUI(QMainWindow):
         mask_only = self.chk_input_mask_only.isChecked()
         
         # Determine which mask to display (use refined if available, otherwise model output)
-        active_mask = self.session.model_output_refined if self.session.model_output_refined else self.session.model_output_mask
+        active_mask = self.img_session.model_output_refined if self.img_session.model_output_refined else self.img_session.model_output_mask
 
         # Input canvas always shows blue overlay (no live preview cutout here anymore)
         self.input_pixmap_item.setOpacity(1.0)
@@ -2855,7 +2855,7 @@ class BackgroundRemoverGUI(QMainWindow):
                 # Show blue overlay on top of original image
                 self.overlay_pixmap_item.setOpacity(0.5)
                 self.input_pixmap_item.show()
-                blue = Image.new("RGB", self.session.active_image.size, (0, 0, 255))
+                blue = Image.new("RGB", self.img_session.active_image.size, (0, 0, 255))
                 overlay = blue.convert("RGBA")
                 overlay.putalpha(active_mask)
                 self.overlay_pixmap_item.setPixmap(pil2pixmap(overlay))
@@ -2868,10 +2868,10 @@ class BackgroundRemoverGUI(QMainWindow):
         self.update_trimap_preview()
 
     def clear_overlay(self):
-        self.session.sam_coordinates = []
-        self.session.sam_labels = []
-        self.session.model_output_mask = None
-        self.session.model_output_refined = None  # Also clear refined preview
+        self.img_session.sam_coordinates = []
+        self.img_session.sam_labels = []
+        self.img_session.model_output_mask = None
+        self.img_session.model_output_refined = None  # Also clear refined preview
         self.overlay_pixmap_item.setPixmap(QPixmap())
         self.trimap_overlay_item.setPixmap(QPixmap())
         
@@ -2883,8 +2883,8 @@ class BackgroundRemoverGUI(QMainWindow):
         self.update_output_preview()  # Update output to remove temporary cutout
 
         # Clear the invisible paint scratchpad
-        if self.session and self.session.paint_image:
-            self.session.paint_image.fill(Qt.GlobalColor.transparent)
+        if self.img_session and self.img_session.paint_image:
+            self.img_session.paint_image.fill(Qt.GlobalColor.transparent)
 
         # Remove points/boxes AND the temporary paint path if it exists
         cursor_item = self.view_input.brush_cursor_item
@@ -2914,7 +2914,7 @@ class BackgroundRemoverGUI(QMainWindow):
         self.input_pixmap_item.show()
 
     def clear_visible_area(self):
-        if not self.session.composite_mask:
+        if not self.img_session.composite_mask:
             return
             
         self.add_undo_step()
@@ -2929,21 +2929,21 @@ class BackgroundRemoverGUI(QMainWindow):
         # Paste directly into the working mask at the viewport offset
         # PIL's paste uses (left, top, right, bottom) or (left, top)
         # Using (x, y) coordinates derived from the floor/ceil logic above
-        self.session.composite_mask.paste(clear_rect, (x, y))
+        self.img_session.composite_mask.paste(clear_rect, (x, y))
         
         self.update_output_preview()
         self.status_label.setText(f"Cleared viewport area: {crop.width}x{crop.height}") 
 
     def add_undo_step(self):
-        if self.session:
-            self.session.add_undo_step()
+        if self.img_session:
+            self.img_session.add_undo_step()
 
     def undo(self):
-        if self.session and self.session.undo():
+        if self.img_session and self.img_session.undo():
             self.update_output_preview()
 
     def redo(self):
-        if self.session and self.session.redo():
+        if self.img_session and self.img_session.redo():
             self.update_output_preview()
 
 
@@ -2951,14 +2951,14 @@ class BackgroundRemoverGUI(QMainWindow):
     def add_mask(self): 
         if self.btn_add.isEnabled(): 
             self.add_undo_step()
-            self.session.composite_mask = ImageChops.add(self.session.composite_mask, self.session.model_output_refined)
+            self.img_session.composite_mask = ImageChops.add(self.img_session.composite_mask, self.img_session.model_output_refined)
             self.clear_overlay()
             self.update_output_preview()
         
     def subtract_mask(self): 
         if self.btn_sub.isEnabled():
             self.add_undo_step()
-            self.session.composite_mask = ImageChops.subtract(self.session.composite_mask, self.session.model_output_refined)
+            self.img_session.composite_mask = ImageChops.subtract(self.img_session.composite_mask, self.img_session.model_output_refined)
             self.clear_overlay()
             self.update_output_preview()
 
@@ -2973,34 +2973,34 @@ class BackgroundRemoverGUI(QMainWindow):
         self.update_trimap_preview()
 
     def open_trimap_editor(self):
-        if not self.session.active_image:
+        if not self.img_session.active_image:
             QMessageBox.warning(self, "No Image", "Please load an image first.")
             return
 
         initial_trimap = None
 
-        if self.session and self.session.user_trimap:
-            initial_trimap = self.session.user_trimap
+        if self.img_session and self.img_session.user_trimap:
+            initial_trimap = self.img_session.user_trimap
         # Otherwise, generate one from the current mask and sliders as a starting point.
-        elif self.session.model_output_mask:
+        elif self.img_session.model_output_mask:
             fg_erode = self.sl_fg_erode.value()
             bg_erode = self.sl_bg_erode.value()
-            trimap_np = generate_trimap_from_mask(self.session.model_output_mask, fg_erode, bg_erode)
+            trimap_np = generate_trimap_from_mask(self.img_session.model_output_mask, fg_erode, bg_erode)
             initial_trimap = Image.fromarray(trimap_np)
-        elif self.session.composite_mask:
+        elif self.img_session.composite_mask:
             fg_erode = self.sl_fg_erode.value()
             bg_erode = self.sl_bg_erode.value()
-            trimap_np = generate_trimap_from_mask(self.session.composite_mask, fg_erode, bg_erode)
+            trimap_np = generate_trimap_from_mask(self.img_session.composite_mask, fg_erode, bg_erode)
             initial_trimap = Image.fromarray(trimap_np)
         else:
             # If there's no mask at all, start with a blank (all background) trimap.
-            initial_trimap = Image.new("L", self.session.active_image.size, 0)
+            initial_trimap = Image.new("L", self.img_session.active_image.size, 0)
 
-        dialog = TrimapEditorDialog(self.session.active_image, initial_trimap, self)
+        dialog = TrimapEditorDialog(self.img_session.active_image, initial_trimap, self)
         if dialog.exec():
             # If the user clicked OK, store the result
-            self.session.user_trimap = dialog.final_trimap
-            self.session.last_trimap = np.array(self.session.user_trimap) 
+            self.img_session.user_trimap = dialog.final_trimap
+            self.img_session.last_trimap = np.array(self.img_session.user_trimap) 
             
             self.rb_trimap_custom.setChecked(True)
             
@@ -3037,7 +3037,7 @@ class BackgroundRemoverGUI(QMainWindow):
     #@line_profiler.profile
     def update_trimap_preview(self):
         """Generates and displays the correct trimap based on the selected source."""
-        if not self.session.model_output_mask or not self.chk_alpha_matting.isChecked() or not self.chk_show_trimap.isChecked():
+        if not self.img_session.model_output_mask or not self.chk_alpha_matting.isChecked() or not self.chk_show_trimap.isChecked():
             self.trimap_overlay_item.setPixmap(QPixmap())
             self.view_input.hide_legend()
             return
@@ -3047,11 +3047,11 @@ class BackgroundRemoverGUI(QMainWindow):
         if self.rb_trimap_auto.isChecked():
             fg_erode = self.sl_fg_erode.value()
             bg_erode = self.sl_bg_erode.value()
-            trimap_np = generate_trimap_from_mask(expand_contract_mask(self.session.model_output_mask,self.sl_mask_expand.value()),
+            trimap_np = generate_trimap_from_mask(expand_contract_mask(self.img_session.model_output_mask,self.sl_mask_expand.value()),
                                                    fg_erode, bg_erode)
         
-        elif self.rb_trimap_custom.isChecked() and self.session and self.session.user_trimap:
-            trimap_np = np.array(self.session.user_trimap)
+        elif self.rb_trimap_custom.isChecked() and self.img_session and self.img_session.user_trimap:
+            trimap_np = np.array(self.img_session.user_trimap)
 
         if trimap_np is not None:
             # Use a look up table for speed
@@ -3083,15 +3083,15 @@ class BackgroundRemoverGUI(QMainWindow):
         Apply modifiers to the mask outputted by the models. Entire pipeline is threaded
         """
         
-        if not self.session.model_output_mask: return
+        if not self.img_session.model_output_mask: return
         if self.is_busy(): return # Prevent multiple threads
 
         refine_settings = self.get_generation_settings()
 
         user_trimap_np = None
         if self.chk_alpha_matting.isChecked() and self.rb_trimap_custom.isChecked():
-            if self.session.user_trimap:
-                user_trimap_np = np.array(self.session.user_trimap)
+            if self.img_session.user_trimap:
+                user_trimap_np = np.array(self.img_session.user_trimap)
 
 
 
@@ -3104,8 +3104,8 @@ class BackgroundRemoverGUI(QMainWindow):
         self.worker = InferenceWorker(
             self,
             refine_mask,
-            self.session.model_output_mask,
-            self.session.active_image,
+            self.img_session.model_output_mask,
+            self.img_session.active_image,
             refine_settings,
             self.model_manager, 
             user_trimap_np,
@@ -3123,7 +3123,7 @@ class BackgroundRemoverGUI(QMainWindow):
         ref_msg = f"      Refinement: {ref_timer}ms" if ref_timer > 10 else ""
 
         # show live preview on output canvas with marching ants
-        self.session.model_output_refined = processed_mask
+        self.img_session.model_output_refined = processed_mask
 
 
         self.show_mask_overlay()
@@ -3135,7 +3135,7 @@ class BackgroundRemoverGUI(QMainWindow):
     
     def update_commit_button_states(self):
         """Enable add/subtract buttons only when a selection is active."""
-        has_selection = self.session.model_output_mask is not None or self.session.model_output_refined is not None
+        has_selection = self.img_session.model_output_mask is not None or self.img_session.model_output_refined is not None
         self.btn_add.setEnabled(has_selection)
         self.btn_sub.setEnabled(has_selection)
     
@@ -3148,81 +3148,72 @@ class BackgroundRemoverGUI(QMainWindow):
     
 
     #@profile
-    def render_output_image(self, shadow_downscale=0.125):
-        if not self.session.active_image: return
+    def render_output_preview(self, shadow_downscale=0.125):
+        if not self.img_session.active_image: return
 
-        # Get Settings
-        settings = self.get_render_settings()
+        # Use model output mask (refined) if available combined with composite mask, otherwise use composite mask
+        if self.img_session.model_output_refined:
+            # Combine composite with refined preview to show final result
+            current_mask = ImageChops.add(self.img_session.composite_mask, self.img_session.model_output_refined)
+        elif self.img_session.model_output_mask:
+            # Combine composite with generated mask to show final result
+            current_mask = ImageChops.add(self.img_session.composite_mask, self.img_session.model_output_mask)
+        else:
+            current_mask = self.img_session.composite_mask
+
+        render_settings = self.get_render_settings()
         
         # Inject downscale for GUI performance (not in base settings as batch might want full quality)
-        settings['shadow']['downscale'] = shadow_downscale
-
-        # Use temporary preview mask if available, otherwise use composite mask
-        # When showing temporary preview, combine it with the existing composite to show what the final result would be
-        # Priority: model_output_refined (live preview) > model_output_mask (generated mask) > composite_mask (committed)
-        if self.session.model_output_refined:
-            # Combine composite with refined preview to show final result
-            current_mask = ImageChops.add(self.session.composite_mask, self.session.model_output_refined)
-        elif self.session.model_output_mask:
-            # Combine composite with generated mask to show final result
-            current_mask = ImageChops.add(self.session.composite_mask, self.session.model_output_mask)
-        else:
-            current_mask = self.session.composite_mask
-        if settings["clean_alpha"]:
+        render_settings['shadow']['downscale'] = shadow_downscale
+        
+        if render_settings["clean_alpha"]:
             current_mask = clean_alpha(current_mask)
 
         # Handle Caching Logic for Foreground Estimation
-        cached_foreground = None
+        foreground_layer = None
         
         # Check if we need to update the cached cutout
         adj_params = self.get_adjustment_params()
-        adj_hash = hash(frozenset(adj_params.items()))
         
-        if settings["foreground_correction"]["enabled"]:
-             try:
-                current_mask_hash = hash(current_mask.tobytes())
-                fg_algo = settings["foreground_correction"]["algorithm"]
-                fg_radius = settings["foreground_correction"]["radius"]
+        if render_settings["foreground_correction"]["enabled"]:
+            current_state_hash = (hash(current_mask.tobytes()), adj_params, render_settings['foreground_correction'])
 
-                current_state_key = (current_mask_hash, adj_hash, fg_algo,fg_radius)
-
-                if current_state_key != self.session.composite_mask_hash:
-                    self.set_loading(True, f"Estimating foreground colour correction ({fg_algo.upper()})")
-                    # We compute it here to cache it on the instance
-                    cached_foreground = self.model_manager.estimate_foreground(self.session.active_image, current_mask, fg_algo, fg_radius)
-                    self.set_loading(False)
-                    
-                    self.session.composite_mask_hash = current_state_key
-                    self.session.cached_fg_corrected = cached_foreground
-                else:
-                    cached_foreground = self.session.cached_fg_corrected
-             except Exception as e:
-                print(f"Error during foreground estimation: {e}")
+            if current_state_hash != self.img_session.composite_mask_hash:
+                self.set_loading(True, f"Estimating foreground colour correction ({render_settings["foreground_correction"]["algorithm"]})")
+                # We compute it here to cache it on the instance
+                foreground_layer = self.model_manager.estimate_foreground(self.img_session.active_image, 
+                                                                            current_mask, 
+                                                                            render_settings["foreground_correction"]["algorithm"], 
+                                                                            render_settings["foreground_correction"]["radius"])
+                self.set_loading(False)
+                
+                self.img_session.composite_mask_hash = current_state_hash
+                self.img_session.cached_fg_corrected = foreground_layer
+            else:
+                foreground_layer = self.img_session.cached_fg_corrected
 
         # Handle Caching Logic for Blurred Background
         cached_blurred_bg = None
-        if "Blur" in settings["background"]["type"]:
-             mask_hash = hash(current_mask.tobytes())
-             rad = settings["background"]["blur_radius"]
-             current_params = (mask_hash, adj_hash, rad)
-             
-             if current_params == self.session.last_blur_params and self.session.cached_blurred_bg is not None:
-                 cached_blurred_bg = self.session.cached_blurred_bg
+        if "Blur" in render_settings["background"]["type"]:
+             current_blur_hash = (hash(current_mask.tobytes()), adj_params, render_settings["background"])
+
+             if current_blur_hash == self.img_session.last_blur_params and self.img_session.cached_blurred_bg is not None:
+                 cached_blurred_bg = self.img_session.cached_blurred_bg
              else:
                  self.set_loading(True, "Blurring Background")
-                 cached_blurred_bg = generate_blurred_background(self.session.active_image, current_mask, rad)
+                 cached_blurred_bg = generate_blurred_background(self.img_session.active_image, current_mask,  render_settings["background"]["blur_radius"])
                  self.set_loading(False)
                  
-                 self.session.cached_blurred_bg = cached_blurred_bg
-                 self.session.last_blur_params = current_params
+                 self.img_session.cached_blurred_bg = cached_blurred_bg
+                 self.img_session.last_blur_params = current_blur_hash
 
 
         final = compose_final_image(
-            self.session.active_image,
+            self.img_session.active_image,
             current_mask,  # Use the temporary mask if available
-            settings, 
+            render_settings, 
             model_manager=self.model_manager,
-            cached_foreground=cached_foreground,
+            cached_foreground=foreground_layer,
             precomputed_bg=cached_blurred_bg
         )
         
@@ -3235,7 +3226,7 @@ class BackgroundRemoverGUI(QMainWindow):
         
         if self.chk_show_mask.isChecked(): 
             
-            mask = self.session.composite_mask
+            mask = self.img_session.composite_mask
             if self.chk_clean_alpha.isChecked():
                 mask = clean_alpha(mask)
 
@@ -3245,14 +3236,14 @@ class BackgroundRemoverGUI(QMainWindow):
                 final = mask.convert("RGBA")
         
         else:
-            final = self.render_output_image()
+            final = self.render_output_preview()
         
         self.output_pixmap_item.setPixmap(pil2pixmap(final))
         self.view_output.setSceneRect(self.view_input.sceneRect())
 
         # Show marching ants around temporary preview mask if a model output exists
         # Use refined mask if available (from live preview), otherwise use model_output_mask
-        preview_mask = self.session.model_output_refined if self.session.model_output_refined else self.session.model_output_mask
+        preview_mask = self.img_session.model_output_refined if self.img_session.model_output_refined else self.img_session.model_output_mask
         
         if preview_mask and not self.chk_show_mask.isChecked():
             path = generate_mask_outline_path(preview_mask)
@@ -3267,7 +3258,7 @@ class BackgroundRemoverGUI(QMainWindow):
 
         # Update the Auto-Trim visual overlay
         if self.chk_export_trim.isChecked() and not self.chk_show_mask.isChecked():
-            bbox = get_current_crop_bbox(self.session.composite_mask, self.chk_shadow.isChecked(),
+            bbox = get_current_crop_bbox(self.img_session.composite_mask, self.chk_shadow.isChecked(),
                                          self.sl_s_x.value(),
                                          self.sl_s_y.value(),
                                          self.sl_s_r.value())
@@ -3305,22 +3296,22 @@ class BackgroundRemoverGUI(QMainWindow):
         self.clear_overlay()
 
         # Clear Trimap and reset UI
-        self.session.last_trimap = None
-        if self.session and self.session.user_trimap:
-            del self.session.user_trimap
+        self.img_session.last_trimap = None
+        if self.img_session and self.img_session.user_trimap:
+            del self.img_session.user_trimap
         self.rb_trimap_auto.setChecked(True)
 
         self.add_undo_step()
-        self.session.composite_mask = Image.new("L", self.session.active_image.size, 0)
+        self.img_session.composite_mask = Image.new("L", self.img_session.active_image.size, 0)
         self.update_output_preview()
         
     def reset_working_image(self):
-        if self.session:
-            self.session.reset_composite_mask()
+        if self.img_session:
+            self.img_session.reset_composite_mask()
             self.update_output_preview()
         
     def copy_input_to_output(self):
-        if self.session and self.session.copy_input_to_output():
+        if self.img_session and self.img_session.copy_input_to_output():
             self.update_output_preview()
 
     def toggle_paint_mode(self, enabled):
@@ -3444,9 +3435,9 @@ class BackgroundRemoverGUI(QMainWindow):
         QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
         try:
             # Setup the scratchpad QImage for the current stroke
-            self.session.paint_image.fill(Qt.GlobalColor.transparent)
+            self.img_session.paint_image.fill(Qt.GlobalColor.transparent)
             
-            painter = QPainter(self.session.paint_image)
+            painter = QPainter(self.img_session.paint_image)
             painter.setRenderHint(QPainter.RenderHint.Antialiasing, False)
             
             # Draw the recorded path onto the scratchpad
@@ -3458,9 +3449,9 @@ class BackgroundRemoverGUI(QMainWindow):
             painter.end()
             
             # Convert Scratchpad to PIL Mask (Fast Buffer Access)
-            ptr = self.session.paint_image.constBits()
-            ptr.setsize(self.session.paint_image.sizeInBytes())
-            h, w = self.session.paint_image.height(), self.session.paint_image.width()
+            ptr = self.img_session.paint_image.constBits()
+            ptr.setsize(self.img_session.paint_image.sizeInBytes())
+            h, w = self.img_session.paint_image.height(), self.img_session.paint_image.width()
             
             # Create NumPy view and extract mask channel
             arr = np.array(ptr, copy=False).reshape(h, w, 4)
@@ -3480,8 +3471,8 @@ class BackgroundRemoverGUI(QMainWindow):
                 x1, y1 = max(0, x1), max(0, y1)
                 x2, y2 = min(w, x2), min(h, y2)
 
-                image_patch = self.session.active_image.crop((x1, y1, x2, y2))
-                mask_patch_np = np.array(self.session.composite_mask.crop((x1, y1, x2, y2)))
+                image_patch = self.img_session.active_image.crop((x1, y1, x2, y2))
+                mask_patch_np = np.array(self.img_session.composite_mask.crop((x1, y1, x2, y2)))
 
                 if np.max(mask_patch_np) <= 30:
                     QMessageBox.information(self, "Smart Refine", "No output image to refine. Apply the output of a SAM or Automatic model to generate a starting image to refine.")
@@ -3601,19 +3592,19 @@ class BackgroundRemoverGUI(QMainWindow):
                 self.add_undo_step()
                 if self.is_erasing:
                     # Right Click: Remove from composite
-                    self.session.composite_mask = ImageChops.subtract(self.session.composite_mask, stroke_mask)
+                    self.img_session.composite_mask = ImageChops.subtract(self.img_session.composite_mask, stroke_mask)
                 else:
                     # Left Click: Add to composite (Paint from original image)
-                    self.session.composite_mask = ImageChops.add(self.session.composite_mask, stroke_mask)
+                    self.img_session.composite_mask = ImageChops.add(self.img_session.composite_mask, stroke_mask)
                 
                 self.update_output_preview()
             else:
                 # Legacy behaviour: Edit the model output mask (blue overlay)
                 # This requires user to click 'Add' or 'Subtract' to commit to composite
                 if self.is_erasing:
-                    self.session.model_output_mask = ImageChops.subtract(self.session.model_output_mask, stroke_mask)
+                    self.img_session.model_output_mask = ImageChops.subtract(self.img_session.model_output_mask, stroke_mask)
                 else:
-                    self.session.model_output_mask = ImageChops.add(self.session.model_output_mask, stroke_mask)
+                    self.img_session.model_output_mask = ImageChops.add(self.img_session.model_output_mask, stroke_mask)
                 self.show_mask_overlay()
             
             self.update_output_preview()
@@ -3638,7 +3629,7 @@ class BackgroundRemoverGUI(QMainWindow):
 
         self.add_undo_step()
         
-        self.session.composite_mask.paste(refined_alpha, (x, y), mask=stencil)
+        self.img_session.composite_mask.paste(refined_alpha, (x, y), mask=stencil)
         
         self.set_loading(False, "Smart Refine applied to stroke.")
         self.update_output_preview()
@@ -3647,7 +3638,7 @@ class BackgroundRemoverGUI(QMainWindow):
         if not self.image_paths: return
         
         # Check for uncommitted temporary selections
-        if self.session.model_output_mask or self.session.model_output_refined:
+        if self.img_session.model_output_mask or self.img_session.model_output_refined:
             QMessageBox.information(
                 self, 
                 "Uncommitted Temporary Selection", 
@@ -3688,8 +3679,8 @@ class BackgroundRemoverGUI(QMainWindow):
         if quick_save:
             # Fresh render to ensure the white background setting is applied
             final_image = compose_final_image(
-                self.session.active_image,
-                self.session.composite_mask,
+                self.img_session.active_image,
+                self.img_session.composite_mask,
                 render_settings,
                 model_manager=self.model_manager
             )
@@ -3707,7 +3698,7 @@ class BackgroundRemoverGUI(QMainWindow):
 
         # If trimming is enabled, calculate the crop box and apply it.
         if trim:
-            bbox = get_current_crop_bbox(self.session.composite_mask, self.chk_shadow.isChecked(), self.sl_s_x.value(), self.sl_s_y.value(), self.sl_s_r.value())
+            bbox = get_current_crop_bbox(self.img_session.composite_mask, self.chk_shadow.isChecked(), self.sl_s_x.value(), self.sl_s_y.value(), self.sl_s_r.value())
             if bbox:
                 final_image = final_image.crop(bbox)
 
@@ -3725,7 +3716,7 @@ class BackgroundRemoverGUI(QMainWindow):
             final_image = background
         
         save_params = {}
-        if self.session.image_exif: save_params['exif'] = self.session.image_exif
+        if self.img_session.image_exif: save_params['exif'] = self.img_session.image_exif
         if fmt == "jpeg": save_params['quality'] = quality
         elif fmt == "webp_lossy": save_params['quality'] = quality
         elif fmt == "webp_lossless": save_params['lossless'] = True
@@ -3739,7 +3730,7 @@ class BackgroundRemoverGUI(QMainWindow):
             
         if save_mask:
             mname = os.path.splitext(fname)[0] + "_mask.png"
-            mask = self.session.composite_mask
+            mask = self.img_session.composite_mask
             if self.chk_clean_alpha.isChecked():
                 mask = clean_alpha(mask)
             mask.save(mname)
