@@ -602,7 +602,8 @@ class BackgroundRemoverGUI(QMainWindow):
             },
             "soften": self.chk_soften.isChecked(),
             "soften_radius": 1.5, # Could be made configurable
-            "binarise": self.chk_binarise_mask.isChecked()
+            "binarise": self.chk_binarise_mask.isChecked(),
+            "expand_amount": self.sl_mask_expand.value(),
         }
     
     def get_render_settings(self):
@@ -1470,11 +1471,11 @@ class BackgroundRemoverGUI(QMainWindow):
         indent_layout.addSpacing(20)
 
 
-        matt_tt = "Runs a second pass with a matting model to estimate the transparency of mask edges.\n" + "This can improve the quality of detailed edges such as hair, especially when using binary mask models like SAM.\n" + "This requires a trimap (a foreground, unknown, background mask), either estimated from a SAM or automatic models, or manually drawn.\n" + "Alpha matting is computationally expensive and is only applied when 'Add' or 'Subtract' is clicked. Undo if the effect is unsatisfactory"
-        lbl_alpha = QLabel("<b>SMART REFINE (Alpha Matting)</b>")
+        matt_tt = "Runs a second pass with a matting model to estimate the transparency of mask edges.\n" + "This can improve the quality of detailed edges such as hair, especially when using binary mask models like SAM.\n" + "This requires a trimap (a foreground, unknown, background mask), either estimated from a SAM or automatic models, or manually drawn.\n" + "Alpha matting is computationally expensive"
+        lbl_alpha = QLabel("<b>SMART REFINE</b>")
         lbl_alpha.setToolTip(matt_tt)
         indent_layout.addWidget(lbl_alpha)
-        lbl_alpha_desc = QLabel("Runs the model output through a specialised model to refine difficult areas like hair and fur. ViTMatte is recommended")
+        lbl_alpha_desc = QLabel("Runs the model output through a specialist model to refine difficult areas like hair and fur. ViTMatte is recommended")
         lbl_alpha_desc.setWordWrap(True)
         lbl_alpha_desc.setToolTip(matt_tt)
         indent_layout.addWidget(lbl_alpha_desc)
@@ -1503,7 +1504,7 @@ class BackgroundRemoverGUI(QMainWindow):
 
         indent_layout.addLayout(ma_layout)
 
-        self.chk_alpha_matting = QCheckBox("Enable Alpha Matting")
+        self.chk_alpha_matting = QCheckBox("Enable Smart Refine")
         self.chk_alpha_matting.setToolTip(matt_tt)
         self.chk_alpha_matting.toggled.connect(self.handle_alpha_matting_toggle)
         self.chk_alpha_matting.toggled.connect(self.trigger_refinement_update) 
@@ -1527,7 +1528,7 @@ class BackgroundRemoverGUI(QMainWindow):
         am_layout.addWidget(lbl_tri_src)
         self.trimap_mode_group = QButtonGroup(self)
         self.rb_trimap_auto = QRadioButton("Automatic\n(expand fg/bg edge)")
-        self.rb_trimap_auto.setToolTip("Expands the border between the foreground and background to create a unknown region for the model to calculate the mask.")
+        self.rb_trimap_auto.setToolTip("Expands the border between the foreground and background to create region for the model to refine the mask.")
         self.rb_trimap_custom = QRadioButton("Custom (user-drawn)")
         
         self.trimap_mode_group.addButton(self.rb_trimap_auto)
@@ -1559,11 +1560,11 @@ class BackgroundRemoverGUI(QMainWindow):
             h_layout.addWidget(slider)
             return label, slider, h_layout
 
-        self.lbl_fg_erode, self.sl_fg_erode, fg_layout = make_am_slider_row("FG Shrink", 0, 100, 15)
+        self.lbl_fg_erode, self.sl_fg_erode, fg_layout = make_am_slider_row("FG Shrink", 0, 200, 30)
         self.sl_fg_erode.setToolTip("Shrinks the solid foreground area to create the 'unknown' region.")
         sliders_layout.addLayout(fg_layout)
 
-        self.lbl_bg_erode, self.sl_bg_erode, bg_layout = make_am_slider_row("BG Shrink", 0, 100, 15)
+        self.lbl_bg_erode, self.sl_bg_erode, bg_layout = make_am_slider_row("BG Shrink", 0, 200, 30)
         self.sl_bg_erode.setToolTip("Shrinks the solid background area to create the 'unknown' region.")
         sliders_layout.addLayout(bg_layout)
 
@@ -2814,7 +2815,14 @@ class BackgroundRemoverGUI(QMainWindow):
         """Processes model output masks into a overlay, and updates UI"""
         
         mask_arr = result["mask"]
+        # remove alpha <5, remove islands
+        mask_arr = clean_alpha(mask_arr)
         self.status_msg = result["status"]
+
+        # unsure if needed
+        h, w = mask_arr.shape
+        self.session.last_inference_region = (x_off, y_off, w, h)
+        self.session.last_inference_output = mask_arr
 
         # Paste the viewport mask into the correct place
         self.session.model_output_mask = Image.new("L", self.session.active_image.size, 0)
@@ -3042,7 +3050,8 @@ class BackgroundRemoverGUI(QMainWindow):
         if self.rb_trimap_auto.isChecked():
             fg_erode = self.sl_fg_erode.value()
             bg_erode = self.sl_bg_erode.value()
-            trimap_np = generate_trimap_from_mask(self.session.model_output_mask, fg_erode, bg_erode)
+            trimap_np = generate_trimap_from_mask(expand_contract_mask(self.session.model_output_mask,self.sl_mask_expand.value()),
+                                                   fg_erode, bg_erode)
         
         elif self.rb_trimap_custom.isChecked() and self.session and self.session.user_trimap:
             trimap_np = np.array(self.session.user_trimap)
@@ -3080,131 +3089,29 @@ class BackgroundRemoverGUI(QMainWindow):
         if not self.session.model_output_mask: return
         if self.is_busy(): return # Prevent multiple threads
 
+        refine_settings = self.get_generation_settings()
 
-        # Capture state for the worker thread 
-        mask_to_process = self.session.model_output_mask.copy()
-        apply_matting = self.chk_alpha_matting.isChecked()
+        user_trimap_np = None
+        if self.chk_alpha_matting.isChecked() and self.rb_trimap_custom.isChecked():
+            if self.session.user_trimap:
+                user_trimap_np = np.array(self.session.user_trimap)
 
-        msg = " Alpha matting can take a while" if apply_matting else ""
+
+
+
+        msg = " Alpha matting can take a while" if self.chk_alpha_matting.isChecked() else ""
         self.set_loading(True, "Refining mask..." + msg)
         
         self.refine_start_time = timer()
 
-        matting_params = {}
-        if apply_matting:
-            try:
-                # Unsure if the normal logic of cropping the image to the viewport is as relevant when matting models
-                # are resolution agnostic. But for performance on my machine, and consistency with automatic models,
-                # will keep matting to the viewport
-                viewport_crop, x_off, y_off = self.get_viewport_crop()
-                trimap_np = None
-
-                # Get the correct trimap based on UI selection
-                custom_trimap = None
-                if self.rb_trimap_custom.isChecked() and self.session and self.session.user_trimap:
-                    # If a custom trimap exists and is selected, use it.
-                    custom_trimap = self.session.user_trimap.crop((x_off, y_off, x_off + viewport_crop.width, y_off + viewport_crop.height))
-                # else: 
-                #     # Fallback to the automatic generation method
-                #     mask_crop = mask_to_process.crop((x_off, y_off, x_off + image_crop.width, y_off + image_crop.height))
-                #     fg_erode = self.sl_fg_erode.value()
-                #     bg_erode = self.sl_bg_erode.value()
-                #     trimap_np = generate_trimap_from_mask(mask_crop, fg_erode, bg_erode)
-                
-                matting_params = {
-                    'viewport_crop': viewport_crop,
-                    'trimap_np': trimap_np,
-                    'x_off': x_off, 'y_off': y_off,
-                    'algorithm': self.combo_matting_algorithm.currentText(),
-                    # For now use the provider we have selected in automatic models combobox
-                    # Unsure if worth giving user the option to select EP, since VitMatte is essentially a automatic model
-                    'provider_data': self.combo_auto_model_EP.currentData(),
-                    'longest_edge_limit': int(self.settings.value("matting_longest_edge", 1024)),
-                    'fg_erode': self.sl_fg_erode.value(),
-                    'bg_erode': self.sl_bg_erode.value(),
-                    'custom_trimap': custom_trimap
-                }
-            except Exception as e:
-                QMessageBox.critical(self, "Alpha Matting Prep Error", str(e))
-                self.set_loading(False)
-                return
-
-        def _do_modify_work(model_manager, base_mask, matting_enabled, soften_enabled, binary_enabled, expand_amount, m_params):
-            processed_mask = base_mask
-
-            if expand_amount != 0:
-                processed_mask = expand_contract_mask(processed_mask, expand_amount)
-
-            if matting_enabled and m_params:
-                
-                if m_params['custom_trimap']:
-                    trimap_np = np.array(m_params['custom_trimap'])
-                else:
-                    # Generate trimap from the mask crop
-                    x, y = m_params['x_off'], m_params['y_off']
-                    w, h = m_params['viewport_crop'].size
-                    mask_crop = base_mask.crop((x, y, x + w, y + h))
-                    
-                    trimap_np = generate_trimap_from_mask(mask_crop, m_params['fg_erode'], m_params['bg_erode'])
-                
-                # Construct settings for the crop matting step
-                mat_settings = {
-                    "matting": {
-                        "enabled": True,
-                        "algorithm": m_params['algorithm'],
-                        "provider_data": m_params['provider_data'],
-                        "longest_edge_limit": m_params['longest_edge_limit']
-                    }
-                }
-                
-                # Extract mask crop to match the image crop
-                x, y = m_params['x_off'], m_params['y_off']
-                w, h = m_params['viewport_crop'].size
-                mask_crop = processed_mask.crop((x, y, x + w, y + h))
-                
-                # Run Refine Mask on the crop (using passed trimap)
-                matted_alpha_crop = refine_mask(
-                    mask_crop, 
-                    m_params['viewport_crop'], 
-                    mat_settings, 
-                    model_manager, 
-                    trimap_np=trimap_np
-                )
-
-                if matted_alpha_crop:
-                    # Create a new mask to avoid modifying the original in the thread
-                    new_m = processed_mask.copy()
-                    # Create a black patch to clear the area under the new matted crop
-                    paste_area = Image.new("L", matted_alpha_crop.size, 0)
-                    new_m.paste(paste_area, (x, y))
-                    # Paste the new matted result
-                    new_m.paste(matted_alpha_crop, (x, y))
-                    processed_mask = new_m
-
-            # Apply Global Effects (Soften / Binarise)
-            global_settings = {
-                "soften": soften_enabled,
-                "soften_radius": SOFTEN_RADIUS,
-                "binarise": binary_enabled
-            }
-            
-            # Since matting is already done (or disabled), we don't need to pass image/model_manager here
-            # Should probably split into two functions instead of using different parts of one a second time...
-            processed_mask = refine_mask(processed_mask, None, global_settings, None)
-            
-            return processed_mask
-
-        # Create and start the worker
         self.worker = InferenceWorker(
             self,
-            _do_modify_work,
+            refine_mask,
+            self.session.model_output_mask,
+            self.session.active_image,
+            refine_settings,
             self.model_manager, 
-            mask_to_process,
-            apply_matting, 
-            self.chk_soften.isChecked(), 
-            self.chk_binarise_mask.isChecked(), 
-            self.sl_mask_expand.value(),
-            matting_params
+            user_trimap_np,
         )
         self.worker.result_ready.connect(lambda result_mask: self._on_modify_mask_finished(result_mask))
         self.worker.finished.connect(self.worker.deleteLater)

@@ -747,29 +747,56 @@ def refine_mask(base_mask, image, settings, model_manager, trimap_np=None):
     """
     processed_mask = base_mask
 
+    expand_amount = settings.get("expand_amount", 0) 
+    if expand_amount != 0:
+        processed_mask = expand_contract_mask(processed_mask, expand_amount)
+
+
     # Alpha Matting
     matting_settings = settings.get("matting", {})
     if matting_settings.get("enabled", False) and model_manager:
-        # Prepare params
+
+        algo = matting_settings.get("algorithm", "pymatting")
         limit = matting_settings.get("longest_edge_limit", 1024)
-        fg_erode = matting_settings.get("fg_erode", 15)
-        bg_erode = matting_settings.get("bg_erode", 15)
-        algo = matting_settings.get("algorithm", "vitmatte")
         provider = matting_settings.get("provider_data", None)
 
-        # Generate Trimap (Batch mode always uses auto trimap for now)
-        if trimap_np is None:
-            trimap_np = generate_trimap_from_mask(processed_mask, fg_erode, bg_erode)
-        
-        matted_alpha = model_manager.run_matting(
-            algo,
-            image,
-            trimap_np,
-            provider,
-            longest_edge_limit=limit
-        )
-        if matted_alpha:
-            processed_mask = matted_alpha
+        # When a mask generation model is run, we paste the output onto a blank full sized image
+        # It seems wasteful then cropping again to get back to that mask, but doing it this way allows
+        # the user to optionally expand the mask, so the bbox now is for the optionally expanded mask. 
+        bbox = processed_mask.getbbox()
+
+        if bbox:
+            # Add padding for model context
+            padding = 20
+            x1, y1, x2, y2 = bbox
+            crop_x = max(0, x1 - padding)
+            crop_y = max(0, y1 - padding)
+            crop_x2 = min(image.width, x2 + padding)
+            crop_y2 = min(image.height, y2 + padding)
+
+            crop_rect = (crop_x, crop_y, crop_x2, crop_y2)
+            
+            image_crop = image.crop(crop_rect)
+            
+            if trimap_np is None:
+                # Automatic trimap generation
+                mask_crop = processed_mask.crop(crop_rect)
+                fg_erode = matting_settings.get("fg_erode", 15)
+                bg_erode = matting_settings.get("bg_erode", 15)
+                current_trimap_np = generate_trimap_from_mask(mask_crop, fg_erode, bg_erode)
+            else:
+                # Use provided trimap (custom user-drawn)
+                current_trimap_np = trimap_np[crop_y:crop_y2, crop_x:crop_x2]
+
+            matted_alpha_crop = model_manager.run_matting(
+                algo, image_crop, current_trimap_np, provider, longest_edge_limit=limit
+            )
+
+            if matted_alpha_crop:
+                # Re-insert the refined patch into a full-sized mask
+                new_m = Image.new("L", base_mask.size, 0)
+                new_m.paste(matted_alpha_crop, (crop_x, crop_y))
+                processed_mask = new_m
 
     # Soften
     if settings.get("soften", False):
@@ -777,10 +804,11 @@ def refine_mask(base_mask, image, settings, model_manager, trimap_np=None):
 
     # Binarise
     if settings.get("binarise", False):
-        arr = np.array(processed_mask) > 128
-        kernel = np.ones((3,3), np.uint8)
-        arr = cv2.erode(cv2.dilate(arr.astype(np.uint8), kernel, iterations=1), kernel, iterations=1).astype(bool)
-        processed_mask = Image.fromarray((arr*255).astype(np.uint8))
+        arr = np.array(processed_mask)
+        _, binary = cv2.threshold(arr, 127, 255, cv2.THRESH_BINARY)
+        kernel = np.ones((3, 3), np.uint8)
+        binary = cv2.morphologyEx(binary, cv2.MORPH_OPEN, kernel)
+        processed_mask = Image.fromarray(binary)
         
     return processed_mask
 
