@@ -2332,6 +2332,11 @@ class BackgroundRemoverGUI(QMainWindow):
         if os.path.exists(os.path.join(self.model_root_dir, "indexnet.onnx")):
             found_models.append("indexnet")
         
+        # experimental, included for my testing for now, not part of the model downloader
+        # requires a different processing pipeline, accepts alpha not a trimap
+        if os.path.exists(os.path.join(self.model_root_dir, "withoutbg_focus_1.onnx")):
+            found_models.append("withoutbg_focus_1")
+
         # PyMatting is always an option, and often the worst option
         # but i'm importing anyway for estimate_foreground_ml, may as well offer estimate_alpha_cf here
         found_models.append("PyMatting (CPU)")
@@ -3590,7 +3595,8 @@ class BackgroundRemoverGUI(QMainWindow):
                             m_params['image_crop'], 
                             m_params['trimap_np'], 
                             m_params['provider_data'],
-                            m_params['longest_edge_limit']
+                            m_params['longest_edge_limit'],
+                            alpha = Image.fromarray(m_params['mask'])
                         )
                     return refined_patch, m_params
 
@@ -3598,6 +3604,7 @@ class BackgroundRemoverGUI(QMainWindow):
                 self.worker.result_ready.connect(self._on_smart_refine_finished)
                 self.worker.finished.connect(self.worker.deleteLater)
                 self.worker.finished.connect(lambda: setattr(self, 'worker', None))
+                self.worker.error.connect(lambda msg: (self.set_loading(False), QMessageBox.critical(self, "Matting Error", msg)))
                 self.worker.start()
                 return 
 

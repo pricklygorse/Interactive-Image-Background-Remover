@@ -594,7 +594,7 @@ class ModelManager:
             self.loaded_matting_models[cache_key] = session
         return session
     
-    def run_matting(self, algorithm_name, image_pil, trimap_np, provider_data, longest_edge_limit=1024, allow_upscaling=False):
+    def run_matting(self, algorithm_name, image_pil, trimap_np, provider_data, longest_edge_limit=1024, allow_upscaling=False, alpha=None):
 
         orig_w, orig_h = image_pil.size
         
@@ -621,14 +621,23 @@ class ModelManager:
         
         img_resized = np.array(image_pil.convert("RGB").resize(target_size, Image.BILINEAR))
         tri_resized = cv2.resize(trimap_np, target_size, interpolation=cv2.INTER_NEAREST)
+        if alpha:
+            alpha_resized = alpha.resize(target_size, Image.BILINEAR)
+        
 
         name_lower = algorithm_name.lower()
         if "vitmatte" in name_lower:
             session = self.get_matting_session(algorithm_name, provider_data)
             return self._run_vitmatte_inference(session, img_resized, tri_resized, image_pil.size)
+        
         elif "indexnet" in name_lower:
             session = self.get_matting_session(algorithm_name, provider_data)
             return self._run_indexnet_inference(session, img_resized, tri_resized, image_pil.size)
+        
+        elif "withoutbg_focus_1" in name_lower:
+            session = self.get_matting_session(algorithm_name, provider_data)
+            return self._run_withoutbg(session, img_resized, alpha_resized, image_pil.size)
+        
         else:
             return self._run_pymatting(img_resized, tri_resized, image_pil.size)
 
@@ -689,6 +698,49 @@ class ModelManager:
         alpha_final = np.clip(alpha_resized * 255, 0, 255).astype(np.uint8)
         # Final resize and trimap constraint
         return Image.fromarray(alpha_final, mode="L")
+
+    def _run_withoutbg(self, refiner_session, img, alpha_mask_pil, original_size):
+        # included for testing, but not included in model downloader currently
+        # requires a tweak to UI ideally as it takes alpha, not a trimap
+
+        # Scale to [0, 1]
+        rgb_array = img / 255.0
+
+        alpha_array = np.array(alpha_mask_pil, dtype=np.float32) / 255.0
+
+        # Ensure alpha is single channel
+        if len(alpha_array.shape) == 3:
+            alpha_array = alpha_array[:, :, 0]
+
+        # Concatenate RGB + alpha to create 4-channel input
+        rgba_array = np.concatenate(
+            [
+                rgb_array,
+                np.expand_dims(alpha_array, axis=2),
+            ],
+            axis=2,
+        )
+
+        # Prepare for model: transpose to CHW format and add batch dimension
+        input_tensor = np.transpose(rgba_array, (2, 0, 1))
+        input_tensor = np.expand_dims(input_tensor, axis=0)
+        input_tensor = np.ascontiguousarray(input_tensor, dtype=np.float32)
+       
+        input_name = refiner_session.get_inputs()[0].name
+        ort_inputs = {input_name: input_tensor}
+        ort_outs = refiner_session.run(None, ort_inputs)
+        alpha_output = ort_outs[0]
+
+        alpha_output = alpha_output.squeeze(0)
+        if len(alpha_output.shape) == 3:
+            alpha_output = alpha_output[0]
+
+        # Normalize to 0-255 range
+        alpha_output = np.clip(alpha_output * 255.0, 0, 255).astype(np.uint8)
+
+        refined_alpha = Image.fromarray(alpha_output, mode="L")
+
+        return refined_alpha.resize(original_size, Image.BILINEAR)
 
     def estimate_foreground(self, image_pil, alpha_mask_pil, algorithm='ml', radius = 90):
         """Refines foreground colors to remove background halos."""

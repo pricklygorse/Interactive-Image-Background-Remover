@@ -777,6 +777,8 @@ def refine_mask(base_mask, image, settings, model_manager, trimap_np=None):
             crop_rect = (crop_x, crop_y, crop_x2, crop_y2)
             
             image_crop = image.crop(crop_rect)
+
+            alpha_crop = base_mask.crop(crop_rect)
             
             if trimap_np is None:
                 # Automatic trimap generation
@@ -789,7 +791,7 @@ def refine_mask(base_mask, image, settings, model_manager, trimap_np=None):
                 current_trimap_np = trimap_np[crop_y:crop_y2, crop_x:crop_x2]
 
             matted_alpha_crop = model_manager.run_matting(
-                algo, image_crop, current_trimap_np, provider, longest_edge_limit=limit
+                algo, image_crop, current_trimap_np, provider, longest_edge_limit=limit, alpha = alpha_crop
             )
 
             if matted_alpha_crop:
