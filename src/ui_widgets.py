@@ -11,6 +11,7 @@ from PyQt6.QtGui import (QPixmap, QImage, QColor, QPainter, QPainterPath, QPen, 
                          QKeySequence, QShortcut, QCursor, QIcon, QPalette)
 
 import os
+import PIL.Image as Image
 
 
 from src.constants import DEFAULT_ZOOM_FACTOR, PAINT_BRUSH_SCREEN_SIZE, MIN_SAM_BOX_SIZE
@@ -713,17 +714,26 @@ class ThumbnailList(QListWidget):
             icon = self.style().standardIcon(QStyle.StandardPixmap.SP_FileIcon)
             item = QListWidgetItem(icon, "Clipboard")
         else:
-            # Generate a fast thumbnail using QPixmap
-            pixmap = QPixmap(file_path)
-            if not pixmap.isNull():
-                thumb = pixmap.scaled(70, 70, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
-                
-                b_name = os.path.basename(file_path)
-                if len(b_name) > 16:
-                    b_name = f"{b_name[:7]}...{b_name[-7:]}"
+            try:
+                with Image.open(file_path) as pil_img:
+                    pil_img.thumbnail((70, 70), Image.Resampling.LANCZOS)
+                    
+                    if pil_img.mode != "RGBA":
+                        pil_img = pil_img.convert("RGBA")
+                    
+                    data = pil_img.tobytes("raw", "RGBA")
+                    qim = QImage(data, pil_img.size[0], pil_img.size[1], 
+                                 pil_img.size[0] * 4, QImage.Format.Format_RGBA8888)
+                    
+                    pixmap = QPixmap.fromImage(qim)
+                    
+                    b_name = os.path.basename(file_path)
+                    if len(b_name) > 16:
+                        b_name = f"{b_name[:7]}...{b_name[-7:]}"
 
-                item = QListWidgetItem(QIcon(thumb), b_name)
-            else:
+                    item = QListWidgetItem(QIcon(pixmap), b_name)
+            except Exception as e:
+                print(f"Thumbnail Error for {file_path}: {e}")
                 return
         
         item.setData(Qt.ItemDataRole.UserRole, file_path)
