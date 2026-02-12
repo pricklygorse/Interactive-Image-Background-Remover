@@ -87,7 +87,7 @@ class ImageSession:
             
         self.model_output_mask = None
         self.model_output_refined = None
-        self.undo_history = [self.composite_mask.copy()]
+        self.undo_history = [self._get_current_state()]
         self.redo_history = []
         self.sam_coordinates = []
         self.sam_labels = []
@@ -114,31 +114,67 @@ class ImageSession:
                 return alpha
         return None
 
+    def _get_current_state(self):
+        """Return a deep copy of the full mask state."""
+        return (
+            self.composite_mask.copy() if self.composite_mask is not None else None,
+            self.model_output_mask.copy() if self.model_output_mask is not None else None,
+            self.model_output_refined.copy() if self.model_output_refined is not None else None,
+            list(self.sam_coordinates),
+            list(self.sam_labels)
+        )
+
+
+    def _restore_state(self, state):
+        """Restore a previously saved mask state."""
+        (
+            self.composite_mask,
+            self.model_output_mask,
+            self.model_output_refined,
+            self.sam_coordinates,
+            self.sam_labels,
+        ) = state
+
+
     def add_undo_step(self):
         """Caches the current mask state onto the undo history stack."""
-        if self.composite_mask:
-            self.undo_history.append(self.composite_mask.copy())
-            if len(self.undo_history) > UNDO_STEPS:
-                self.undo_history.pop(0)
-            self.redo_history.clear()
+        state = self._get_current_state()
+        self.undo_history.append(state)
+
+        if len(self.undo_history) > UNDO_STEPS:
+            self.undo_history.pop(0)
+
+        self.redo_history.clear()
+
 
     def undo(self):
         """Reverts the mask to the previous state in history."""
-        if len(self.undo_history) > 0:
-            self.redo_history.append(self.composite_mask.copy())
-            self.composite_mask = self.undo_history.pop()
-            return True
-        return False
+        if not self.undo_history:
+            return False
+
+        self.redo_history.append(self._get_current_state())
+
+        previous_state = self.undo_history.pop()
+        self._restore_state(previous_state)
+
+        return True
+
 
     def redo(self):
         """Restores the next mask state from the redo history stack."""
-        if len(self.redo_history) > 0:
-            self.undo_history.append(self.composite_mask.copy())
-            if len(self.undo_history) > UNDO_STEPS:
-                self.undo_history.pop(0)
-            self.composite_mask = self.redo_history.pop()
-            return True
-        return False
+        if not self.redo_history:
+            return False
+
+        self.undo_history.append(self._get_current_state())
+
+        if len(self.undo_history) > UNDO_STEPS:
+            self.undo_history.pop(0)
+
+        next_state = self.redo_history.pop()
+        self._restore_state(next_state)
+
+        return True
+
 
     def is_mask_modified(self):
         """Checks if the working mask has data or history."""
@@ -189,7 +225,7 @@ class ImageSession:
         self.size = self.source_image.size
         # Clear state that is no longer valid for the new orientation
         # undo could probably be implemented
-        self.undo_history = [self.composite_mask.copy()]
+        self.undo_history = [self._get_current_state()]
         self.redo_history = []
         self.sam_coordinates = []
         self.sam_labels = []
@@ -220,7 +256,7 @@ class ImageSession:
 
         # Since dimensions changed, old undo history is invalid
         # Possibly could be implemented properly
-        self.undo_history = [self.composite_mask.copy()]
+        self.undo_history = [self._get_current_state()]
         self.redo_history = []
         self.sam_coordinates = []
         self.sam_labels = []

@@ -2614,23 +2614,12 @@ class BackgroundRemoverGUI(QMainWindow):
         if self.is_busy():
             return # Interaction blocked during inference
         
+        self.add_undo_step()
         self.img_session.sam_coordinates.append([scene_pos.x(), scene_pos.y()])
         self.img_session.sam_labels.append(1 if is_positive else 0)
-        c = Qt.GlobalColor.green if is_positive else Qt.GlobalColor.red
-        
-        radius = 5  # Base radius (on screen pixels)
-        dot = QGraphicsEllipseItem(-radius, -radius, radius * 2, radius * 2)
-        
-        dot.setPos(scene_pos)
 
-        dot.setPen(QPen(c))
-        dot.setBrush(QBrush(c))
-        
-        dot.setData(0, "sam_point")
-        
-        self.scene_input.addItem(dot)
-        
-        self.view_input.update_point_scales()
+
+        self.draw_sam_dot(scene_pos, is_positive)
 
         self.run_sam_inference(self.img_session.sam_coordinates, self.img_session.sam_labels)
 
@@ -2639,6 +2628,8 @@ class BackgroundRemoverGUI(QMainWindow):
         if self.is_busy():
             return # Interaction blocked during inference
     
+        self.add_undo_step()
+
         self.img_session.sam_coordinates = [[rect.left(), rect.top()], [rect.right(), rect.bottom()]]
         self.img_session.sam_labels = [2, 3]
         self.run_sam_inference(self.img_session.sam_coordinates, self.img_session.sam_labels)
@@ -2752,6 +2743,8 @@ class BackgroundRemoverGUI(QMainWindow):
         
         if self.is_busy():
             return # Prevent multiple threads
+        
+        self.add_undo_step()
         
         # Check if run from a hotkey (u,i,o,b) or get name from model list
         if not model_name: 
@@ -2939,14 +2932,44 @@ class BackgroundRemoverGUI(QMainWindow):
             self.img_session.add_undo_step()
 
     def undo(self):
-        if self.img_session and self.img_session.undo():
-            self.update_output_preview()
+        if self.img_session and len(self.img_session.undo_history) > 1:
+            if self.img_session.undo():
+                self._refresh_after_history_change()
 
     def redo(self):
         if self.img_session and self.img_session.redo():
-            self.update_output_preview()
+            self._refresh_after_history_change()
 
+    def _refresh_after_history_change(self):
+        self.clear_sam_points_from_ui() 
+        
+        # Redraw dots
+        for i, pos_list in enumerate(self.img_session.sam_coordinates):
+            label = self.img_session.sam_labels[i]
+            if label in [0, 1]: # Points
+                pos = QPointF(pos_list[0], pos_list[1])
+                self.draw_sam_dot(pos, is_positive=(label == 1))
 
+        self.update_output_preview()
+        self.show_mask_overlay()
+        self.update_commit_button_states()
+
+    def clear_sam_points_from_ui(self):
+        """Removes only the SAM point/box items from the scene."""
+        for item in self.scene_input.items():
+            if item.data(0) == "sam_point":
+                self.scene_input.removeItem(item)
+
+    def draw_sam_dot(self, scene_pos, is_positive):
+        c = Qt.GlobalColor.green if is_positive else Qt.GlobalColor.red
+        radius = 5
+        dot = QGraphicsEllipseItem(-radius, -radius, radius * 2, radius * 2)
+        dot.setPos(scene_pos)
+        dot.setPen(QPen(c))
+        dot.setBrush(QBrush(c))
+        dot.setData(0, "sam_point")
+        self.scene_input.addItem(dot)
+        self.view_input.update_point_scales()
 
     def add_mask(self): 
         if self.btn_add.isEnabled(): 
@@ -3124,7 +3147,6 @@ class BackgroundRemoverGUI(QMainWindow):
 
         # show live preview on output canvas with marching ants
         self.img_session.model_output_refined = processed_mask
-
 
         self.show_mask_overlay()
         self.update_output_preview()  # Show temporary cutout on output canvas
