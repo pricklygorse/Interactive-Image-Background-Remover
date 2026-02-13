@@ -14,10 +14,10 @@ class ExportTab(QScrollArea):
         self.controller = controller
         self.setWidgetResizable(True)
 
-        self.shadow_timer = QTimer()
-        self.shadow_timer.setSingleShot(True)
-        self.shadow_timer.setInterval(50)  # Wait 50ms after last movement
-        self.shadow_timer.timeout.connect(self.controller.update_output_preview)
+        self.effect_slider_timer = QTimer()
+        self.effect_slider_timer.setSingleShot(True)
+        self.effect_slider_timer.setInterval(50)
+        self.effect_slider_timer.timeout.connect(self.controller.update_output_preview)
 
         self.outline_color = QColor(0, 0, 0)
         self.inner_glow_color = QColor(255, 255, 255)
@@ -42,18 +42,16 @@ class ExportTab(QScrollArea):
         self.combo_bg_color.addItems(["Transparent", "White", "Black", "Red", "Blue", 
                   "Orange", "Yellow", "Green", "Grey", 
                   "Lightgrey", "Brown", "Blurred (Slow)", "Original Image"])
-        self.combo_bg_color.currentTextChanged.connect(self.controller.handle_bg_change)
+        self.combo_bg_color.currentTextChanged.connect(self.toggle_blur_options)
+        self.combo_bg_color.currentTextChanged.connect(self.controller.update_output_preview)
         bg_layout.addWidget(self.combo_bg_color)
         layout.addLayout(bg_layout)
 
-
-        self.chk_shadow = QCheckBox("Drop Shadow")
-        self.chk_shadow.toggled.connect(self.toggle_shadow_options)
-        layout.addWidget(self.chk_shadow)
-
-        self.shadow_frame = QFrame()
-        sf_layout = QVBoxLayout(self.shadow_frame)
-        sf_layout.setContentsMargins(0,0,0,0)
+        # Blur Options Frame
+        self.blur_frame = QFrame()
+        self.blur_frame.hide()
+        blur_layout = QVBoxLayout(self.blur_frame)
+        blur_layout.setContentsMargins(0, 0, 0, 0)
         
         def make_slider_row(lbl_text, min_v, max_v, def_v):
             h_layout = QHBoxLayout()
@@ -67,17 +65,32 @@ class ExportTab(QScrollArea):
             s.setValue(def_v)
             s.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
             
-            s.valueChanged.connect(lambda v: (l.setText(f"{lbl_text}: {v}"), self.shadow_timer.start()))
+            s.valueChanged.connect(lambda v: (l.setText(f"{lbl_text}: {v}"), self.effect_slider_timer.start()))
             
             h_layout.addWidget(l)
             h_layout.addWidget(s)
             
             return l, s, h_layout
 
-        self.lbl_s_op, self.sl_s_op, h_op_layout = make_slider_row("Opacity", 0, 255, 128)
-        self.lbl_s_x, self.sl_s_x, h_x_layout = make_slider_row("X Offset", -100, 100, 30)
-        self.lbl_s_y, self.sl_s_y, h_y_layout = make_slider_row("Y Offset", -100, 100, 30)
-        self.lbl_s_r, self.sl_s_r, h_r_layout = make_slider_row("Blur Rad", 1, 200, 10)
+        self.lbl_blur_rad, self.sl_blur_rad, h_blur_layout = make_slider_row("Blur Radius", 10, 200, 30)
+        blur_layout.addLayout(h_blur_layout)
+        layout.addWidget(self.blur_frame)
+
+
+        self.chk_shadow = QCheckBox("Drop Shadow")
+        self.chk_shadow.toggled.connect(self.toggle_shadow_options)
+        layout.addWidget(self.chk_shadow)
+
+        self.shadow_frame = QFrame()
+        sf_layout = QVBoxLayout(self.shadow_frame)
+        sf_layout.setContentsMargins(0,0,0,0)
+        
+
+
+        self.lbl_s_op, self.sl_shadow_opacity, h_op_layout = make_slider_row("Opacity", 0, 255, 128)
+        self.lbl_s_x, self.sl_shadow_x, h_x_layout = make_slider_row("X Offset", -100, 100, 30)
+        self.lbl_s_y, self.sl_shadow_y, h_y_layout = make_slider_row("Y Offset", -100, 100, 30)
+        self.lbl_s_r, self.sl_shadow_r, h_r_layout = make_slider_row("Blur Rad", 1, 200, 10)
         
         sf_layout.addLayout(h_op_layout)
         sf_layout.addLayout(h_x_layout)
@@ -100,18 +113,18 @@ class ExportTab(QScrollArea):
         
         # Outline Size Slider
         self.lbl_outline_size, self.sl_outline_size, h_os_layout = make_slider_row("Size", 1, 100, 5)
-        self.sl_outline_size.valueChanged.connect(lambda: self.shadow_timer.start())
+        self.sl_outline_size.valueChanged.connect(lambda: self.effect_slider_timer.start())
         of_layout.addLayout(h_os_layout)
 
         # Outline Threshold Slider
         self.lbl_outline_thresh, self.sl_outline_thresh, h_ot_layout = make_slider_row("Threshold", 1, 254, 128)
         self.sl_outline_thresh.setToolTip("Lower values include more of the semi-transparent edges in the outline base.")
-        self.sl_outline_thresh.valueChanged.connect(lambda: self.shadow_timer.start())
+        self.sl_outline_thresh.valueChanged.connect(lambda: self.effect_slider_timer.start())
         of_layout.addLayout(h_ot_layout)
 
         # Outline Opacity Slider
         self.lbl_outline_op, self.sl_outline_op, h_oop_layout = make_slider_row("Opacity", 0, 255, 255)
-        self.sl_outline_op.valueChanged.connect(lambda: self.shadow_timer.start())
+        self.sl_outline_op.valueChanged.connect(lambda: self.effect_slider_timer.start())
         of_layout.addLayout(h_oop_layout)
 
         # Outline Colour Button
@@ -140,17 +153,17 @@ class ExportTab(QScrollArea):
         ig_layout.setContentsMargins(0, 0, 0, 0)
 
         self.lbl_ig_size, self.sl_ig_size, h_ig_size = make_slider_row("Size", 1, 100, 10)
-        self.sl_ig_size.valueChanged.connect(lambda: self.shadow_timer.start())
+        self.sl_ig_size.valueChanged.connect(lambda: self.effect_slider_timer.start())
         ig_layout.addLayout(h_ig_size)
 
         self.lbl_ig_op, self.sl_ig_op, h_ig_op = make_slider_row("Opacity", 0, 255, 150)
-        self.sl_ig_op.valueChanged.connect(lambda: self.shadow_timer.start())
+        self.sl_ig_op.valueChanged.connect(lambda: self.effect_slider_timer.start())
         ig_layout.addLayout(h_ig_op)
 
         # New: Inner Glow Threshold Slider
         self.lbl_ig_thresh, self.sl_ig_thresh, h_ig_thresh = make_slider_row("Threshold", 1, 254, 128)
         self.sl_ig_thresh.setToolTip("Controls how far into the semi-transparency the glow starts.")
-        self.sl_ig_thresh.valueChanged.connect(lambda: self.shadow_timer.start())
+        self.sl_ig_thresh.valueChanged.connect(lambda: self.effect_slider_timer.start())
         ig_layout.addLayout(h_ig_thresh)
 
         # Color Picker for Inner Glow
@@ -176,7 +189,7 @@ class ExportTab(QScrollArea):
         t_layout.setContentsMargins(0, 0, 0, 0)
 
         self.lbl_tint_amt, self.sl_tint_amt, h_t_amt = make_slider_row("Amount", 0, 100, 20)
-        self.sl_tint_amt.valueChanged.connect(lambda: self.shadow_timer.start())
+        self.sl_tint_amt.valueChanged.connect(lambda: self.effect_slider_timer.start())
         t_layout.addLayout(h_t_amt)
 
         t_col_layout = QHBoxLayout()
@@ -257,6 +270,12 @@ class ExportTab(QScrollArea):
         fmt = self.combo_export_fmt.currentData()
         is_lossy = fmt in ["webp_lossy", "jpeg"]
         self.export_quality_frame.setEnabled(is_lossy)
+
+    def toggle_blur_options(self, text):
+        if "Blur" in text:
+            self.blur_frame.show()
+        else:
+            self.blur_frame.hide()
 
     def toggle_shadow_options(self, checked):
         if checked: self.shadow_frame.show()

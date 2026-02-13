@@ -17,7 +17,7 @@ from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QH
                              QPushButton, QLabel, QComboBox, QCheckBox, QFileDialog,
                              QMessageBox, QGraphicsScene, QGraphicsPixmapItem,
                              QSlider, QFrame, QSplitter, QDialog, QGraphicsRectItem, QGraphicsEllipseItem, QGraphicsPathItem,
-                             QTextEdit, QSizePolicy, QButtonGroup, QInputDialog,
+                             QTextEdit, QSizePolicy, QButtonGroup,
                              QProgressBar, QStyle, QToolBar, QTabWidget)
 from PyQt6.QtCore import Qt, QTimer, QPointF, QRectF, QSettings, QThread, pyqtSignal, QEvent, QMimeData, QBuffer, QIODevice
 from PyQt6.QtGui import (QPixmap, QImage, QColor, QPainter, QPainterPath, QPen, QBrush,
@@ -112,7 +112,7 @@ class BackgroundRemoverGUI(QMainWindow):
         
         self.paint_mode = False
         self.crop_mode = False
-        self.blur_radius = 30
+
 
 
 
@@ -635,14 +635,14 @@ class BackgroundRemoverGUI(QMainWindow):
             },
             "shadow": {
                 "enabled": self.export_tab.chk_shadow.isChecked(),
-                "opacity": self.export_tab.sl_s_op.value(),
-                "radius": self.export_tab.sl_s_r.value(),
-                "x": self.export_tab.sl_s_x.value(),
-                "y": self.export_tab.sl_s_y.value()
+                "opacity": self.export_tab.sl_shadow_opacity.value(),
+                "radius": self.export_tab.sl_shadow_r.value(),
+                "x": self.export_tab.sl_shadow_x.value(),
+                "y": self.export_tab.sl_shadow_y.value()
             },
             "background": {
                 "type": self.export_tab.combo_bg_color.currentText(),
-                "blur_radius": getattr(self, 'blur_radius', 30),
+                "blur_radius": self.export_tab.sl_blur_rad.value(),
                 "color": self.export_tab.combo_bg_color.currentText()
             },
             "inner_glow": {
@@ -1402,15 +1402,6 @@ class BackgroundRemoverGUI(QMainWindow):
         QShortcut(QKeySequence("B"), self).activated.connect(lambda: self.run_automatic_model("ben2_base"))
         QShortcut(QKeySequence("M"), self).activated.connect(lambda: self.run_automatic_model("")) # run whatever is selected in the combobox
 
-    def handle_bg_change(self, text):
-        if "Blur" in text:
-            val, ok = QInputDialog.getInt(self, "Blur Radius", "Set Blur Radius:", 
-                                         value=getattr(self, 'blur_radius', 30), 
-                                         min=1, max=100)
-            if ok:
-                self.blur_radius = val
-        if self.img_session:
-            self.update_output_preview()
 
     def load_image(self, path):
         try:
@@ -2182,7 +2173,7 @@ class BackgroundRemoverGUI(QMainWindow):
 
     #@profile
     def render_output_preview(self, shadow_downscale=0.125):
-        if not self.img_session.active_image: return
+        if not self.img_session: return
 
         # Use model output mask (refined) if available combined with composite mask, otherwise use composite mask
         if self.img_session.model_output_refined:
@@ -2257,6 +2248,8 @@ class BackgroundRemoverGUI(QMainWindow):
 
     def update_output_preview(self):
         
+        if not self.img_session: return
+
         if self.chk_show_mask.isChecked(): 
             
             mask = self.img_session.composite_mask
@@ -2292,9 +2285,9 @@ class BackgroundRemoverGUI(QMainWindow):
         # Update the Auto-Trim visual overlay
         if self.export_tab.chk_export_trim.isChecked() and not self.chk_show_mask.isChecked():
             bbox = get_current_crop_bbox(self.img_session.composite_mask, self.export_tab.chk_shadow.isChecked(),
-                                         self.export_tab.sl_s_x.value(),
-                                         self.export_tab.sl_s_y.value(),
-                                         self.export_tab.sl_s_r.value())
+                                         self.export_tab.sl_shadow_x.value(),
+                                         self.export_tab.sl_shadow_y.value(),
+                                         self.export_tab.sl_shadow_r.value())
             if bbox:
                 # Create a path for the whole scene
                 full_rect = self.output_pixmap_item.boundingRect()
@@ -2734,9 +2727,9 @@ class BackgroundRemoverGUI(QMainWindow):
         if trim:
             bbox = get_current_crop_bbox(self.img_session.composite_mask,
                                          self.export_tab.chk_shadow.isChecked(),
-                                         self.export_tab.sl_s_x.value(),
-                                         self.export_tab.sl_s_y.value(),
-                                         self.export_tab.sl_s_r.value()
+                                         self.export_tab.sl_shadow_x.value(),
+                                         self.export_tab.sl_shadow_y.value(),
+                                         self.export_tab.sl_shadow_r.value()
                                          )
             if bbox:
                 final_image = final_image.crop(bbox)
