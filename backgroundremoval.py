@@ -764,7 +764,8 @@ class BackgroundRemoverGUI(QMainWindow):
             
         # Check for models
         root = self.model_manager.model_root_dir
-       
+
+        lama_exists = False
         if os.path.exists(os.path.join(root, f"lama.onnx")):
                 lama_exists = True
 
@@ -862,8 +863,10 @@ class BackgroundRemoverGUI(QMainWindow):
             QMessageBox.information(self,"Error","PyMatting is incompatible with Tiled Matting. Please download VitMatte from the settings")
             return
 
-            
+        
         self.set_loading(True, f"Running {'Tiled ' if use_tiled else ''}{model_name}...")
+
+        self.add_undo_step()
 
         provider_data = self.mask_tab.combo_auto_model_EP.currentData()
         
@@ -2530,7 +2533,7 @@ class BackgroundRemoverGUI(QMainWindow):
                 # cv2.imwrite("debug_patch_stroke.jpg", local_stroke_np)
                 # cv2.imwrite("debug_trimap.jpg", trimap_np)
                 
-                
+                algorithm_name = ""
                 if hasattr(self, 'combo_smart_refine_model') and self.combo_smart_refine_model.currentText():
                     algorithm_name = self.combo_smart_refine_model.currentText()
                 

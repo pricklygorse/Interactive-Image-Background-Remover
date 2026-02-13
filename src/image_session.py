@@ -1,12 +1,13 @@
 import os
-import numpy as np
-import cv2
-from PIL import Image, ImageOps, ImageGrab, ImageChops
 
-from PyQt6.QtGui import QImage
+import cv2
+import numpy as np
+from PIL import Image, ImageOps, ImageGrab
 from PyQt6.QtCore import Qt
+from PyQt6.QtGui import QImage
 
 from src.constants import UNDO_STEPS
+
 
 class ImageSession:
     """

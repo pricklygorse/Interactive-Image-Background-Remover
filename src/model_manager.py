@@ -1,15 +1,15 @@
-import os
 import gc
+import os
+from timeit import default_timer as timer
+
 import cv2
-import sys
 import numpy as np
 import onnx
 import onnxruntime as ort
-from PIL import Image, ImageFilter
-from timeit import default_timer as timer
+from PIL import Image
 from pymatting import estimate_alpha_sm, estimate_foreground_ml, estimate_foreground_cf
-from src.utils import estimate_fg_blur_fusion_optimised
 
+from src.utils import estimate_fg_blur_fusion_optimised
 from .constants import SAM_TRT_WARMUP_POINTS
 
 

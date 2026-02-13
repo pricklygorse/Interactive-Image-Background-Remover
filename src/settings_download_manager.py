@@ -1,11 +1,11 @@
 import os
-import sys
+
 import requests
-from PyQt6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, 
-                             QProgressBar, QScrollArea, QWidget, QMessageBox, QFrame, 
-                             QSizePolicy,QStackedWidget,QCheckBox, QComboBox,QLineEdit, QFileDialog, QSlider)
-from PyQt6.QtWidgets import QTabWidget
 from PyQt6.QtCore import (QThread, pyqtSignal, Qt, QSize)
+from PyQt6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
+                             QProgressBar, QScrollArea, QWidget, QMessageBox, QFrame,
+                             QSizePolicy, QStackedWidget, QCheckBox, QComboBox, QLineEdit, QFileDialog, QSlider)
+from PyQt6.QtWidgets import QTabWidget
 
 REMBG_BASE_URL = "https://github.com/danielgatis/rembg/releases/download/v0.0.0/"
 SAM2_BASE_URL = "https://huggingface.co/mabote-itumeleng/ONNX-SAM2-Segment-Anything/resolve/main/"

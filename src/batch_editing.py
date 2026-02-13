@@ -1,18 +1,20 @@
-from PyQt6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, 
-                             QProgressBar, QTextEdit, QFileDialog, QGroupBox, QListWidget,
-                             QMessageBox)
-from PyQt6.QtCore import Qt, QThread, pyqtSignal
 import os
+
 import cv2
-import numpy as np
-from PIL import Image, ImageOps
+from PIL import Image
+from PyQt6.QtCore import Qt, QThread, pyqtSignal
+from PyQt6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
+                             QProgressBar, QFileDialog, QGroupBox, QListWidget,
+                             QMessageBox)
+
 from src.image_session import ImageSession
 from src.utils import (
     apply_tone_sharpness, sanitise_filename_for_windows,
     get_current_crop_bbox, compose_final_image, refine_mask
 )
 
-def process_batch_image(file_path, output_dir, model_manager, 
+
+def process_batch_image(file_path, output_dir, model_manager,
                         generation_settings, render_settings, adj_settings,
                         export_settings):
     """

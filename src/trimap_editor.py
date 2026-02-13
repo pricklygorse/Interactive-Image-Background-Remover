@@ -1,13 +1,13 @@
 import numpy as np
 from PIL import Image
-
-from PyQt6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QPushButton, QGraphicsView, 
-                             QGraphicsScene, QGraphicsPixmapItem, QSlider, QLabel, QFrame, QRadioButton, 
-                             QButtonGroup, QSizePolicy, QFileDialog, QMessageBox)
 from PyQt6.QtCore import Qt, QPoint
 from PyQt6.QtGui import QPainter, QPainterPath, QPen, QColor, QBrush, QImage
+from PyQt6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QPushButton, QGraphicsView,
+                             QGraphicsScene, QGraphicsPixmapItem, QSlider, QLabel, QFrame, QRadioButton,
+                             QButtonGroup, QFileDialog, QMessageBox)
 
 from .utils import pil2pixmap, numpy_to_pixmap
+
 
 class TrimapEditorView(QGraphicsView):
     """
