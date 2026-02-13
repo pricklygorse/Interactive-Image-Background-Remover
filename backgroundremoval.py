@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 
-try:
-    import pyi_splash # type: ignore
-    pyi_splash.update_text("Loading Packages")
-except: pass
-import argparse
 import sys
+
+if getattr(sys, "frozen", False): 
+    try: import pyi_splash; pyi_splash.update_text("Loading Packages") # type: ignore
+    except: pass 
+
+import argparse
 import os
 import math
 import numpy as np
@@ -27,10 +28,9 @@ from PyQt6.QtGui import (QPixmap, QImage, QColor, QPainter, QPainterPath, QPen, 
 
 from PIL import Image, ImageOps, ImageDraw, ImageEnhance, ImageGrab, ImageFilter, ImageChops
 
-
-
-try: pyi_splash.update_text("Loading App Scripts")
-except: pass
+if getattr(sys, "frozen", False): 
+    try: pyi_splash.update_text("Loading App Scripts") # type: ignore
+    except: pass 
 
 import src.settings_download_manager as settings_download_manager
 from src.ui_styles import apply_theme
@@ -42,8 +42,9 @@ from src.utils import pil2pixmap, numpy_to_pixmap, apply_tone_sharpness, generat
     generate_outline, generate_inner_glow, apply_subject_tint, compose_final_image, refine_mask, generate_mask_outline_path, expand_contract_mask, guided_filter
 from src.constants import PAINT_BRUSH_SCREEN_SIZE, SOFTEN_RADIUS
 
-try: pyi_splash.update_text("Loading pymatting (Compiles on first run, approx 1-2 minutes)")
-except: pass
+if getattr(sys, "frozen", False): 
+    try: pyi_splash.update_text("Loading pymatting (Compiles on first run, approx 1-2 minutes)") # type: ignore
+    except: pass 
 
 print("Loading pymatting. On first run this will take a minute or two as it compiles")
 from src.model_manager import ModelManager 
@@ -78,8 +79,9 @@ class BackgroundRemoverGUI(QMainWindow):
     def __init__(self, image_paths, cli_args=None):
         super().__init__()
         
-        try: pyi_splash.update_text("App Initialisation")
-        except: pass
+        if getattr(sys, "frozen", False): 
+            try: pyi_splash.update_text("App Initialisation") # type: ignore
+            except: pass 
         
         # Persistent settings
         self.settings = QSettings("PricklyGorse", "InteractiveBackgroundRemover")
@@ -134,8 +136,10 @@ class BackgroundRemoverGUI(QMainWindow):
         self.marching_ants_offset = 0
 
 
-        try: pyi_splash.update_text("Loading UI")
-        except: pass
+        if getattr(sys, "frozen", False): 
+            try: pyi_splash.update_text("Loading UI") # type: ignore
+            except: pass 
+
         self.init_ui()
 
         if cli_args.binary:
@@ -201,9 +205,9 @@ class BackgroundRemoverGUI(QMainWindow):
         saved_theme = self.settings.value("theme", "dark")
         self.set_theme(saved_theme)
 
-
-        try: pyi_splash.close()
-        except: pass
+        if getattr(sys, "frozen", False): 
+            try: pyi_splash.close() # type: ignore
+            except: pass 
 
 
 
