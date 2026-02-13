@@ -1401,7 +1401,6 @@ class BackgroundRemoverGUI(QMainWindow):
             r = slider_to_natural(pos)
             if self.settings:
                 self.settings.setValue("fg_correction_radius", int(round(r)))
-                print(r)
             self.radius_timer.start()
 
         self.radius_slider.valueChanged.connect(on_radius_slider_changed)

@@ -8,7 +8,7 @@ import onnxruntime as ort
 from PIL import Image
 from timeit import default_timer as timer
 from pymatting import estimate_alpha_sm, estimate_foreground_ml, estimate_foreground_cf
-from src.utils import estimate_fg_blur_fusion
+from src.utils import estimate_fg_blur_fusion_optimised
 
 from .constants import SAM_TRT_WARMUP_POINTS
 
@@ -754,10 +754,10 @@ class ModelManager:
             print("pymatting estimate_foreground_ml",timer()-s)
 
         elif algorithm == 'blur_fusion_2':
-            fg_rgb = estimate_fg_blur_fusion(img_rgb, alpha, radius=radius, refine_radius=6, downscale=0.5)
+            fg_rgb = estimate_fg_blur_fusion_optimised(img_rgb, alpha, radius=radius, refine_radius=6, downscale=0.5)
 
         elif algorithm == 'blur_fusion_1':
-            fg_rgb = estimate_fg_blur_fusion(img_rgb, alpha, radius=radius, refine_radius=None, downscale=0.5)
+            fg_rgb = estimate_fg_blur_fusion_optimised(img_rgb, alpha, radius=radius, refine_radius=None, downscale=0.5)
 
         elif algorithm == 'cf':
             fg_rgb = estimate_foreground_cf(img_rgb, alpha)
