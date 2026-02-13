@@ -39,6 +39,7 @@ from src.ui_dialogs import InpaintingDialog
 
 from src.ui_tab_adjust import AdjustTab
 from src.ui_tab_maskgen import MaskGenTab
+from src.ui_tab_refine import RefineTab
 
 from src.trimap_editor import TrimapEditorDialog
 from src.utils import pil2pixmap, numpy_to_pixmap, apply_tone_sharpness, generate_drop_shadow, \
@@ -146,13 +147,13 @@ class BackgroundRemoverGUI(QMainWindow):
         self.init_ui()
 
         if cli_args.binary:
-            self.chk_binarise_mask.setChecked(True)
+            self.refine_tab.chk_binarise_mask.setChecked(True)
         if cli_args.soften:
-            self.chk_soften.setChecked(True)
+            self.refine_tab.chk_soften.setChecked(True)
         if cli_args.alpha_matting:
-                self.chk_alpha_matting.setChecked(True)
+                self.refine_tab.chk_alpha_matting.setChecked(True)
         if cli_args.colour_correction:
-                self.chk_estimate_foreground.setChecked(True)
+                self.refine_tab.chk_estimate_foreground.setChecked(True)
         if cli_args.shadow:
                 self.chk_shadow.setChecked(True)
 
@@ -249,7 +250,10 @@ class BackgroundRemoverGUI(QMainWindow):
         self.trt_cache_option_visibility() # Initial check for TensorRT
 
 
-        self.tabs.addTab(self.create_refine_tab(), "Refine")
+        self.refine_tab = RefineTab(self)
+        self.tabs.addTab(self.refine_tab, "Refine")
+        # matting models populated at end of ui construction due to a few comboboxes in the app
+
         self.tabs.addTab(self.create_export_tab(), "Export")
 
         self.tabs.setCurrentIndex(1)
@@ -431,6 +435,9 @@ class BackgroundRemoverGUI(QMainWindow):
         
         self.toggle_splitter_orientation(initial_setup=True)
 
+        # there are currently a few places where there are matting models, so initialise at the end of the ui creation
+        self.populate_matting_models()
+
 
     def create_paint_settings_panel(self):
         self.paint_settings_panel = QFrame()
@@ -607,31 +614,31 @@ class BackgroundRemoverGUI(QMainWindow):
         """
         Captures settings related to mask generation (inference + refinement).
         """
-        matting_enabled = self.chk_alpha_matting.isChecked()
+        matting_enabled = self.refine_tab.chk_alpha_matting.isChecked()
         return {
             "model_name": self.mask_tab.combo_whole.currentText(),
             "provider_data": self.mask_tab.combo_auto_model_EP.currentData(),
             "use_2step": self.mask_tab.chk_2step_auto.isChecked(),
             "matting": {
                 "enabled": matting_enabled,
-                "algorithm": self.combo_matting_algorithm.currentText(),
+                "algorithm": self.refine_tab.combo_matting_algorithm.currentText(),
                 # Assuming simple auto trimap for batch
-                "fg_erode": self.sl_fg_erode.value(),
-                "bg_erode": self.sl_bg_erode.value(),
+                "fg_erode": self.refine_tab.sl_fg_erode.value(),
+                "bg_erode": self.refine_tab.sl_bg_erode.value(),
                 "provider_data": self.mask_tab.combo_auto_model_EP.currentData(),
                 "longest_edge_limit": int(self.settings.value("matting_longest_edge", 1024))
             },
-            "soften": self.chk_soften.isChecked(),
+            "soften": self.refine_tab.chk_soften.isChecked(),
             "soften_radius": 1.5, # Could be made configurable
-            "binarise": self.chk_binarise_mask.isChecked(),
-            "expand_amount": self.sl_mask_expand.value(),
+            "binarise": self.refine_tab.chk_binarise_mask.isChecked(),
+            "expand_amount": self.refine_tab.sl_mask_expand.value(),
         }
     
     def get_render_settings(self):
         return {
-            "clean_alpha": self.chk_clean_alpha.isChecked(),
+            "clean_alpha": self.refine_tab.chk_clean_alpha.isChecked(),
             "foreground_correction": {
-                "enabled": self.chk_estimate_foreground.isChecked(),
+                "enabled": self.refine_tab.chk_estimate_foreground.isChecked(),
                 "algorithm": self.settings.value("fg_correction_algo", "ml"),
                 "radius": int(self.settings.value("fg_correction_radius", 100))
             },
@@ -851,7 +858,7 @@ class BackgroundRemoverGUI(QMainWindow):
     # End adjust_tab related methods
     
 
-    
+    # Mask generation tab related methods
 
     def run_matting_on_custom_trimap(self):
         """
@@ -924,298 +931,16 @@ class BackgroundRemoverGUI(QMainWindow):
         self.worker.error.connect(lambda msg: (self.set_loading(False), QMessageBox.critical(self, "Matting Error", msg)))
         self.worker.start()
 
-    def create_refine_tab(self):
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        container = QWidget()
-        layout = QVBoxLayout(container)
+    # end mask_tab
 
-        
-
-        layout.addSpacing(10)
-
-        
-
-        lbl_global_modifiers = QLabel("<b>GLOBAL REFINEMENTS</b>")
-        lbl_global_modifiers.setToolTip("Applied to the entire image")
-        lbl_global_modifiers.setContentsMargins(3, 0, 0, 0)
-        layout.addWidget(lbl_global_modifiers)
-
-        self.chk_clean_alpha = QCheckBox("Clean Transparency")
-        self.chk_clean_alpha.setToolTip("Remove nearly transparent pixels (alpha < 5) and solidify nearly opaque (alpha >250) to fully opaque (255).\n"
-                                        "You can view the partial transparency via View Global Mask on the output canvas\n"
-                                        "Recommended to leave on.")
-        self.chk_clean_alpha.setChecked(self.settings.value("clean_alpha", True, type=bool))
-        # In your UI setup code where you define the checkbox:
-        self.chk_clean_alpha.toggled.connect(
-            lambda checked: self.settings.setValue("clean_alpha", checked)
-        )
-        self.chk_clean_alpha.toggled.connect(self.update_output_preview)
-        layout.addWidget(self.chk_clean_alpha)
-
-        self.chk_estimate_foreground = QCheckBox("Background Colour Bleed\n Correction (Recommended, slow)")
-        self.chk_estimate_foreground.setToolTip("Recalculates the colours of the foreground cutout to remove background colours that bleed through semi transparent areas.\n"
-                                                "Recommended for soft edges such as hair when overlaying onto a different coloured background.")
-        layout.addWidget(self.chk_estimate_foreground)
-        self.chk_estimate_foreground.setChecked(self.settings.value("estimate_foreground", False, type=bool))    
-        self.chk_estimate_foreground.toggled.connect(self.update_output_preview)
-        self.chk_estimate_foreground.toggled.connect(
-            lambda checked: self.settings.setValue("estimate_foreground", checked)
-        )
-        
-
-        self.fg_container = QWidget()
-        fg_main_layout = QVBoxLayout(self.fg_container)
-        fg_main_layout.setSpacing(0)
-        fg_main_layout.setContentsMargins(20, 0, 0, 0)
-
-        # first row: label + combo
-        top_row = QHBoxLayout()
-        #fg_label = QLabel("FG Colour Correction:")
-        self.fg_combo = QComboBox()
-        self.fg_combo.setToolTip("Algorithm used to remove background colour bleed from the foreground image.")
-        self.fg_combo.addItem("Multi-Level", "ml")
-        self.fg_combo.addItem("Blur Fusion", "blur_fusion_2")
-        self.fg_combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContents)
-
-        current_fg = self.settings.value("fg_correction_algo", "ml") if self.settings else "ml"
-        idx = self.fg_combo.findData(current_fg)
-        self.fg_combo.setCurrentIndex(idx if idx >= 0 else 0)
-        def on_fg_algo_changed(index: int):
-            data = self.fg_combo.itemData(index)
-            self.radius_slider.setVisible(data != "ml")
-            if self.settings:
-                self.settings.setValue("fg_correction_algo", data)
-            self.update_output_preview()
-
-        self.fg_combo.currentIndexChanged.connect(on_fg_algo_changed)
-        
-        #top_row.addWidget(fg_label)
-        top_row.addWidget(self.fg_combo)
-        #top_row.addStretch()
-
-        R_MIN = 60
-        R_MAX = 1500
-
-        self.radius_slider = QSlider(Qt.Orientation.Horizontal)
-        self.radius_slider.setRange(0, 100)
-        self.radius_slider.setToolTip("Larger values sample a larger area of possible background colours to remove from the foreground.")
-
-        # load saved radius (natural value)
-        natural_radius = int(self.settings.value("fg_correction_radius", 90)) if self.settings else 90
-
-        def natural_to_slider(r: float) -> int:
-            r = max(R_MIN, min(R_MAX, r))
-            t = (math.log10(r) - math.log10(R_MIN)) / (math.log10(R_MAX) - math.log10(R_MIN))
-            return int(round(t * 100))
-
-        def slider_to_natural(pos: int) -> float:
-            t = pos / 100.0
-            log_r = math.log10(R_MIN) + t * (math.log10(R_MAX) - math.log10(R_MIN))
-            return 10 ** log_r
-
-        # initalise slider from saved radius
-        self.radius_slider.setValue(natural_to_slider(natural_radius))
-
-        self.radius_timer = QTimer(self)
-        self.radius_timer.setSingleShot(True)
-        self.radius_timer.setInterval(50)
-
-        def on_radius_slider_changed(pos: int):
-            r = slider_to_natural(pos)
-            if self.settings:
-                self.settings.setValue("fg_correction_radius", int(round(r)))
-            self.radius_timer.start()
-
-        self.radius_slider.valueChanged.connect(on_radius_slider_changed)
-        self.radius_timer.timeout.connect(self.update_output_preview)
-
-        top_row.addWidget(self.radius_slider)
-        fg_main_layout.addLayout(top_row)
-        #fg_main_layout.addWidget(self.radius_slider)
-
-        self.fg_container.setVisible(self.chk_estimate_foreground.isChecked())
-        self.radius_slider.setVisible(self.fg_combo.currentData() != "ml")
-        layout.addWidget(self.fg_container)
-
-        self.chk_estimate_foreground.toggled.connect(
-            lambda checked: self.fg_container.setVisible(checked)
-        )
-        
-
-
-
-        layout.addSpacing(10)
-
-        lbl_modifiers = QLabel("<b>MODEL OUTPUT MASK REFINEMENTS</b>")
-        lbl_modifiers.setContentsMargins(3, 0, 0, 0)
-        layout.addWidget(lbl_modifiers)
-
-        lbl_desc = QLabel("Applied to the AI model's output mask.")
-        lbl_desc.setWordWrap(True)
-        layout.addWidget(lbl_desc)
-
-        #layout.addSpacing(10)
-
-        # indent smart refine to highlight (crudely) that they are part of the live preview
-        indent_container = QWidget()
-        indent_layout = QVBoxLayout(indent_container)
-        indent_layout.setContentsMargins(10, 0, 0, 0)
-
-        h_expand_layout = QHBoxLayout()
-        self.lbl_mask_expand = QLabel("Expand/Contract: 0")
-        self.lbl_mask_expand.setMinimumWidth(120)
-        self.sl_mask_expand = QSlider(Qt.Orientation.Horizontal)
-        self.sl_mask_expand.setRange(-50, 50)
-        self.sl_mask_expand.setValue(0)
-        self.sl_mask_expand.setToolTip("Positive values expand the mask boundary, negative values shrink it.")
-        self.sl_mask_expand.valueChanged.connect(lambda v: self.lbl_mask_expand.setText(f"Expand/Contract: {v}"))
-        self.sl_mask_expand.valueChanged.connect(self.trigger_refinement_update)
-        h_expand_layout.addWidget(self.lbl_mask_expand)
-        h_expand_layout.addWidget(self.sl_mask_expand)
-        indent_layout.addLayout(h_expand_layout)
-
-
-        self.chk_binarise_mask = QCheckBox("Remove Mask Partial Transparency")
-        self.chk_binarise_mask.toggled.connect(self.trigger_refinement_update)
-        indent_layout.addWidget(self.chk_binarise_mask)
-
-
-        self.chk_soften = QCheckBox("Soften Mask")
-        soften_checked = self.settings.value("soften_mask", False, type=bool)
-        self.chk_soften.setChecked(soften_checked)
-        self.chk_soften.toggled.connect(lambda checked: self.settings.setValue("soften_mask", checked))
-        self.chk_soften.toggled.connect(self.trigger_refinement_update) 
-        indent_layout.addWidget(self.chk_soften)
-        
-        indent_layout.addSpacing(20)
-
-
-        matt_tt = "Runs a second pass with a matting model to estimate the transparency of mask edges.\n" + "This can improve the quality of detailed edges such as hair, especially when using binary mask models like SAM.\n" + "This requires a trimap (a foreground, unknown, background mask), either estimated from a SAM or automatic models, or manually drawn.\n" + "Alpha matting is computationally expensive"
-        lbl_alpha = QLabel("<b>SMART REFINE</b>")
-        lbl_alpha.setToolTip(matt_tt)
-        indent_layout.addWidget(lbl_alpha)
-        lbl_alpha_desc = QLabel("Runs the model output through a specialist model to refine difficult areas like hair and fur. ViTMatte is recommended")
-        lbl_alpha_desc.setWordWrap(True)
-        lbl_alpha_desc.setToolTip(matt_tt)
-        indent_layout.addWidget(lbl_alpha_desc)
-
-        btn_refine_download = QPushButton("Download Refinement Models 📥")
-        btn_refine_download.setToolTip("Download Refinement Models. VitMatte Small is recommended")
-        btn_refine_download.clicked.connect(self.open_settings)
-        indent_layout.addWidget(btn_refine_download)
-
-
-        ma_layout = QHBoxLayout()
-
-        matting_label = QLabel("Algorithm:")
-        matting_tt = "Additional models can be downloaded using the model manager.\nThe default included PyMatting algo can be very slow on large images.\nViTMatte (model downloader) can be much faster and far more accurate"
-        matting_label.setToolTip(matting_tt)
-        ma_layout.addWidget(matting_label, 0)
-
-
-        self.combo_matting_algorithm = QComboBox()
-        self.combo_matting_algorithm.setToolTip(matting_tt)
-        self.populate_matting_models()
-        self.combo_matting_algorithm.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
-        self.combo_matting_algorithm.setMinimumContentsLength(1)
-        self.combo_matting_algorithm.currentIndexChanged.connect(self.trigger_refinement_update)
-        ma_layout.addWidget(self.combo_matting_algorithm, 1)
-
-        indent_layout.addLayout(ma_layout)
-
-        self.chk_alpha_matting = QCheckBox("Enable Smart Refine")
-        self.chk_alpha_matting.setToolTip(matt_tt)
-        self.chk_alpha_matting.toggled.connect(self.handle_alpha_matting_toggle)
-        self.chk_alpha_matting.toggled.connect(self.trigger_refinement_update) 
-        indent_layout.addWidget(self.chk_alpha_matting)
-
-
-        # --- Alpha Matting Options Frame ---
-        self.alpha_matting_frame = QFrame()
-        am_layout = QVBoxLayout(self.alpha_matting_frame)
-        am_layout.setContentsMargins(15, 5, 0, 5) # Indent options slightly
-
-        self.chk_show_trimap = QCheckBox("Show Trimap on Input")
-        self.chk_show_trimap.setToolTip("Displays the generated trimap on the input view.\n"
-                                        "White = Foreground, Blue = Unknown (semi transparent, e.g. hair edges), Black = Background")
-        self.chk_show_trimap.toggled.connect(self.toggle_trimap_display)
-        am_layout.addWidget(self.chk_show_trimap)
-
-        # --- Trimap Source Radio Buttons ---
-        lbl_tri_src = QLabel("<b>Trimap Source:</b>")
-        lbl_tri_src.setToolTip("A trimap is a guidance mask that specifies what is definite foreground, definite background, and 'unknown/mixed' for the model to calculate")
-        am_layout.addWidget(lbl_tri_src)
-        self.trimap_mode_group = QButtonGroup(self)
-        self.rb_trimap_auto = QRadioButton("Automatic\n(expand fg/bg edge)")
-        self.rb_trimap_auto.setToolTip("Expands the border between the foreground and background to create region for the model to refine the mask.")
-        self.rb_trimap_custom = QRadioButton("Custom (user-drawn)")
-        
-        self.trimap_mode_group.addButton(self.rb_trimap_auto)
-        self.trimap_mode_group.addButton(self.rb_trimap_custom)
-        
-        self.rb_trimap_auto.setChecked(True)
-
-        am_layout.addWidget(self.rb_trimap_auto)
-        
-        self.trimap_mode_group.buttonToggled.connect(self.on_trimap_mode_changed)
-        self.trimap_mode_group.buttonToggled.connect(self.trigger_refinement_update)
-        
-        # --- Group sliders for easy show/hide ---
-        self.auto_trimap_sliders_widget = QWidget()
-        sliders_layout = QVBoxLayout(self.auto_trimap_sliders_widget)
-        sliders_layout.setContentsMargins(0, 5, 0, 0)
-        
-        def make_am_slider_row(lbl_text, min_v, max_v, def_v):
-            h_layout = QHBoxLayout()
-            label = QLabel(f"{lbl_text}: {def_v}")
-            label.setMinimumWidth(120)
-            slider = QSlider(Qt.Orientation.Horizontal)
-            slider.setRange(min_v, max_v)
-            slider.setValue(def_v)
-            slider.valueChanged.connect(lambda val, l=label, txt=lbl_text: (l.setText(f"{txt}: {val}"), 
-                                                                            self.update_trimap_preview_throttled(),
-                                                                            self.trigger_refinement_update()))
-            h_layout.addWidget(label)
-            h_layout.addWidget(slider)
-            return label, slider, h_layout
-
-        self.lbl_fg_erode, self.sl_fg_erode, fg_layout = make_am_slider_row("FG Shrink", 0, 200, 30)
-        self.sl_fg_erode.setToolTip("Shrinks the solid foreground area to create the 'unknown' region.")
-        sliders_layout.addLayout(fg_layout)
-
-        self.lbl_bg_erode, self.sl_bg_erode, bg_layout = make_am_slider_row("BG Shrink", 0, 200, 30)
-        self.sl_bg_erode.setToolTip("Shrinks the solid background area to create the 'unknown' region.")
-        sliders_layout.addLayout(bg_layout)
-
-        am_layout.addWidget(self.auto_trimap_sliders_widget)
-
-        am_layout.addWidget(self.rb_trimap_custom)
-        
-        self.btn_edit_trimap = QPushButton("Open Trimap Editor...")
-        self.btn_edit_trimap.clicked.connect(self.open_trimap_editor)
-        self.btn_edit_trimap.setEnabled(False)
-        am_layout.addWidget(self.btn_edit_trimap)
-        
-        
-
-
-        indent_layout.addWidget(self.alpha_matting_frame)
-        self.alpha_matting_frame.hide()
-
-        # end alpha matting
-
-
-        layout.addWidget(indent_container)
-
-        layout.addStretch()
-        scroll.setWidget(container)
-        return scroll
+    # Refinement tab methods
     
     def trigger_refinement_update(self):
         """Debounced trigger for updating the live preview mask."""
         if self.img_session.model_output_mask and not self.is_busy():
             self.refinement_timer.start()
+
+    # end refine tab methods
 
     def create_export_tab(self):
         scroll = QScrollArea()
@@ -1935,10 +1660,10 @@ class BackgroundRemoverGUI(QMainWindow):
 
     def populate_matting_models(self):
         # Create a list of combo boxes to populate
-        combos = []
-        if hasattr(self, 'combo_matting_algorithm'): combos.append(self.combo_matting_algorithm)
-        if hasattr(self, 'combo_matting_gen'): combos.append(self.combo_matting_gen)
-        if hasattr(self, 'combo_smart_refine_model'): combos.append(self.combo_smart_refine_model) # Add new combo
+        combos = [self.refine_tab.combo_matting_algorithm,
+                  self.mask_tab.combo_matting_gen,
+                  self.combo_smart_refine_model
+                  ]
 
         for cb in combos:
             cb.blockSignals(True)
@@ -2069,9 +1794,9 @@ class BackgroundRemoverGUI(QMainWindow):
                     
                     # Set UI to Custom mode but don't enable alpha matting or display yet
                     # This is so it doesnt get overwritten by automatic trimap editing
-                    self.rb_trimap_custom.blockSignals(True)
-                    self.rb_trimap_custom.setChecked(True)
-                    self.rb_trimap_custom.blockSignals(False)
+                    self.refine_tab.rb_trimap_custom.blockSignals(True)
+                    self.refine_tab.rb_trimap_custom.setChecked(True)
+                    self.refine_tab.rb_trimap_custom.blockSignals(False)
                     
                     self.status_label.setText(f"Loaded associated trimap: {os.path.basename(trimap_path)}")
                 else:
@@ -2617,11 +2342,11 @@ class BackgroundRemoverGUI(QMainWindow):
 
     def on_trimap_mode_changed(self):
         """Shows or hides UI elements based on the selected trimap mode."""
-        is_auto = self.rb_trimap_auto.isChecked()
+        is_auto = self.refine_tab.rb_trimap_auto.isChecked()
         
-        self.auto_trimap_sliders_widget.setEnabled(is_auto)
+        self.refine_tab.auto_trimap_sliders_widget.setEnabled(is_auto)
         
-        self.btn_edit_trimap.setEnabled(not is_auto)
+        self.refine_tab.btn_edit_trimap.setEnabled(not is_auto)
         
         self.update_trimap_preview()
 
@@ -2636,13 +2361,13 @@ class BackgroundRemoverGUI(QMainWindow):
             initial_trimap = self.img_session.user_trimap
         # Otherwise, generate one from the current mask and sliders as a starting point.
         elif self.img_session.model_output_mask:
-            fg_erode = self.sl_fg_erode.value()
-            bg_erode = self.sl_bg_erode.value()
+            fg_erode = self.refine_tab.sl_fg_erode.value()
+            bg_erode = self.refine_tab.sl_bg_erode.value()
             trimap_np = generate_trimap_from_mask(self.img_session.model_output_mask, fg_erode, bg_erode)
             initial_trimap = Image.fromarray(trimap_np)
         elif self.img_session.composite_mask:
-            fg_erode = self.sl_fg_erode.value()
-            bg_erode = self.sl_bg_erode.value()
+            fg_erode = self.refine_tab.sl_fg_erode.value()
+            bg_erode = self.refine_tab.sl_bg_erode.value()
             trimap_np = generate_trimap_from_mask(self.img_session.composite_mask, fg_erode, bg_erode)
             initial_trimap = Image.fromarray(trimap_np)
         else:
@@ -2655,10 +2380,10 @@ class BackgroundRemoverGUI(QMainWindow):
             self.img_session.user_trimap = dialog.final_trimap
             self.img_session.last_trimap = np.array(self.img_session.user_trimap) 
             
-            self.rb_trimap_custom.setChecked(True)
+            self.refine_tab.rb_trimap_custom.setChecked(True)
             
             # Ensure the preview is shown
-            self.chk_show_trimap.setChecked(True)
+            self.refine_tab.chk_show_trimap.setChecked(True)
             self.trigger_refinement_update()
             self.status_label.setText("Custom trimap updated.")
         self.update_trimap_preview()
@@ -2669,12 +2394,12 @@ class BackgroundRemoverGUI(QMainWindow):
     
     def handle_alpha_matting_toggle(self, checked):
         """Manages UI state when the main Alpha Matting checkbox is toggled."""
-        self.alpha_matting_frame.setVisible(checked)
+        self.refine_tab.alpha_matting_frame.setVisible(checked)
         if checked:
             self.update_trimap_preview()
         else:
             # If unchecked, also uncheck the trimap view so it's off if re-enabled
-            self.chk_show_trimap.setChecked(False)
+            self.refine_tab.chk_show_trimap.setChecked(False)
             self.view_input.hide_legend()
 
     def toggle_trimap_display(self, checked):
@@ -2690,20 +2415,20 @@ class BackgroundRemoverGUI(QMainWindow):
     #@line_profiler.profile
     def update_trimap_preview(self):
         """Generates and displays the correct trimap based on the selected source."""
-        if not self.img_session.model_output_mask or not self.chk_alpha_matting.isChecked() or not self.chk_show_trimap.isChecked():
+        if not self.img_session.model_output_mask or not self.refine_tab.chk_alpha_matting.isChecked() or not self.refine_tab.chk_show_trimap.isChecked():
             self.trimap_overlay_item.setPixmap(QPixmap())
             self.view_input.hide_legend()
             return
 
         trimap_np = None
 
-        if self.rb_trimap_auto.isChecked():
-            fg_erode = self.sl_fg_erode.value()
-            bg_erode = self.sl_bg_erode.value()
-            trimap_np = generate_trimap_from_mask(expand_contract_mask(self.img_session.model_output_mask,self.sl_mask_expand.value()),
+        if self.refine_tab.rb_trimap_auto.isChecked():
+            fg_erode = self.refine_tab.sl_fg_erode.value()
+            bg_erode = self.refine_tab.sl_bg_erode.value()
+            trimap_np = generate_trimap_from_mask(expand_contract_mask(self.img_session.model_output_mask,self.refine_tab.sl_mask_expand.value()),
                                                    fg_erode, bg_erode)
         
-        elif self.rb_trimap_custom.isChecked() and self.img_session and self.img_session.user_trimap:
+        elif self.refine_tab.rb_trimap_custom.isChecked() and self.img_session and self.img_session.user_trimap:
             trimap_np = np.array(self.img_session.user_trimap)
 
         if trimap_np is not None:
@@ -2742,14 +2467,14 @@ class BackgroundRemoverGUI(QMainWindow):
         refine_settings = self.get_generation_settings()
 
         user_trimap_np = None
-        if self.chk_alpha_matting.isChecked() and self.rb_trimap_custom.isChecked():
+        if self.refine_tab.chk_alpha_matting.isChecked() and self.refine_tab.rb_trimap_custom.isChecked():
             if self.img_session.user_trimap:
                 user_trimap_np = np.array(self.img_session.user_trimap)
 
 
 
 
-        msg = " Alpha matting can take a while" if self.chk_alpha_matting.isChecked() else ""
+        msg = " Alpha matting can take a while" if self.refine_tab.chk_alpha_matting.isChecked() else ""
         self.set_loading(True, "Refining mask..." + msg)
         
         self.refine_start_time = timer()
@@ -2879,7 +2604,7 @@ class BackgroundRemoverGUI(QMainWindow):
         if self.chk_show_mask.isChecked(): 
             
             mask = self.img_session.composite_mask
-            if self.chk_clean_alpha.isChecked():
+            if self.refine_tab.chk_clean_alpha.isChecked():
                 mask = clean_alpha(mask)
 
             if self.chk_show_partial_alpha.isChecked():
@@ -2951,7 +2676,7 @@ class BackgroundRemoverGUI(QMainWindow):
         self.img_session.last_trimap = None
         if self.img_session and self.img_session.user_trimap:
             del self.img_session.user_trimap
-        self.rb_trimap_auto.setChecked(True)
+        self.refine_tab.rb_trimap_auto.setChecked(True)
 
         self.add_undo_step()
         self.img_session.composite_mask = Image.new("L", self.img_session.active_image.size, 0)
@@ -3152,7 +2877,6 @@ class BackgroundRemoverGUI(QMainWindow):
                 # cv2.imwrite("debug_trimap.jpg", trimap_np)
                 
                 
-                algorithm_name = self.combo_matting_algorithm.currentText()
                 if hasattr(self, 'combo_smart_refine_model') and self.combo_smart_refine_model.currentText():
                     algorithm_name = self.combo_smart_refine_model.currentText()
                 
@@ -3385,7 +3109,7 @@ class BackgroundRemoverGUI(QMainWindow):
         if save_mask:
             mname = os.path.splitext(fname)[0] + "_mask.png"
             mask = self.img_session.composite_mask
-            if self.chk_clean_alpha.isChecked():
+            if self.refine_tab.chk_clean_alpha.isChecked():
                 mask = clean_alpha(mask)
             mask.save(mname)
             lbl = f"Saved to {os.path.basename(fname)} and {os.path.basename(mname)}"
