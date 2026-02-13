@@ -5,7 +5,7 @@ import sys
 import numpy as np
 import onnx
 import onnxruntime as ort
-from PIL import Image
+from PIL import Image, ImageFilter
 from timeit import default_timer as timer
 from pymatting import estimate_alpha_sm, estimate_foreground_ml, estimate_foreground_cf
 from src.utils import estimate_fg_blur_fusion_optimised
@@ -942,8 +942,33 @@ class ModelManager:
         return final_patch.convert("RGBA"), 0
 
 
+    # src/model_manager.py
 
+    def run_migan_inpainting(self, image_pil, mask_pil, provider_data, model_name="migan"):
+        """
+        Expects image: (1, 3, H, W) uint8, mask: (1, 1, H, W) uint8 (Hole=0)
+        """
+        session = self.get_inpainting_session(model_name, provider_data)
 
+        img_np = np.array(image_pil.convert("RGB"))
+        img_np = np.expand_dims(img_np, 0).transpose(0, 3, 1, 2).astype(np.uint8)
+
+        # We use 255 for hole. MI-GAN expects 0 for hole.
+        mask_np = np.array(mask_pil.convert("L"))
+        mask_np = 255 - mask_np  
+        
+        # Binarise to ensure internal bbox logic works
+        mask_np[mask_np < 255] = 0 
+        
+        mask_np = np.expand_dims(mask_np, (0, 1)).astype(np.uint8)
+
+        t_start = timer()
+        result = session.run(None, {'image': img_np, 'mask': mask_np})[0]
+        inf_time = (timer() - t_start) * 1000
+
+        res_np = result[0].transpose(1, 2, 0).astype(np.uint8)
+        
+        return Image.fromarray(res_np), f"MI-GAN: {inf_time:.0f}ms"
 
     def run_matting_tiled(self, algorithm_name, image_pil, trimap_np, provider_data, tile_size=512, overlap=128):
         """

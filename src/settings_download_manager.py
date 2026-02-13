@@ -318,10 +318,17 @@ MODEL_DOWNLOAD_GROUPS = [
     "type": "inpainting",
     "models": [
         {   "id": "lama",
-            "name": "LaMa (Large Mask Inpainting)",
+            "name": "LaMa: Large Mask Inpainting (2022)",
             "description": "Resolution-robust Large Mask Inpainting with Fourier Convolutions. Excellent for removing objects.",
             "files": [
                 {"file": "lama.onnx", "url": "https://storage.googleapis.com/ailia-models/lama/lama.onnx", "size_mb": 208.0}
+            ]
+        },
+        {   "id": "migan",
+            "name": "MI-GAN (fast)",
+            "description": "A Simple Baseline for Image Inpainting on Mobile Devices (2023).",
+            "files": [
+                {"file": "migan_pipeline_v2.onnx", "url": "https://huggingface.co/andraniksargsyan/migan/resolve/main/migan_pipeline_v2.onnx?download=true", "size_mb": 28.1}
             ]
         },
         # DeepFillv2 CelebA Models

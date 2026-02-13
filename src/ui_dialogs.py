@@ -117,8 +117,9 @@ class InpaintingDialog(QDialog):
         
         # Info Header
         info_lbl = QLabel(
-            "<b>Inpainting.</b> Works best with small images and objects. Output quality can vary dramatically.<br><br>"
-            "<b>LaMa:</b> Newer. Inference time is strongly proportional to image size. Works best with smaller images or objects. Can reduce inference time by lowering the context padding, which may reduce quality.<br>"
+            "<b>Inpainting.</b> All these models work best with small images with small objects. Most are trained on 256x256 or 512x512 pixel images, so the output quality can vary dramatically. Use the context window slider to specify what the model sees.<br><br>"
+            "<b>LaMa:</b> Resolution independent but very slow at large resolutions. Regardless of resolution independance, it still works best with smaller images with small objects.<br>"
+            "<b>MI-GAN:</b> Fast model designed for mobile use. 512x512px output."
             "<b>DeepFillv2:</b> Models trained on celebrity faces or places. Inference time and quality is set based on the model's internal resolution.<br>"
             "<b>Usage:</b> Left click to draw, right click to erase. Specify how much context to send to the model"
         )
@@ -141,6 +142,10 @@ class InpaintingDialog(QDialog):
         if os.path.exists(os.path.join(root, "lama.onnx")):
             available_models.append("LaMa")
             
+        for filename in os.listdir(root):
+            if filename.startswith("migan") and filename.endswith(".onnx"):
+                available_models.append(filename.replace(".onnx", ""))
+                
         df_variants = [
             'deepfillv2_celeba_256x256',
             'deepfillv2_places_256x256', 'deepfillv2_places_512x512', 'deepfillv2_places_1024x1024'
@@ -149,6 +154,7 @@ class InpaintingDialog(QDialog):
             if os.path.exists(os.path.join(root, f"{variant}.onnx")):
                 available_models.append(variant)
         
+
         if not available_models:
             self.combo_model.addItem("No models found")
             self.combo_model.setEnabled(False)
@@ -170,15 +176,27 @@ class InpaintingDialog(QDialog):
 
         tb_layout.addSpacing(20)
 
-        tb_layout.addWidget(QLabel("Context Padding:"))
+        # Context Container (Vertical to keep Label above Slider)
+        ctx_container = QWidget()
+        ctx_vbox = QVBoxLayout(ctx_container)
+        ctx_vbox.setContentsMargins(0, 0, 0, 0)
+        ctx_vbox.setSpacing(2)
+
+        # Dimension Label
+        self.lbl_context_dims = QLabel("Context: 0 x 0")
+        self.lbl_context_dims.setStyleSheet("font-size: 14px; color: #aaa; font-weight: bold;")
+        self.lbl_context_dims.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        ctx_vbox.addWidget(self.lbl_context_dims)
+
         self.sl_context = QSlider(Qt.Orientation.Horizontal)
-        # Set a temporary range; will be corrected by update_context_slider_range
         self.sl_context.setRange(50, 1000) 
         self.sl_context.setValue(self.context_padding)
         self.sl_context.setFixedWidth(150)
         self.sl_context.setToolTip("Sets the size of the area processed around your lines. Smaller = Faster.")
         self.sl_context.valueChanged.connect(self.set_context_padding)
-        tb_layout.addWidget(self.sl_context)
+        ctx_vbox.addWidget(self.sl_context)
+        
+        tb_layout.addWidget(ctx_container)
         
         # Initialize the correct range based on the image immediately
         self.update_context_slider_range()
@@ -303,6 +321,7 @@ class InpaintingDialog(QDialog):
         bbox = self.mask_image.getbbox()
         if not bbox:
             self.context_rect_item.hide()
+            self.lbl_context_dims.setText("Context: 0 x 0") # Reset label
             return
 
         x1, y1, x2, y2 = bbox
@@ -313,7 +332,6 @@ class InpaintingDialog(QDialog):
         mid_y = (y1 + y2) / 2
         
         # Determine the side length (maximum dimension of mask + padding)
-        # We add padding to both sides, so we use max_dim + (2 * padding)
         max_mask_dim = max(x2 - x1, y2 - y1)
         side = max_mask_dim + (self.context_padding * 2)
         half_side = side / 2
@@ -330,8 +348,24 @@ class InpaintingDialog(QDialog):
         final_cx2 = min(img_w, cx2)
         final_cy2 = min(img_h, cy2)
         
-        self.context_rect_item.setRect(QRectF(final_cx1, final_cy1, final_cx2 - final_cx1, final_cy2 - final_cy1))
+        # Calculate actual resulting dimensions
+        ctx_w = int(final_cx2 - final_cx1)
+        ctx_h = int(final_cy2 - final_cy1)
+        
+        # Update the visual rect
+        self.context_rect_item.setRect(QRectF(final_cx1, final_cy1, ctx_w, ctx_h))
         self.context_rect_item.show()
+
+        # Update the Dimension Label
+        # We use a color warning if it's significantly larger than 512
+        color = "#aaa"
+        if ctx_w > 1024 or ctx_h > 1024:
+            color = "#ff5555" # Red for very large
+        elif ctx_w > 640 or ctx_h > 640:
+            color = "#ffaa00" # Orange for slightly large
+            
+        self.lbl_context_dims.setText(f"Context: {ctx_w} x {ctx_h}")
+        self.lbl_context_dims.setStyleSheet(f"font-size: 14px; color: {color}; font-weight: bold;")
 
     def start_stroke(self, pos):
         self.current_path = QPainterPath(pos)
@@ -422,6 +456,10 @@ class InpaintingDialog(QDialog):
             
             if "deepfill" in algo.lower():
                 inpainted_patch, inf_time = self.model_manager.run_deepfill_inpainting(
+                    image_patch, mask_patch, self.provider_data, model_name=algo
+                )
+            elif "migan" in algo.lower():
+                inpainted_patch, inf_time = self.model_manager.run_migan_inpainting(
                     image_patch, mask_patch, self.provider_data, model_name=algo
                 )
             else:
