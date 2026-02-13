@@ -38,6 +38,7 @@ from src.ui_widgets import CollapsibleFrame, SynchronisedGraphicsView, Thumbnail
 from src.ui_dialogs import InpaintingDialog
 
 from src.ui_tab_adjust import AdjustTab
+from src.ui_tab_maskgen import MaskGenTab
 
 from src.trimap_editor import TrimapEditorDialog
 from src.utils import pil2pixmap, numpy_to_pixmap, apply_tone_sharpness, generate_drop_shadow, \
@@ -237,7 +238,17 @@ class BackgroundRemoverGUI(QMainWindow):
         self.adjust_tab = AdjustTab(self)
         self.tabs.addTab(self.adjust_tab, "Adjust")
 
-        self.tabs.addTab(self.create_ai_mask_tab(), "Mask Gen.")
+        self.mask_tab = MaskGenTab(self)
+        self.tabs.addTab(self.mask_tab, "Mask Gen.")
+        self.populate_sam_models()
+        self.populate_whole_models()
+        last_sam_cache_mode = self.settings.value("sam_ram_cache_mode", 1, type=int)
+        self.model_manager.sam_cache_mode = last_sam_cache_mode
+        last_auto_cache_mode = self.settings.value("auto_ram_cache_mode", 1, type=int)
+        self.model_manager.auto_cache_mode = last_auto_cache_mode
+        self.trt_cache_option_visibility() # Initial check for TensorRT
+
+
         self.tabs.addTab(self.create_refine_tab(), "Refine")
         self.tabs.addTab(self.create_export_tab(), "Export")
 
@@ -585,7 +596,7 @@ class BackgroundRemoverGUI(QMainWindow):
 
         gen_settings = self.get_generation_settings()
         render_settings = self.get_render_settings()
-        adj_settings = self.get_adjustment_params()
+        adj_settings = self.adjust_tab.get_adjustment_params()
         export_settings = self.get_export_settings()
         
         dlg = BatchProcessingDialog(self, self.image_paths, self.model_manager,
@@ -598,16 +609,16 @@ class BackgroundRemoverGUI(QMainWindow):
         """
         matting_enabled = self.chk_alpha_matting.isChecked()
         return {
-            "model_name": self.combo_whole.currentText(),
-            "provider_data": self.combo_auto_model_EP.currentData(),
-            "use_2step": self.chk_2step_auto.isChecked(),
+            "model_name": self.mask_tab.combo_whole.currentText(),
+            "provider_data": self.mask_tab.combo_auto_model_EP.currentData(),
+            "use_2step": self.mask_tab.chk_2step_auto.isChecked(),
             "matting": {
                 "enabled": matting_enabled,
                 "algorithm": self.combo_matting_algorithm.currentText(),
                 # Assuming simple auto trimap for batch
                 "fg_erode": self.sl_fg_erode.value(),
                 "bg_erode": self.sl_bg_erode.value(),
-                "provider_data": self.combo_auto_model_EP.currentData(),
+                "provider_data": self.mask_tab.combo_auto_model_EP.currentData(),
                 "longest_edge_limit": int(self.settings.value("matting_longest_edge", 1024))
             },
             "soften": self.chk_soften.isChecked(),
@@ -673,13 +684,13 @@ class BackgroundRemoverGUI(QMainWindow):
         self.adjust_timer.stop()
         self.output_refresh_timer.stop() 
 
-        for param, (_, _, default) in self.adj_slider_params.items():
-            self.adj_sliders[param].blockSignals(True)
-            self.adj_sliders[param].setValue(default)
-            self.adj_sliders[param].blockSignals(False)
+        for param, (_, _, default) in self.adjust_tab.adj_slider_params.items():
+            self.adjust_tab.adj_sliders[param].blockSignals(True)
+            self.adjust_tab.adj_sliders[param].setValue(default)
+            self.adjust_tab.adj_sliders[param].blockSignals(False)
         
         # Update the labels and the image
-        for slider in self.adj_sliders.values():
+        for slider in self.adjust_tab.adj_sliders.values():
             slider.valueChanged.emit(slider.value())
         
         self.apply_adjustments()
@@ -803,7 +814,7 @@ class BackgroundRemoverGUI(QMainWindow):
              return
 
         # Use the Automatic provider for inpainting
-        provider_data = self.combo_auto_model_EP.currentData()
+        provider_data = self.mask_tab.combo_auto_model_EP.currentData()
         
         # Apply current adjustments to get the image as seen on screen
         if self.img_session.source_image_np is not None:
@@ -840,271 +851,7 @@ class BackgroundRemoverGUI(QMainWindow):
     # End adjust_tab related methods
     
 
-    def create_ai_mask_tab(self):
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        container = QWidget()
-        layout = QVBoxLayout(container)
-
-
-        # Mask generation model selection
-
-        h_models_header = QHBoxLayout()
-        lbl_models = QLabel("")
-        lbl_models.setContentsMargins(3, 0, 0, 0)
-        h_models_header.addWidget(lbl_models)
-        h_models_header.addStretch()
-
-        self.btn_download = QPushButton("Download AI Models 📥")
-        self.btn_download.setToolTip("Download Models...")
-        self.btn_download.clicked.connect(self.open_settings)
-        layout.addWidget(self.btn_download)
-
-        lbl_models_download = QLabel("Models are run on the current view. Zoom and position your subject for best results")
-        lbl_models_download.setWordWrap(True)
-        layout.addWidget(lbl_models_download)
-        
-        layout.addSpacing(20)
-
-        
-        lbl_sam = QLabel("<b>INTERACTIVE (SAM)<b>")
-        lbl_sam.setToolTip("<b>Segment Anything Models</b><br>"
-                           "These require you to interact with the image.<br>"
-                           "<i>Usage: Left-click to add points, right-click to add negative (avoid) points, or drag to draw boxes around the subject.</i><br><br>"
-                           "Disc drive icons show models that have saved optimised versions cached.")
-        layout.addWidget(lbl_sam)
-        lbl_sam_desc = QLabel("Point and click models that let you choose parts of the image to add/subtract")
-        lbl_sam_desc.setWordWrap(True)
-        layout.addWidget(lbl_sam_desc)
-
-        self.combo_sam = QComboBox()
-        self.combo_sam.setToolTip(lbl_sam.toolTip())
-        self.populate_sam_models()
-        self.combo_sam.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
-        self.combo_sam.setMinimumContentsLength(1)
-        self.combo_sam.currentTextChanged.connect(lambda t: self.settings.setValue("last_sam_model", t) if t else None)
-        layout.addWidget(self.combo_sam)
-
-        # Add vertical space after the SAM elements
-        layout.addItem(QSpacerItem(20, 10, QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed))
-
-
-        lbl_auto = QLabel("<b>AUTOMATIC<b>")
-        lbl_auto.setToolTip("<b>Automatic Models</b><br>"
-                             "These run automatically on the image/current zoomed view.<br>"
-                             "<i>Usage: Select a model and click 'Run Automatic'. No points needed.</i><br><br>"
-                             "Disc drive icons show models that have saved optimised versions cached.")
-        layout.addWidget(lbl_auto)
-        lbl_auto_desc = QLabel("Models that perform their best guess bg removal for the image.")
-        lbl_auto_desc.setWordWrap(True)
-        layout.addWidget(lbl_auto_desc)
-
-        # Whole Image Combo
-        self.combo_whole = QComboBox()
-        self.combo_whole.setToolTip(lbl_auto.toolTip()) # Reuse the tooltip
-        self.populate_whole_models()
-        self.combo_whole.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
-        self.combo_whole.setMinimumContentsLength(1)
-        self.combo_whole.currentTextChanged.connect(lambda t: self.settings.setValue("last_auto_model", t) if t else None)
-        layout.addWidget(self.combo_whole)
-        
-        # Run Model Button and layout adjustment
-        h_whole_model = QHBoxLayout()
-        self.btn_whole = QPushButton("Run Model (M)"); self.btn_whole.clicked.connect(lambda: self.run_automatic_model())
-        self.btn_whole.setStyleSheet("""
-            QPushButton {
-                background-color: #0078d4;
-                color: white;
-                font-weight: bold;
-                border-radius: 4px;
-                border: 1px solid #005a9e;
-                padding: 5px 15px;
-            }
-            QPushButton:hover {
-                background-color: #106ebe;
-            }
-            QPushButton:pressed {
-                background-color: #005a9e;
-            }
-            QPushButton:disabled {
-                background-color: #c8c8c8;
-                color: #a1a1a1;
-                border: 1px solid #c8c8c8;
-            }
-        """)
-        h_whole_model.addWidget(self.combo_whole)
-        h_whole_model.addWidget(self.btn_whole)
-        layout.addLayout(h_whole_model)
-
-        self.chk_2step_auto = QCheckBox("2-Step (Find Subject -> Re-run)")
-        self.chk_2step_auto.setToolTip("Runs the model twice: first on the entire image to find the subject,\n "
-                                       "then a second time on a zoomed crop of the subject for maximum detail."
-                                       "\n\nNOTE: This is different to typical usage, where the model is run on the view that you are currently zoomed in to,\n"
-                                       "which may instead be the optimal way to get a higher quality mask")
-        layout.addWidget(self.chk_2step_auto)
-
-        layout.addSpacing(20)
-
-        lbl_mat_gen = QLabel("<b>DRAW AND REFINE (Matting)</b>")
-        #lbl_mat_gen.setToolTip("Draw a mask and let the model calculate the difficult areas.")
-        layout.addWidget(lbl_mat_gen)
-        
-        lbl_mat_note = QLabel("Draw a rough initial mask/trimap and let models calculate the tricky bits such as hair.")
-        lbl_mat_note.setWordWrap(True)
-        lbl_mat_note.setToolTip("If you have a mask generated from another model, the editor will inherit this as a starting point.")
-        layout.addWidget(lbl_mat_note)
-
-        h_mat_btn_layout = QHBoxLayout()
-        
-        self.btn_open_trimap_gen = QPushButton("1. Draw Trimap")
-        self.btn_open_trimap_gen.clicked.connect(self.open_trimap_editor)
-        self.btn_open_trimap_gen.setToolTip("Open the editor to draw where the foreground and background are.")
-
-        h_mat_algo_layout = QHBoxLayout()
-        h_mat_algo_layout.addWidget(QLabel("Matting Model:"))
-        
-        self.combo_matting_gen = QComboBox()
-        self.combo_matting_gen.setToolTip("Select the specialized matting model to use.")
-        self.combo_matting_gen.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
-        self.combo_matting_gen.setMinimumContentsLength(1)
-        h_mat_algo_layout.addWidget(self.combo_matting_gen)
-        layout.addLayout(h_mat_algo_layout)
-        
-        self.btn_run_matting_gen = QPushButton("2. Run Matting")
-        self.btn_run_matting_gen.setToolTip("Runs the selected matting model using your hand-drawn trimap.")
-        self.btn_run_matting_gen.clicked.connect(self.run_matting_on_custom_trimap)
-        self.btn_run_matting_gen.setStyleSheet("font-weight: bold; background-color: #444; color: white;")
-        
-        h_mat_btn_layout.addWidget(self.btn_open_trimap_gen)
-        h_mat_btn_layout.addWidget(self.btn_run_matting_gen)
-        layout.addLayout(h_mat_btn_layout)
-
-        self.chk_tiled_matting = QCheckBox("Use Tiled Matting (1:1 Detail, Slower)")
-        self.chk_tiled_matting.setToolTip("Processes the image in small overlapping tiles at full resolution for a higher quality mask.\n"
-                                          "Much lower VRAM usage compared to setting a larger matting resolution limit in the settings")
-        self.chk_tiled_matting.setChecked(self.settings.value("tiled_matting_enabled", False, type=bool))
-        self.chk_tiled_matting.toggled.connect(lambda c: self.settings.setValue("tiled_matting_enabled", c))
-        layout.addWidget(self.chk_tiled_matting)
-
-        layout.addSpacing(40)
-
-
-        btn_clr = QPushButton("Clear SAM Clicks/ Model Masks (C)"); btn_clr.clicked.connect(self.clear_overlay)
-        layout.addWidget(btn_clr)
-
-        layout.addSpacing(20)
-
-        # Hardware Acceleration
-        self.available_eps = ModelManager.get_available_ep_options()
-        
-        self.hw_options_frame = CollapsibleFrame("Hardware Acceleration Options", 
-                                                 tooltip="Configure which hardware (CPU/GPU) is used for different model types.\n" 
-                                                         "First run on GPU can take take while models compile\n"
-                                                         "Optimised compiled TensorRT and OpenVINO models are cached to the HDD.\n"
-                                                         "Caching models in RAM can speed up subsequent runs."
-                                                         )
-        hw_layout = self.hw_options_frame.layout_for_content()
-        
-        # SAM EP Combo
-        labelS = QLabel("<b>Interactive SAM Model Provider:</b>")
-        labelS.setContentsMargins(3, 0, 0, 0)   
-        hw_layout.addWidget(labelS)
-        self.combo_sam_model_EP = QComboBox()
-        for label, provider_str, opts, short_code in self.available_eps:
-            self.combo_sam_model_EP.addItem(label, (provider_str, opts, short_code))
-
-        last_sam = self.settings.value("sam_exec_short_code", "cpu")
-        idx = 0 # Default to first item
-        for i in range(self.combo_sam_model_EP.count()):
-            if self.combo_sam_model_EP.itemData(i)[2] == last_sam:
-                idx = i
-                break
-        self.combo_sam_model_EP.setCurrentIndex(idx)
-        self.combo_sam_model_EP.currentIndexChanged.connect(self.on_sam_EP_changed)
-        hw_layout.addWidget(self.combo_sam_model_EP)
-
-
-        #  SAM Caching 
-        self.sam_cache_group = QButtonGroup(self)
-        self.rb_sam_cache_last = QRadioButton("Keep Last Used In Memory")
-        self.rb_sam_cache_all = QRadioButton("Keep All In Memory")
-        self.sam_cache_group.addButton(self.rb_sam_cache_last, 1)
-        self.sam_cache_group.addButton(self.rb_sam_cache_all, 2)
-        self.rb_sam_cache_last.setToolTip("Recommended for good balance between efficiency and memory usage.")
-        self.rb_sam_cache_all.setToolTip("Keeps every used SAM model loaded in memory for the session.\nCan cause issues on low VRAM GPUs.")
-        hw_layout.addWidget(self.rb_sam_cache_last)
-        hw_layout.addWidget(self.rb_sam_cache_all)
-        self.sam_cache_group.buttonToggled.connect(self.on_sam_cache_changed)
-
-        last_sam_cache_mode = self.settings.value("sam_ram_cache_mode", 1, type=int)
-        self.sam_cache_group.blockSignals(True)
-        self.sam_cache_group.button(last_sam_cache_mode).setChecked(True)
-        self.sam_cache_group.blockSignals(False)
-        self.model_manager.sam_cache_mode = last_sam_cache_mode
-
-
-        # Automatic Models
-        labelW = QLabel("<b>Automatic Model Provider:</b>")
-        labelW.setContentsMargins(3, 0, 0, 0)   # push right by 10px
-        hw_layout.addWidget(labelW)
-
-        self.combo_auto_model_EP = QComboBox()
-        self.combo_auto_model_EP.setToolTip("Select hardware acceleration for automatic background detection models.")
-        
-        for label, provider_str, opts, short_code in self.available_eps:
-            self.combo_auto_model_EP.addItem(label, (provider_str, opts, short_code))
-        
-        last_exec = self.settings.value("exec_short_code", "cpu")
-        idx = 0 # Default to first item
-        for i in range(self.combo_auto_model_EP.count()):
-            if self.combo_auto_model_EP.itemData(i)[2] == last_exec:
-                idx = i
-                break
-        self.combo_auto_model_EP.setCurrentIndex(idx)
-        self.combo_auto_model_EP.currentIndexChanged.connect(self.on_auto_EP_changed)
-        hw_layout.addWidget(self.combo_auto_model_EP)
-        
-        # Auto Model Caching
-        self.auto_cache_group = QButtonGroup(self)
-        self.rb_auto_cache_none = QRadioButton("Unload after use")
-        self.rb_auto_cache_last = QRadioButton("Keep Last Used in Memory")
-        self.rb_auto_cache_all = QRadioButton("Keep All In Memory")
-        self.auto_cache_group.addButton(self.rb_auto_cache_none, 0)
-        self.auto_cache_group.addButton(self.rb_auto_cache_last, 1)
-        self.auto_cache_group.addButton(self.rb_auto_cache_all, 2)
-        self.rb_auto_cache_none.setToolTip("Only select if memory constrained.")
-        self.rb_auto_cache_last.setToolTip("Recommended for good balance between efficiency and memory usage.")
-        self.rb_auto_cache_all.setToolTip("Keeps every used automatic model loaded in memory for the session.\nCan cause issues on low VRAM GPUs.")
-        hw_layout.addWidget(self.rb_auto_cache_none)
-        hw_layout.addWidget(self.rb_auto_cache_last)
-        hw_layout.addWidget(self.rb_auto_cache_all)
-        self.auto_cache_group.buttonToggled.connect(self.on_auto_cache_changed)
-
-        # End Hardware Acceleration
-        layout.addWidget(self.hw_options_frame)
-        
-        # Persistence for Collapsible Frame
-        hw_collapsed = self.settings.value("hw_options_collapsed", True, type=bool)
-        self.hw_options_frame.set_collapsed(hw_collapsed)
-        self.hw_options_frame.toggled.connect(
-            lambda collapsed: self.settings.setValue("hw_options_collapsed", collapsed)
-        )
-
-        last_auto_cache_mode = self.settings.value("auto_ram_cache_mode", 1, type=int)
-        self.auto_cache_group.blockSignals(True)
-        self.auto_cache_group.button(last_auto_cache_mode).setChecked(True)
-        self.auto_cache_group.blockSignals(False)
-
-        self.model_manager.auto_cache_mode = last_auto_cache_mode
-
-        self.trt_cache_option_visibility() # Initial check for TensorRT
-
-        # End Hardware Acceleration
-
-
-        layout.addStretch()
-        scroll.setWidget(container)
-        return scroll
+    
 
     def run_matting_on_custom_trimap(self):
         """
@@ -1125,8 +872,8 @@ class BackgroundRemoverGUI(QMainWindow):
 
         if self.is_busy(): return
 
-        model_name = self.combo_matting_gen.currentText()
-        use_tiled = self.chk_tiled_matting.isChecked()
+        model_name = self.mask_tab.combo_matting_gen.currentText()
+        use_tiled = self.mask_tab.chk_tiled_matting.isChecked()
         
         if "PyMatting" in model_name and not use_tiled:
             ret = QMessageBox.question(
@@ -1147,7 +894,7 @@ class BackgroundRemoverGUI(QMainWindow):
             
         self.set_loading(True, f"Running {'Tiled ' if use_tiled else ''}{model_name}...")
 
-        provider_data = self.combo_auto_model_EP.currentData()
+        provider_data = self.mask_tab.combo_auto_model_EP.currentData()
         
         # Viewport coordinates (for positioning result later)
         _, vx, vy = self.get_viewport_crop()
@@ -1914,37 +1661,37 @@ class BackgroundRemoverGUI(QMainWindow):
     def update_cached_model_icons(self):
         """Update drive icons based on disk cache."""
         # Check Whole Image Models
-        current_data = self.combo_auto_model_EP.currentData() # (ProviderStr, Opts, ShortCode)
+        current_data = self.mask_tab.combo_auto_model_EP.currentData() # (ProviderStr, Opts, ShortCode)
         if current_data:
             short_code = current_data[2]
             drive_icon = self._get_cached_icon() 
             
-            for i in range(self.combo_whole.count()):
-                m_name = self.combo_whole.itemText(i)
+            for i in range(self.mask_tab.combo_whole.count()):
+                m_name = self.mask_tab.combo_whole.itemText(i)
                 if self.model_manager.check_is_cached(m_name, short_code):
-                    self.combo_whole.setItemIcon(i, drive_icon)
+                    self.mask_tab.combo_whole.setItemIcon(i, drive_icon)
                 else:
-                    self.combo_whole.setItemIcon(i, QIcon()) # Set blank icon if not cached
+                    self.mask_tab.combo_whole.setItemIcon(i, QIcon()) # Set blank icon if not cached
 
         # Check SAM Models (Same logic)
-        current_sam_data = self.combo_sam_model_EP.currentData()
+        current_sam_data = self.mask_tab.combo_sam_model_EP.currentData()
         if current_sam_data:
             sam_code = current_sam_data[2]
             drive_icon = self._get_cached_icon()
             
-            for i in range(self.combo_sam.count()):
-                m_name = self.combo_sam.itemText(i)
+            for i in range(self.mask_tab.combo_sam.count()):
+                m_name = self.mask_tab.combo_sam.itemText(i)
                 if self.model_manager.check_is_cached(m_name, sam_code):
-                    self.combo_sam.setItemIcon(i, drive_icon)
+                    self.mask_tab.combo_sam.setItemIcon(i, drive_icon)
                 else:
-                    self.combo_sam.setItemIcon(i, QIcon())
+                    self.mask_tab.combo_sam.setItemIcon(i, QIcon())
 
     def on_auto_EP_changed(self, index):
         """
         Handle change in automatic image execution provider.
         """
         # Retrieve from combobox userdata (ProviderStr, OptionsDict, ShortCode)
-        data = self.combo_auto_model_EP.itemData(index)
+        data = self.mask_tab.combo_auto_model_EP.itemData(index)
         if not data: return
         prov_str, prov_opts, short_code = data
 
@@ -1962,17 +1709,17 @@ class BackgroundRemoverGUI(QMainWindow):
         Disables 'No Caching' if TensorRT is selected for auto models.
         Unsure if this should be also used for OpenVINO, but for now allow unloading
         """
-        data = self.combo_auto_model_EP.currentData()
+        data = self.mask_tab.combo_auto_model_EP.currentData()
         if not data: return
         prov_str, _, _ = data
 
         is_trt = (prov_str == "TensorrtExecutionProvider")
-        self.rb_auto_cache_none.setEnabled(not is_trt)
-        self.rb_auto_cache_none.setVisible(not is_trt)
+        self.mask_tab.rb_auto_cache_none.setEnabled(not is_trt)
+        self.mask_tab.rb_auto_cache_none.setVisible(not is_trt)
 
         # If TRT is selected and "No Cache" was active, switch to "Keep Last"
-        if is_trt and self.rb_auto_cache_none.isChecked():
-            self.rb_auto_cache_last.setChecked(True)
+        if is_trt and self.mask_tab.rb_auto_cache_none.isChecked():
+            self.mask_tab.rb_auto_cache_last.setChecked(True)
 
 
     def on_auto_cache_changed(self, button, checked):
@@ -1982,7 +1729,7 @@ class BackgroundRemoverGUI(QMainWindow):
             self.model_manager.clear_auto_cache()
             self.status_label.setText("Automatic model cache cleared.")
 
-            cache_mode = self.auto_cache_group.id(button)
+            cache_mode = self.mask_tab.auto_cache_group.id(button)
 
             if cache_mode == 2: # Keep all
                 agreed = self.settings.value("agreed_high_vram_warning", False, type=bool)
@@ -1996,7 +1743,7 @@ class BackgroundRemoverGUI(QMainWindow):
                         self.settings.setValue("agreed_high_vram_warning", True)
                     else:
                         # Revert to "Keep Last"
-                        self.rb_auto_cache_last.setChecked(True)
+                        self.mask_tab.rb_auto_cache_last.setChecked(True)
                         return
 
             self.settings.setValue("auto_ram_cache_mode", cache_mode)
@@ -2009,7 +1756,7 @@ class BackgroundRemoverGUI(QMainWindow):
             self.model_manager.clear_sam_cache()
             self.status_label.setText("SAM model cache cleared.")
 
-            cache_mode = self.sam_cache_group.id(button)
+            cache_mode = self.mask_tab.sam_cache_group.id(button)
 
             if cache_mode == 2: # Keep all
                 agreed = self.settings.value("agreed_high_vram_warning", False, type=bool)
@@ -2023,10 +1770,10 @@ class BackgroundRemoverGUI(QMainWindow):
                         self.settings.setValue("agreed_high_vram_warning", True)
                     else:
                         # Revert to "Keep Last"
-                        self.rb_sam_cache_last.setChecked(True)
+                        self.mask_tab.rb_sam_cache_last.setChecked(True)
                         return
 
-            self.settings.setValue("sam_ram_cache_mode", self.sam_cache_group.id(button))
+            self.settings.setValue("sam_ram_cache_mode", self.mask_tab.sam_cache_group.id(button))
             self.model_manager.sam_cache_mode = cache_mode
 
     def on_sam_EP_changed(self, index):
@@ -2034,7 +1781,7 @@ class BackgroundRemoverGUI(QMainWindow):
         Handle change in SAM execution provider.
         """
         # Retrieve from combobox userdata (ProviderStr, OptionsDict, ShortCode)
-        data = self.combo_sam_model_EP.itemData(index)
+        data = self.mask_tab.combo_sam_model_EP.itemData(index)
         if not data: return
         prov_str, prov_opts, short_code = data
 
@@ -2143,24 +1890,24 @@ class BackgroundRemoverGUI(QMainWindow):
         
         last_used = self.settings.value("last_sam_model", "")
         
-        self.combo_sam.blockSignals(True)
-        self.combo_sam.clear()
+        self.mask_tab.combo_sam.blockSignals(True)
+        self.mask_tab.combo_sam.clear()
         if matches:
-            self.combo_sam.addItems(sorted(list(set(matches))))
+            self.mask_tab.combo_sam.addItems(sorted(list(set(matches))))
             
             # Restore last used or default to mobile_sam
             idx = -1
             if last_used:
-                idx = self.combo_sam.findText(last_used)
+                idx = self.mask_tab.combo_sam.findText(last_used)
             
             if idx >= 0:
-                 self.combo_sam.setCurrentIndex(idx)
+                 self.mask_tab.combo_sam.setCurrentIndex(idx)
             else:
                 # Mobile SAM has near instant results even on CPU, so we set as the default if available
-                idx = self.combo_sam.findText("mobile_sam", Qt.MatchFlag.MatchContains)
-                if idx >= 0: self.combo_sam.setCurrentIndex(idx)
-        else: self.combo_sam.addItem("No Models Found")
-        self.combo_sam.blockSignals(False)
+                idx = self.mask_tab.combo_sam.findText("mobile_sam", Qt.MatchFlag.MatchContains)
+                if idx >= 0: self.mask_tab.combo_sam.setCurrentIndex(idx)
+        else: self.mask_tab.combo_sam.addItem("No Models Found")
+        self.mask_tab.combo_sam.blockSignals(False)
 
     def populate_whole_models(self):
         # should change these to read from the download manager, but this is easiest for me testing variations of new models atm
@@ -2174,17 +1921,17 @@ class BackgroundRemoverGUI(QMainWindow):
         
         last_used = self.settings.value("last_auto_model", "")
 
-        self.combo_whole.blockSignals(True)
-        self.combo_whole.clear()
+        self.mask_tab.combo_whole.blockSignals(True)
+        self.mask_tab.combo_whole.clear()
         if matches: 
-            self.combo_whole.addItems(sorted(list(set(matches))))
+            self.mask_tab.combo_whole.addItems(sorted(list(set(matches))))
             
             if last_used:
-                idx = self.combo_whole.findText(last_used)
+                idx = self.mask_tab.combo_whole.findText(last_used)
                 if idx >= 0:
-                    self.combo_whole.setCurrentIndex(idx)
-        else: self.combo_whole.addItem("No Models Found")
-        self.combo_whole.blockSignals(False)
+                    self.mask_tab.combo_whole.setCurrentIndex(idx)
+        else: self.mask_tab.combo_whole.addItem("No Models Found")
+        self.mask_tab.combo_whole.blockSignals(False)
 
     def populate_matting_models(self):
         # Create a list of combo boxes to populate
@@ -2417,23 +2164,23 @@ class BackgroundRemoverGUI(QMainWindow):
 
         if sam_model_id:
             # Find the full model name from the ID
-            idx = self.combo_sam.findText(sam_model_id, Qt.MatchFlag.MatchContains)
+            idx = self.mask_tab.combo_sam.findText(sam_model_id, Qt.MatchFlag.MatchContains)
             if idx >= 0:
-                self.combo_sam.setCurrentIndex(idx)
+                self.mask_tab.combo_sam.setCurrentIndex(idx)
                 
-                self.set_loading(True, f"Pre-loading SAM: {self.combo_sam.currentText()}")
+                self.set_loading(True, f"Pre-loading SAM: {self.mask_tab.combo_sam.currentText()}")
                 # Call manager to load
-                provider_data = self.combo_sam_model_EP.currentData() or ("CPUExecutionProvider", {}, "cpu")
-                self.model_manager.init_sam_session(self.combo_sam.currentText(), provider_data)
-                self.set_loading(False, f"Pre-loaded SAM: {self.combo_sam.currentText()}")
+                provider_data = self.mask_tab.combo_sam_model_EP.currentData() or ("CPUExecutionProvider", {}, "cpu")
+                self.model_manager.init_sam_session(self.mask_tab.combo_sam.currentText(), provider_data)
+                self.set_loading(False, f"Pre-loaded SAM: {self.mask_tab.combo_sam.currentText()}")
 
         if auto_model_id:
-            idx = self.combo_whole.findText(auto_model_id, Qt.MatchFlag.MatchContains)
+            idx = self.mask_tab.combo_whole.findText(auto_model_id, Qt.MatchFlag.MatchContains)
             if idx >= 0:
-                self.combo_whole.setCurrentIndex(idx)
-                self.set_loading(True, f"Pre-loading Automatic Model: {self.combo_whole.currentText()} (Startup)")
-                provider_data = self.combo_auto_model_EP.currentData()
-                self.model_manager.get_auto_session(self.combo_whole.currentText(), provider_data)
+                self.mask_tab.combo_whole.setCurrentIndex(idx)
+                self.set_loading(True, f"Pre-loading Automatic Model: {self.mask_tab.combo_whole.currentText()} (Startup)")
+                provider_data = self.mask_tab.combo_auto_model_EP.currentData()
+                self.model_manager.get_auto_session(self.mask_tab.combo_whole.currentText(), provider_data)
                 self.set_loading(False, f"Pre-loaded Automatic Model")
 
 
@@ -2567,12 +2314,12 @@ class BackgroundRemoverGUI(QMainWindow):
         if self.is_busy():
             return
         
-        model_name = self.combo_sam.currentText()
+        model_name = self.mask_tab.combo_sam.currentText()
         if "Select" in model_name or "No Models" in model_name: return
 
         self.set_loading(True, "Running SAM Inference. First run on viewport is slow.")
         
-        provider_data = self.combo_sam_model_EP.currentData() or ("CPUExecutionProvider", {}, "cpu")
+        provider_data = self.mask_tab.combo_sam_model_EP.currentData() or ("CPUExecutionProvider", {}, "cpu")
         
         processed = self._process_sam_points(coords, labels)
         if not processed:
@@ -2631,7 +2378,7 @@ class BackgroundRemoverGUI(QMainWindow):
         
         # Check if run from a hotkey (u,i,o,b) or get name from model list
         if not model_name: 
-            model_name = self.combo_whole.currentText()
+            model_name = self.mask_tab.combo_whole.currentText()
         if "Select" in model_name or "No Models" in model_name:
             msg_box = QMessageBox()
             msg_box.setWindowTitle("No Models Found")
@@ -2645,7 +2392,7 @@ class BackgroundRemoverGUI(QMainWindow):
         # ideally would be after inference, but on_inference_finished is shared by sam and auto models
         # self.clear_overlay()
 
-        use_2step = self.chk_2step_auto.isChecked()
+        use_2step = self.mask_tab.chk_2step_auto.isChecked()
         
         if use_2step:
             # use the full size original image first
@@ -2657,7 +2404,7 @@ class BackgroundRemoverGUI(QMainWindow):
         if image_to_process.width == 0 or image_to_process.height == 0:
             return
 
-        provider_data = self.combo_auto_model_EP.currentData()
+        provider_data = self.mask_tab.combo_auto_model_EP.currentData()
         self.set_loading(True, f"Processing {model_name}...")
 
         def _do_auto_work(model_manager, model_name, provider_data, img, is_2step):
@@ -3221,7 +2968,7 @@ class BackgroundRemoverGUI(QMainWindow):
 
     def toggle_paint_mode(self, enabled):
         if enabled and self.crop_mode:
-            self.btn_toggle_crop.setChecked(False)
+            self.adjust_tab.btn_toggle_crop.setChecked(False)
         
         self.paint_mode = enabled
         self.view_input.setCursor(Qt.CursorShape.CrossCursor if enabled else Qt.CursorShape.ArrowCursor)
@@ -3431,7 +3178,7 @@ class BackgroundRemoverGUI(QMainWindow):
                     'mask': mask_patch_np,
                     'x_off': x1, 'y_off': y1,
                     'algorithm': algorithm_name,
-                    'provider_data': self.combo_auto_model_EP.currentData(),
+                    'provider_data': self.mask_tab.combo_auto_model_EP.currentData(),
                     'longest_edge_limit': limit,
                     'local_stroke_np': local_stroke_np, # Pass this to the handler
                     'gf_radius': gf_radius,
