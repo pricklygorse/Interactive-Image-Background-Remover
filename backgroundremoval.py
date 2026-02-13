@@ -36,6 +36,9 @@ import src.settings_download_manager as settings_download_manager
 from src.ui_styles import apply_theme
 from src.ui_widgets import CollapsibleFrame, SynchronisedGraphicsView, ThumbnailList, OrientationSplitter, MarchingAntsItem
 from src.ui_dialogs import InpaintingDialog
+
+from src.ui_tab_adjust import AdjustTab
+
 from src.trimap_editor import TrimapEditorDialog
 from src.utils import pil2pixmap, numpy_to_pixmap, apply_tone_sharpness, generate_drop_shadow, \
     generate_blurred_background, sanitise_filename_for_windows, get_current_crop_bbox, generate_trimap_from_mask, clean_alpha, generate_alpha_map, \
@@ -119,7 +122,6 @@ class BackgroundRemoverGUI(QMainWindow):
         self.adjust_timer = QTimer()
         self.adjust_timer.setSingleShot(True)
         self.adjust_timer.setInterval(10) # Low interval for near real-time feel
-        self.adjust_timer.timeout.connect(self.apply_adjustments)
 
         # New timer specifically for the output view
         # output view image rendering can be slow, so it doesnt need to update as frequently
@@ -230,7 +232,11 @@ class BackgroundRemoverGUI(QMainWindow):
 
         self.tabs = QTabWidget()
 
-        self.tabs.addTab(self.create_adjust_tab(), "Adjust")
+        #self.tabs.addTab(self.create_adjust_tab(), "Adjust")
+        
+        self.adjust_tab = AdjustTab(self)
+        self.tabs.addTab(self.adjust_tab, "Adjust")
+
         self.tabs.addTab(self.create_ai_mask_tab(), "Mask Gen.")
         self.tabs.addTab(self.create_refine_tab(), "Refine")
         self.tabs.addTab(self.create_export_tab(), "Export")
@@ -659,118 +665,10 @@ class BackgroundRemoverGUI(QMainWindow):
             "trim": self.chk_export_trim.isChecked()
         }
 
-    def create_adjust_tab(self):
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        container = QWidget()
-        layout = QVBoxLayout(container)
-        layout.setSpacing(0) 
-
-        lbl_desc = QLabel("Colour and tone adjustments applied to the image before mask generation.")
-        lbl_desc.setWordWrap(True)
-        layout.addWidget(lbl_desc)
-
-        layout.addSpacing(10)
-
-
-        self.adj_sliders = {}
-        self.adj_slider_params = {
-            # (Min, Max, Default)
-            'highlight': (10, 200, 100), 
-            'midtone': (10, 200, 100), 
-            'shadow': (10, 300, 100),
-            'tone_curve': (1, 50, 10),     
-            'brightness': (10, 200, 100), 
-            'contrast': (10, 200, 100),
-            'saturation': (0, 200, 100),
-            'white_balance': (2000, 10000, 6500), 
-            'unsharp_radius': (1, 100, 1), 
-            'unsharp_amount': (0, 500, 0), 
-            'unsharp_threshold': (0, 255, 0)
-        }
-
-        for param, (min_v, max_v, default) in self.adj_slider_params.items():
-            lbl = QLabel(param.replace("_", " ").capitalize())
-            layout.addWidget(lbl)
-
-            h_row_layout = QHBoxLayout()
-            slider = QSlider(Qt.Orientation.Horizontal)
-            slider.setRange(min_v, max_v)
-            slider.setValue(default)
-            
-            val_display = QLabel(str(default))
-            val_display.setFixedWidth(40)
-            val_display.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-            
-            slider.valueChanged.connect(lambda v, l=val_display: l.setText(str(v)))
-            slider.valueChanged.connect(lambda _: self.adjust_timer.start())
-            
-            h_row_layout.addWidget(slider)
-            h_row_layout.addWidget(val_display)
-            layout.addLayout(h_row_layout)
-            self.adj_sliders[param] = slider
-
-        layout.addSpacing(10)
-        btn_reset_adj = QPushButton("Reset Adjustments")
-        btn_reset_adj.clicked.connect(self.reset_adjustment_sliders)
-        layout.addWidget(btn_reset_adj)
-
-        layout.addSpacing(10)
-
-        rot_layout = QHBoxLayout()
-        btn_rot_l = QPushButton("Rotate Left ↶")
-        btn_rot_l.setToolTip("This will reset Undo history")
-        btn_rot_l.clicked.connect(lambda: self.rotate_image(direction="left"))
-        
-        btn_rot_r = QPushButton("Rotate Right ↷")
-        btn_rot_r.setToolTip("This will reset Undo history")
-        btn_rot_r.clicked.connect(lambda: self.rotate_image(direction="right"))
-        
-        rot_layout.addWidget(btn_rot_l)
-        rot_layout.addWidget(btn_rot_r)
-        layout.addLayout(rot_layout)
-
-        layout.addSpacing(10)
-
-        lbl_crop_warning = QLabel("<i>Inpainting or Cropping are destructive actions and cannot be reverted without re-opening the image.</i>")
-        lbl_crop_warning.setWordWrap(True)
-        lbl_crop_warning.setStyleSheet("color: #888; margin-bottom: 5px;")
-        layout.addWidget(lbl_crop_warning)
-        
-        # Inpainting Section
-        self.btn_inpaint = QPushButton("Inpaint / Remove Object")
-        self.btn_inpaint.setToolTip("Opens the Inpainting dialog. Allows you to draw over an object to remove it.\n"
-                                    "Requires the LaMa model (Download via Settings).")
-        self.btn_inpaint.clicked.connect(self.open_inpainting_dialog)
-        layout.addWidget(self.btn_inpaint)
-
-        layout.addSpacing(10)
-
-        crop_layout = QHBoxLayout()
-        
-        self.btn_toggle_crop = QPushButton("Crop Image ✂")
-        self.btn_toggle_crop.setCheckable(True)
-        self.btn_toggle_crop.toggled.connect(self.toggle_crop_mode)
-        self.btn_toggle_crop.setToolTip("Draw a box on the input view to crop the original image.\n"
-                                        "Note: This is a destructive action and will clear undo history.")
-        
-        self.btn_apply_crop = QPushButton("Apply Crop")
-        self.btn_apply_crop.clicked.connect(self.apply_crop)
-        self.btn_apply_crop.setEnabled(False) # Disabled until mode is active
-        self.btn_apply_crop.setStyleSheet("background-color: #2e7d32; color: white;") # Green to signify action
-        self.btn_apply_crop.hide()
-
-        crop_layout.addWidget(self.btn_toggle_crop)
-        crop_layout.addWidget(self.btn_apply_crop)
-        
-        layout.addLayout(crop_layout)
-
-        
-
-        layout.addStretch()
-        scroll.setWidget(container)
-        return scroll
     
+
+    # Methods related to adjust_tab
+
     def reset_adjustment_sliders(self):
         self.adjust_timer.stop()
         self.output_refresh_timer.stop() 
@@ -786,14 +684,12 @@ class BackgroundRemoverGUI(QMainWindow):
         
         self.apply_adjustments()
 
-    def get_adjustment_params(self):
-        return {param: slider.value() for param, slider in self.adj_sliders.items()}
 
     def apply_adjustments(self):
         if not self.img_session or self.img_session.source_image_np is None:
             return
 
-        params = self.get_adjustment_params()
+        params = self.adjust_tab.get_adjustment_params()
         
         processed_np = apply_tone_sharpness(self.img_session.source_image_np, params)
 
@@ -808,34 +704,7 @@ class BackgroundRemoverGUI(QMainWindow):
         # Delay the output view because some operations in render_output_image are slow
         self.output_refresh_timer.start()
 
-    def toggle_crop_mode(self, checked):
-        self.crop_mode = checked
-        
-        if checked:
-            self.view_input.setCursor(Qt.CursorShape.CrossCursor)
-            self.btn_toggle_crop.setText("Cancel Crop")
-            self.status_label.setText("CROP MODE | Drag to draw crop area | Click 'Apply Crop' to finish")
-            self.btn_apply_crop.show()
-            self.btn_apply_crop.setEnabled(True)
-            self.act_paint_mode.setEnabled(False)
-            if self.act_paint_mode.isChecked():
-                self.act_paint_mode.setChecked(False)
-            
-            # Disable SAM interactions visually
-            self.combo_sam.setEnabled(False)
-            
-        else:
-            self.btn_toggle_crop.setText("Crop Image ✂")
-            self.view_input.setCursor(Qt.CursorShape.ArrowCursor)
-            self.status_label.setText("Ready")
-            self.btn_apply_crop.hide()
-            self.btn_apply_crop.setEnabled(False)
-            self.act_paint_mode.setEnabled(True)
-            self.combo_sam.setEnabled(True)
-            
-            # Hide the rect in the view
-            if hasattr(self.view_input, 'crop_rect_item'):
-                self.view_input.crop_rect_item.hide()
+    
 
     def apply_crop(self):
         if not self.crop_mode or not self.img_session: return
@@ -871,7 +740,7 @@ class BackgroundRemoverGUI(QMainWindow):
         self.apply_adjustments()
         
         # Reset UI
-        self.btn_toggle_crop.setChecked(False) # This triggers toggle_crop_mode(False)
+        self.adjust_tab.btn_toggle_crop.setChecked(False) # This triggers toggle_crop_mode(False)
         self.update_output_preview()
         self.clear_overlay() # Clears points from screen
 
@@ -938,7 +807,7 @@ class BackgroundRemoverGUI(QMainWindow):
         
         # Apply current adjustments to get the image as seen on screen
         if self.img_session.source_image_np is not None:
-             params = self.get_adjustment_params()
+             params = self.adjust_tab.get_adjustment_params()
              processed_np = apply_tone_sharpness(self.img_session.source_image_np, params)
              img_to_edit = Image.fromarray(cv2.cvtColor(processed_np, cv2.COLOR_BGRA2RGBA))
         else:
@@ -966,6 +835,10 @@ class BackgroundRemoverGUI(QMainWindow):
                 self.update_output_preview()
                 
                 self.status_label.setText("Inpainting applied. Image updated.")
+
+
+    # End adjust_tab related methods
+    
 
     def create_ai_mask_tab(self):
         scroll = QScrollArea()
@@ -2400,7 +2273,7 @@ class BackgroundRemoverGUI(QMainWindow):
         try:
             self.img_session = ImageSession(path).load()
             
-            self.reset_adjustment_sliders()
+            self.adjust_tab.reset_adjustment_sliders()
             self.update_input_view()
             self.update_output_preview()
             # self.clear_overlay()
@@ -2474,7 +2347,7 @@ class BackgroundRemoverGUI(QMainWindow):
             self.img_session = ImageSession("Clipboard").load()
             self.image_paths = ["Clipboard"]
             
-            self.reset_adjustment_sliders()
+            self.adjust_tab.reset_adjustment_sliders()
             
             self.update_input_view()
             self.update_output_preview()
@@ -3205,7 +3078,7 @@ class BackgroundRemoverGUI(QMainWindow):
         foreground_layer = None
         
         # Check if we need to update the cached cutout
-        adj_params = self.get_adjustment_params()
+        adj_params = self.adjust_tab.get_adjustment_params()
         
         if render_settings["foreground_correction"]["enabled"]:
             current_state_hash = (hash(current_mask.tobytes()), adj_params, render_settings['foreground_correction'])
