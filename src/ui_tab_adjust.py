@@ -1,23 +1,17 @@
-from PyQt6.QtWidgets import QWidget, QVBoxLayout, QLabel, QSlider, QScrollArea, QPushButton, QHBoxLayout, QMessageBox, QApplication
+from PyQt6.QtCore import Qt, QTimer
+from PyQt6.QtWidgets import QWidget, QVBoxLayout, QLabel, QSlider, QScrollArea, QPushButton, QHBoxLayout
 
-from PyQt6.QtCore import Qt
-
-
-import cv2
-from src.utils import apply_tone_sharpness
-from src.ui_dialogs import InpaintingDialog
-from src.constants import PAINT_BRUSH_SCREEN_SIZE
-
-from PIL import Image
-import numpy as np
-import os
+from typing import TYPE_CHECKING
+if TYPE_CHECKING:
+    from backgroundremoval import BackgroundRemoverGUI
 
 
 class AdjustTab(QScrollArea):
-    def __init__(self, controller):
+    def __init__(self, controller: 'BackgroundRemoverGUI'):
         super().__init__()
         self.controller = controller
         self.setWidgetResizable(True)
+        
         
         self.adj_sliders = {}
         self.adj_slider_params = {
@@ -34,6 +28,18 @@ class AdjustTab(QScrollArea):
             'unsharp_amount': (0, 500, 0), 
             'unsharp_threshold': (0, 255, 0)
         }
+
+        # Timer for debouncing adjustment updates
+        self.adjust_timer = QTimer()
+        self.adjust_timer.setSingleShot(True)
+        self.adjust_timer.setInterval(10)  # Low interval for near real-time feel
+
+        # output view image rendering can be slow, so it doesnt need to update as frequently
+        self.output_refresh_timer = QTimer()
+        self.output_refresh_timer.setSingleShot(True)
+        self.output_refresh_timer.setInterval(300)
+        self.output_refresh_timer.timeout.connect(self.controller.update_output_preview)
+        self.output_refresh_timer.timeout.connect(self.controller.trigger_refinement_update)
         
         self.init_ui()
 
@@ -66,7 +72,7 @@ class AdjustTab(QScrollArea):
             val_display.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
             
             slider.valueChanged.connect(lambda v, l=val_display: l.setText(str(v)))
-            slider.valueChanged.connect(lambda _: self.controller.adjust_timer.start())
+            slider.valueChanged.connect(lambda _: self.adjust_timer.start())
             
             h_row_layout.addWidget(slider)
             h_row_layout.addWidget(val_display)
@@ -132,7 +138,7 @@ class AdjustTab(QScrollArea):
 
         layout.addStretch()
 
-        self.controller.adjust_timer.timeout.connect(self.controller.apply_adjustments)
+        self.adjust_timer.timeout.connect(self.controller.apply_adjustments)
 
 
 
@@ -142,8 +148,8 @@ class AdjustTab(QScrollArea):
 
 
     def reset_adjustment_sliders(self):
-        self.controller.adjust_timer.stop()
-        self.controller.output_refresh_timer.stop() 
+        self.adjust_timer.stop()
+        self.output_refresh_timer.stop()
 
         for param, (_, _, default) in self.adj_slider_params.items():
             self.adj_sliders[param].blockSignals(True)
@@ -173,7 +179,7 @@ class AdjustTab(QScrollArea):
                 self.controller.act_paint_mode.setChecked(False)
             
             # Disable SAM interactions visually
-            self.controller.combo_sam.setEnabled(False)
+            self.controller.mask_tab.combo_sam.setEnabled(False)
             
         else:
             self.btn_toggle_crop.setText("Crop Image ✂")
@@ -182,7 +188,7 @@ class AdjustTab(QScrollArea):
             self.btn_apply_crop.hide()
             self.btn_apply_crop.setEnabled(False)
             self.controller.act_paint_mode.setEnabled(True)
-            self.controller.combo_sam.setEnabled(True)
+            self.controller.mask_tab.combo_sam.setEnabled(True)
             
             # Hide the rect in the view
             if hasattr(self.controller.view_input, 'crop_rect_item'):

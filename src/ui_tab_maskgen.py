@@ -1,14 +1,17 @@
-from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, 
-                             QComboBox, QCheckBox, QScrollArea, QSpacerItem, 
-                             QSizePolicy, QRadioButton, QButtonGroup, QFrame)
-from PyQt6.QtCore import Qt
-from src.ui_widgets import CollapsibleFrame
+from typing import TYPE_CHECKING
+
+from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
+                             QComboBox, QCheckBox, QScrollArea, QSpacerItem,
+                             QSizePolicy, QRadioButton, QButtonGroup)
+
 from src.model_manager import ModelManager
+from src.ui_widgets import CollapsibleFrame
 
-
+if TYPE_CHECKING:
+    from backgroundremoval import BackgroundRemoverGUI
 
 class MaskGenTab(QScrollArea):
-    def __init__(self, controller):
+    def __init__(self,  controller: 'BackgroundRemoverGUI'):
         super().__init__()
         self.controller = controller
         self.setWidgetResizable(True)

@@ -1,15 +1,31 @@
-from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, 
-                             QComboBox, QCheckBox, QScrollArea, QSpacerItem, QSlider,
-                             QSizePolicy, QRadioButton, QButtonGroup, QFrame)
-from PyQt6.QtCore import Qt, QTimer
-
 import math
+from typing import TYPE_CHECKING
+
+from PyQt6.QtCore import Qt, QTimer
+from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
+                             QComboBox, QCheckBox, QScrollArea, QSlider,
+                             QRadioButton, QButtonGroup, QFrame)
+
+if TYPE_CHECKING:
+    from backgroundremoval import BackgroundRemoverGUI
 
 class RefineTab(QScrollArea):
-    def __init__(self, controller):
+    def __init__(self,  controller: 'BackgroundRemoverGUI'):
         super().__init__()
         self.controller = controller
         self.setWidgetResizable(True)
+
+        self.trimap_timer = QTimer()
+        self.trimap_timer.setSingleShot(True)
+        self.trimap_timer.setInterval(100) 
+        self.trimap_timer.timeout.connect(self.controller.update_trimap_preview)
+
+        self.refinement_timer = QTimer()
+        self.refinement_timer.setSingleShot(True)
+        self.refinement_timer.setInterval(500) # 500ms delay to prevent spamming ONNX models
+        self.refinement_timer.timeout.connect(lambda: self.controller.modify_mask())
+
+
         self.init_ui()
 
     def init_ui(self):
@@ -256,7 +272,7 @@ class RefineTab(QScrollArea):
             slider.setRange(min_v, max_v)
             slider.setValue(def_v)
             slider.valueChanged.connect(lambda val, l=label, txt=lbl_text: (l.setText(f"{txt}: {val}"), 
-                                                                            self.controller.update_trimap_preview_throttled(),
+                                                                            self.trimap_timer.start(),
                                                                             self.controller.trigger_refinement_update()))
             h_layout.addWidget(label)
             h_layout.addWidget(slider)
@@ -293,3 +309,5 @@ class RefineTab(QScrollArea):
         layout.addStretch()
 
         self.setWidget(container)
+
+    

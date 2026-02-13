@@ -8,25 +8,22 @@ if getattr(sys, "frozen", False):
 
 import argparse
 import os
-import math
 import numpy as np
 import cv2
-import gc
 from timeit import default_timer as timer
 #from line_profiler import profile
 
-from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
-                             QPushButton, QLabel, QComboBox, QCheckBox, QFileDialog, 
-                             QMessageBox, QGraphicsView, QGraphicsScene, QGraphicsPixmapItem, 
-                             QSlider, QFrame, QSplitter, QDialog, QScrollArea, 
-                             QGraphicsRectItem, QGraphicsEllipseItem, QGraphicsPathItem, 
-                             QTextEdit, QSizePolicy, QRadioButton, QButtonGroup, QInputDialog, 
-                             QProgressBar, QStyle, QToolBar, QTabWidget, QSpacerItem,QColorDialog)
-from PyQt6.QtCore import Qt, QTimer, QPointF, QRectF, QSettings, QPropertyAnimation, QEasingCurve, QThread, pyqtSignal, QEvent, QMimeData, QBuffer, QIODevice
+from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
+                             QPushButton, QLabel, QComboBox, QCheckBox, QFileDialog,
+                             QMessageBox, QGraphicsScene, QGraphicsPixmapItem,
+                             QSlider, QFrame, QSplitter, QDialog, QGraphicsRectItem, QGraphicsEllipseItem, QGraphicsPathItem,
+                             QTextEdit, QSizePolicy, QButtonGroup, QInputDialog,
+                             QProgressBar, QStyle, QToolBar, QTabWidget)
+from PyQt6.QtCore import Qt, QTimer, QPointF, QRectF, QSettings, QThread, pyqtSignal, QEvent, QMimeData, QBuffer, QIODevice
 from PyQt6.QtGui import (QPixmap, QImage, QColor, QPainter, QPainterPath, QPen, QBrush,
-                         QKeySequence, QShortcut, QCursor, QIcon, QPalette, QAction, QGuiApplication)
+                         QKeySequence, QShortcut, QCursor, QIcon, QAction, QGuiApplication)
 
-from PIL import Image, ImageOps, ImageDraw, ImageEnhance, ImageGrab, ImageFilter, ImageChops
+from PIL import Image, ImageFilter, ImageChops
 
 if getattr(sys, "frozen", False): 
     try: pyi_splash.update_text("Loading App Scripts") # type: ignore
@@ -34,17 +31,17 @@ if getattr(sys, "frozen", False):
 
 import src.settings_download_manager as settings_download_manager
 from src.ui_styles import apply_theme
-from src.ui_widgets import CollapsibleFrame, SynchronisedGraphicsView, ThumbnailList, OrientationSplitter, MarchingAntsItem
+from src.ui_widgets import SynchronisedGraphicsView, ThumbnailList, OrientationSplitter, MarchingAntsItem
 from src.ui_dialogs import InpaintingDialog
 
 from src.ui_tab_adjust import AdjustTab
 from src.ui_tab_maskgen import MaskGenTab
 from src.ui_tab_refine import RefineTab
+from src.ui_tab_export import ExportTab
 
 from src.trimap_editor import TrimapEditorDialog
-from src.utils import pil2pixmap, numpy_to_pixmap, apply_tone_sharpness, generate_drop_shadow, \
-    generate_blurred_background, sanitise_filename_for_windows, get_current_crop_bbox, generate_trimap_from_mask, clean_alpha, generate_alpha_map, \
-    generate_outline, generate_inner_glow, apply_subject_tint, compose_final_image, refine_mask, generate_mask_outline_path, expand_contract_mask, guided_filter
+from src.utils import pil2pixmap, numpy_to_pixmap, apply_tone_sharpness, generate_blurred_background, sanitise_filename_for_windows, get_current_crop_bbox, generate_trimap_from_mask, clean_alpha, generate_alpha_map, \
+    compose_final_image, refine_mask, generate_mask_outline_path, expand_contract_mask, guided_filter
 from src.constants import PAINT_BRUSH_SCREEN_SIZE, SOFTEN_RADIUS
 
 if getattr(sys, "frozen", False): 
@@ -116,22 +113,12 @@ class BackgroundRemoverGUI(QMainWindow):
         self.paint_mode = False
         self.crop_mode = False
         self.blur_radius = 30
-        self.outline_color = QColor(0, 0, 0)
-        self.inner_glow_color = QColor(255, 255, 255)
-        self.tint_color = QColor(255, 200, 150)
 
-        # Timer for debouncing adjustment updates
-        self.adjust_timer = QTimer()
-        self.adjust_timer.setSingleShot(True)
-        self.adjust_timer.setInterval(10) # Low interval for near real-time feel
+
+
 
         # New timer specifically for the output view
-        # output view image rendering can be slow, so it doesnt need to update as frequently
-        self.output_refresh_timer = QTimer()
-        self.output_refresh_timer.setSingleShot(True)
-        self.output_refresh_timer.setInterval(300)
-        self.output_refresh_timer.timeout.connect(self.update_output_preview)
-        self.output_refresh_timer.timeout.connect(self.trigger_refinement_update)
+
 
         # Marching ants for the temporary mask bounding box
         self.marching_ants_timer = QTimer()
@@ -155,14 +142,14 @@ class BackgroundRemoverGUI(QMainWindow):
         if cli_args.colour_correction:
                 self.refine_tab.chk_estimate_foreground.setChecked(True)
         if cli_args.shadow:
-                self.chk_shadow.setChecked(True)
+                self.export_tab.chk_shadow.setChecked(True)
 
         if cli_args.bg_colour:
             # Search for the color in the combo box (case-insensitive)
-            index = self.combo_bg_color.findText(cli_args.bg_colour, 
+            index = self.export_tab.combo_bg_color.findText(cli_args.bg_colour,
                                                 Qt.MatchFlag.MatchFixedString)
             if index >= 0:
-                self.combo_bg_color.setCurrentIndex(index)
+                self.export_tab.combo_bg_color.setCurrentIndex(index)
             else:
                 print(f"Warning: Background color '{cli_args.bg_colour}' not found in options.")
 
@@ -170,20 +157,11 @@ class BackgroundRemoverGUI(QMainWindow):
 
         # Debounce the sliders for heavy computation options
 
-        self.shadow_timer = QTimer()
-        self.shadow_timer.setSingleShot(True)
-        self.shadow_timer.setInterval(50) # Wait 50ms after last movement
-        self.shadow_timer.timeout.connect(self.update_output_preview)
+        
 
-        self.trimap_timer = QTimer()
-        self.trimap_timer.setSingleShot(True)
-        self.trimap_timer.setInterval(100) 
-        self.trimap_timer.timeout.connect(self.update_trimap_preview)
+        
 
-        self.refinement_timer = QTimer()
-        self.refinement_timer.setSingleShot(True)
-        self.refinement_timer.setInterval(500) # 500ms delay to prevent spamming ONNX models
-        self.refinement_timer.timeout.connect(lambda: self.modify_mask())
+        
 
         # Let the UI build before loading image, so the correct display zoom is shown
         # 50ms seems long enough on my PC
@@ -254,7 +232,8 @@ class BackgroundRemoverGUI(QMainWindow):
         self.tabs.addTab(self.refine_tab, "Refine")
         # matting models populated at end of ui construction due to a few comboboxes in the app
 
-        self.tabs.addTab(self.create_export_tab(), "Export")
+        self.export_tab = ExportTab(self)
+        self.tabs.addTab(self.export_tab, "Export")
 
         self.tabs.setCurrentIndex(1)
 
@@ -604,7 +583,7 @@ class BackgroundRemoverGUI(QMainWindow):
         gen_settings = self.get_generation_settings()
         render_settings = self.get_render_settings()
         adj_settings = self.adjust_tab.get_adjustment_params()
-        export_settings = self.get_export_settings()
+        export_settings = self.export_tab.get_export_settings()
         
         dlg = BatchProcessingDialog(self, self.image_paths, self.model_manager,
                                     gen_settings, render_settings, adj_settings, export_settings)
@@ -643,65 +622,43 @@ class BackgroundRemoverGUI(QMainWindow):
                 "radius": int(self.settings.value("fg_correction_radius", 100))
             },
             "tint": {
-                "enabled": self.chk_tint.isChecked(),
-                "color": (self.tint_color.red(), self.tint_color.green(), self.tint_color.blue()),
-                "amount": self.sl_tint_amt.value() / 100.0
+                "enabled": self.export_tab.chk_tint.isChecked(),
+                "color": (self.export_tab.tint_color.red(), self.export_tab.tint_color.green(), self.export_tab.tint_color.blue()),
+                "amount": self.export_tab.sl_tint_amt.value() / 100.0
             },
             "outline": {
-                "enabled": self.chk_outline.isChecked(),
-                "size": self.sl_outline_size.value(),
-                "color": (self.outline_color.red(), self.outline_color.green(), self.outline_color.blue()),
-                "threshold": self.sl_outline_thresh.value(),
-                "opacity": self.sl_outline_op.value()
+                "enabled": self.export_tab.chk_outline.isChecked(),
+                "size": self.export_tab.sl_outline_size.value(),
+                "color": (self.export_tab.outline_color.red(), self.export_tab.outline_color.green(), self.export_tab.outline_color.blue()),
+                "threshold": self.export_tab.sl_outline_thresh.value(),
+                "opacity": self.export_tab.sl_outline_op.value()
             },
             "shadow": {
-                "enabled": self.chk_shadow.isChecked(),
-                "opacity": self.sl_s_op.value(),
-                "radius": self.sl_s_r.value(),
-                "x": self.sl_s_x.value(),
-                "y": self.sl_s_y.value()
+                "enabled": self.export_tab.chk_shadow.isChecked(),
+                "opacity": self.export_tab.sl_s_op.value(),
+                "radius": self.export_tab.sl_s_r.value(),
+                "x": self.export_tab.sl_s_x.value(),
+                "y": self.export_tab.sl_s_y.value()
             },
             "background": {
-                "type": self.combo_bg_color.currentText(),
+                "type": self.export_tab.combo_bg_color.currentText(),
                 "blur_radius": getattr(self, 'blur_radius', 30),
-                "color": self.combo_bg_color.currentText()
+                "color": self.export_tab.combo_bg_color.currentText()
             },
             "inner_glow": {
-                "enabled": self.chk_inner_glow.isChecked(),
-                "size": self.sl_ig_size.value(),
-                "color": (self.inner_glow_color.red(), self.inner_glow_color.green(), self.inner_glow_color.blue()),
-                "threshold": self.sl_ig_thresh.value(),
-                "opacity": self.sl_ig_op.value()
+                "enabled": self.export_tab.chk_inner_glow.isChecked(),
+                "size": self.export_tab.sl_ig_size.value(),
+                "color": (self.export_tab.inner_glow_color.red(), self.export_tab.inner_glow_color.green(), self.export_tab.inner_glow_color.blue()),
+                "threshold": self.export_tab.sl_ig_thresh.value(),
+                "opacity": self.export_tab.sl_ig_op.value()
             }
-        }
-
-    def get_export_settings(self):
-        return {
-            "format": self.combo_export_fmt.currentData(),
-            "quality": self.sl_export_quality.value(),
-            "save_mask": self.chk_export_mask.isChecked(),
-            "trim": self.chk_export_trim.isChecked()
         }
 
     
 
+    
+
     # Methods related to adjust_tab
-
-    def reset_adjustment_sliders(self):
-        self.adjust_timer.stop()
-        self.output_refresh_timer.stop() 
-
-        for param, (_, _, default) in self.adjust_tab.adj_slider_params.items():
-            self.adjust_tab.adj_sliders[param].blockSignals(True)
-            self.adjust_tab.adj_sliders[param].setValue(default)
-            self.adjust_tab.adj_sliders[param].blockSignals(False)
-        
-        # Update the labels and the image
-        for slider in self.adjust_tab.adj_sliders.values():
-            slider.valueChanged.emit(slider.value())
-        
-        self.apply_adjustments()
-
 
     def apply_adjustments(self):
         if not self.img_session or self.img_session.source_image_np is None:
@@ -720,7 +677,7 @@ class BackgroundRemoverGUI(QMainWindow):
         self.update_input_view(reset_zoom=False)
         
         # Delay the output view because some operations in render_output_image are slow
-        self.output_refresh_timer.start()
+        self.adjust_tab.output_refresh_timer.start()
 
     
 
@@ -848,7 +805,7 @@ class BackgroundRemoverGUI(QMainWindow):
                 
                 # Since we applied adjustments, reset here
                 # If change to send actual original image, don't reset
-                self.reset_adjustment_sliders()
+                self.adjust_tab.reset_adjustment_sliders()
                 
                 self.update_output_preview()
                 
@@ -934,301 +891,15 @@ class BackgroundRemoverGUI(QMainWindow):
     # end mask_tab
 
     # Refinement tab methods
-    
+    # also used by adjust_tab so is not part of refine_tab
+    # prob needs fixing...
     def trigger_refinement_update(self):
         """Debounced trigger for updating the live preview mask."""
         if self.img_session.model_output_mask and not self.is_busy():
-            self.refinement_timer.start()
+            self.refine_tab.refinement_timer.start()
 
     # end refine tab methods
 
-    def create_export_tab(self):
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        container = QWidget()
-        layout = QVBoxLayout(container)
-
-
-        lbl_options = QLabel("<b>OUTPUT STYLING</b>")
-        layout.addWidget(lbl_options)
-
-        bg_layout = QHBoxLayout()
-        bg_label = QLabel("Background:")
-        bg_label.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Preferred)
-        bg_layout.addWidget(bg_label)
-        self.combo_bg_color = QComboBox()
-        self.combo_bg_color.addItems(["Transparent", "White", "Black", "Red", "Blue", 
-                  "Orange", "Yellow", "Green", "Grey", 
-                  "Lightgrey", "Brown", "Blurred (Slow)", "Original Image"])
-        self.combo_bg_color.currentTextChanged.connect(self.handle_bg_change)
-        bg_layout.addWidget(self.combo_bg_color)
-        layout.addLayout(bg_layout)
-
-
-        self.chk_shadow = QCheckBox("Drop Shadow")
-        self.chk_shadow.toggled.connect(self.toggle_shadow_options)
-        layout.addWidget(self.chk_shadow)
-
-        self.shadow_frame = QFrame()
-        sf_layout = QVBoxLayout(self.shadow_frame)
-        sf_layout.setContentsMargins(0,0,0,0)
-        
-        def make_slider_row(lbl_text, min_v, max_v, def_v):
-            h_layout = QHBoxLayout()
-            
-            l = QLabel(f"{lbl_text}: {def_v}")
-            l.setSizePolicy(QSizePolicy.Policy.MinimumExpanding, QSizePolicy.Policy.Preferred)
-            l.setMinimumWidth(80)
-            
-            s = QSlider(Qt.Orientation.Horizontal)
-            s.setRange(min_v, max_v)
-            s.setValue(def_v)
-            s.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-            
-            s.valueChanged.connect(lambda v: (l.setText(f"{lbl_text}: {v}"), self.shadow_timer.start()))
-            
-            h_layout.addWidget(l)
-            h_layout.addWidget(s)
-            
-            return l, s, h_layout
-
-        self.lbl_s_op, self.sl_s_op, h_op_layout = make_slider_row("Opacity", 0, 255, 128)
-        self.lbl_s_x, self.sl_s_x, h_x_layout = make_slider_row("X Offset", -100, 100, 30)
-        self.lbl_s_y, self.sl_s_y, h_y_layout = make_slider_row("Y Offset", -100, 100, 30)
-        self.lbl_s_r, self.sl_s_r, h_r_layout = make_slider_row("Blur Rad", 1, 200, 10)
-        
-        sf_layout.addLayout(h_op_layout)
-        sf_layout.addLayout(h_x_layout)
-        sf_layout.addLayout(h_y_layout)
-        sf_layout.addLayout(h_r_layout)
-            
-        layout.addWidget(self.shadow_frame)
-        self.shadow_frame.hide()
-
-        #layout.addSpacing(10)
-
-        # Outline around mask
-        self.chk_outline = QCheckBox("Outline Cutout")
-        self.chk_outline.toggled.connect(self.toggle_outline_options)
-        layout.addWidget(self.chk_outline)
-
-        self.outline_frame = QFrame()
-        of_layout = QVBoxLayout(self.outline_frame)
-        of_layout.setContentsMargins(0, 0, 0, 0)
-        
-        # Outline Size Slider
-        self.lbl_outline_size, self.sl_outline_size, h_os_layout = make_slider_row("Size", 1, 100, 5)
-        self.sl_outline_size.valueChanged.connect(lambda: self.shadow_timer.start())
-        of_layout.addLayout(h_os_layout)
-
-        # Outline Threshold Slider
-        self.lbl_outline_thresh, self.sl_outline_thresh, h_ot_layout = make_slider_row("Threshold", 1, 254, 128)
-        self.sl_outline_thresh.setToolTip("Lower values include more of the semi-transparent edges in the outline base.")
-        self.sl_outline_thresh.valueChanged.connect(lambda: self.shadow_timer.start())
-        of_layout.addLayout(h_ot_layout)
-
-        # Outline Opacity Slider
-        self.lbl_outline_op, self.sl_outline_op, h_oop_layout = make_slider_row("Opacity", 0, 255, 255)
-        self.sl_outline_op.valueChanged.connect(lambda: self.shadow_timer.start())
-        of_layout.addLayout(h_oop_layout)
-
-        # Outline Colour Button
-        color_layout = QHBoxLayout()
-        color_layout.addWidget(QLabel("Colour:"))
-        self.btn_outline_color = QPushButton()
-        self.btn_outline_color.setToolTip("Select the outline colour")
-        self.btn_outline_color.clicked.connect(self.pick_outline_color)
-        self.update_outline_color_button() 
-        color_layout.addWidget(self.btn_outline_color)
-        color_layout.addStretch()
-        of_layout.addLayout(color_layout)
-
-        layout.addWidget(self.outline_frame)
-        self.outline_frame.hide()
-
-        #layout.addStretch()
-
-        # Inner Glow
-        self.chk_inner_glow = QCheckBox("Inner Glow (Edge Light)")
-        self.chk_inner_glow.toggled.connect(self.toggle_inner_glow_options)
-        layout.addWidget(self.chk_inner_glow)
-
-        self.inner_glow_frame = QFrame()
-        ig_layout = QVBoxLayout(self.inner_glow_frame)
-        ig_layout.setContentsMargins(0, 0, 0, 0)
-
-        self.lbl_ig_size, self.sl_ig_size, h_ig_size = make_slider_row("Size", 1, 100, 10)
-        self.sl_ig_size.valueChanged.connect(lambda: self.shadow_timer.start())
-        ig_layout.addLayout(h_ig_size)
-
-        self.lbl_ig_op, self.sl_ig_op, h_ig_op = make_slider_row("Opacity", 0, 255, 150)
-        self.sl_ig_op.valueChanged.connect(lambda: self.shadow_timer.start())
-        ig_layout.addLayout(h_ig_op)
-
-        # New: Inner Glow Threshold Slider
-        self.lbl_ig_thresh, self.sl_ig_thresh, h_ig_thresh = make_slider_row("Threshold", 1, 254, 128)
-        self.sl_ig_thresh.setToolTip("Controls how far into the semi-transparency the glow starts.")
-        self.sl_ig_thresh.valueChanged.connect(lambda: self.shadow_timer.start())
-        ig_layout.addLayout(h_ig_thresh)
-
-        # Color Picker for Inner Glow
-        ig_col_layout = QHBoxLayout()
-        ig_col_layout.addWidget(QLabel("Colour:"))
-        self.btn_ig_color = QPushButton()
-        self.btn_ig_color.clicked.connect(self.pick_inner_glow_color)
-        self.update_inner_glow_color_button()
-        ig_col_layout.addWidget(self.btn_ig_color)
-        ig_col_layout.addStretch()
-        ig_layout.addLayout(ig_col_layout)
-
-        layout.addWidget(self.inner_glow_frame)
-        self.inner_glow_frame.hide()
-
-        # --- Subject Tint ---
-        self.chk_tint = QCheckBox("Subject Colour Tint")
-        self.chk_tint.toggled.connect(self.toggle_tint_options)
-        layout.addWidget(self.chk_tint)
-
-        self.tint_frame = QFrame()
-        t_layout = QVBoxLayout(self.tint_frame)
-        t_layout.setContentsMargins(0, 0, 0, 0)
-
-        self.lbl_tint_amt, self.sl_tint_amt, h_t_amt = make_slider_row("Amount", 0, 100, 20)
-        self.sl_tint_amt.valueChanged.connect(lambda: self.shadow_timer.start())
-        t_layout.addLayout(h_t_amt)
-
-        t_col_layout = QHBoxLayout()
-        t_col_layout.addWidget(QLabel("Colour:"))
-        self.btn_tint_color = QPushButton()
-        self.btn_tint_color.clicked.connect(self.pick_tint_color)
-        self.update_tint_color_button()
-        t_col_layout.addWidget(self.btn_tint_color)
-        t_col_layout.addStretch()
-        t_layout.addLayout(t_col_layout)
-
-        layout.addWidget(self.tint_frame)
-        self.tint_frame.hide()
-
-        layout.addSpacing(20)
-        layout.addWidget(QLabel("<b>EXPORT SETTINGS</b>"))
-
-        # Format Combo
-        fmt_layout = QHBoxLayout()
-        fmt_layout.addWidget(QLabel("Format:"))
-        self.combo_export_fmt = QComboBox()
-        # Mapping display name to internal format keys
-        self.combo_export_fmt.addItem("PNG (Lossless)", "png")
-        self.combo_export_fmt.addItem("WebP (Lossless)", "webp_lossless")
-        self.combo_export_fmt.addItem("WebP (Lossy)", "webp_lossy")
-        self.combo_export_fmt.addItem("JPEG (No Transparency)", "jpeg")
-        self.combo_export_fmt.currentIndexChanged.connect(self.toggle_export_quality_visibility)
-        fmt_layout.addWidget(self.combo_export_fmt)
-        layout.addLayout(fmt_layout)
-
-        # Quality Slider
-        self.export_quality_frame = QFrame()
-        q_layout = QVBoxLayout(self.export_quality_frame)
-        q_layout.setContentsMargins(0, 5, 0, 5)
-        self.lbl_export_quality = QLabel("Quality: 90")
-        self.sl_export_quality = QSlider(Qt.Orientation.Horizontal)
-        self.sl_export_quality.setRange(1, 100)
-        self.sl_export_quality.setValue(90)
-        self.sl_export_quality.valueChanged.connect(lambda v: self.lbl_export_quality.setText(f"Quality: {v}"))
-        q_layout.addWidget(self.lbl_export_quality)
-        q_layout.addWidget(self.sl_export_quality)
-        layout.addWidget(self.export_quality_frame)
-
-        # Checkboxes
-        self.chk_export_mask = QCheckBox("Save Mask (appends _mask.png)")
-        self.chk_export_mask.setChecked(self.settings.value("export_mask", False, type=bool))
-        self.chk_export_mask.toggled.connect(lambda checked: self.settings.setValue("export_mask", checked))
-        layout.addWidget(self.chk_export_mask)
-
-        self.chk_export_trim = QCheckBox("Trim Transparent Pixels (Auto-Crop)")
-        self.chk_export_trim.toggled.connect(self.update_output_preview)
-        self.chk_export_trim.setToolTip("If exporting the global mask with the image, the mask is <b>not<b> trimmed. This is to allow you to return to editing the original image.")
-        layout.addWidget(self.chk_export_trim)
-
-        # Initialize visibility
-        self.toggle_export_quality_visibility()
-
-
-
-        layout.addSpacing(40)
-        btn_qsave = QPushButton("Quick Save (JPG, White BG)"); btn_qsave.clicked.connect(lambda: self.save_image(quick_save=True))
-        layout.addWidget(btn_qsave)
-        btn_save = QPushButton("Export Final Image"); btn_save.clicked.connect(self.save_image)
-        layout.addWidget(btn_save)
-        btn_save_clp = QPushButton("Save to Clipboard"); btn_save_clp.clicked.connect(lambda: self.save_image(clipboard=True))
-        layout.addWidget(btn_save_clp)
-
-        
-
-        layout.addStretch()
-        scroll.setWidget(container)
-        return scroll
-    
-    def toggle_export_quality_visibility(self):
-        """Enables or disables the quality slider based on the selected file format."""
-        fmt = self.combo_export_fmt.currentData()
-        is_lossy = fmt in ["webp_lossy", "jpeg"]
-        self.export_quality_frame.setEnabled(is_lossy)
-
-    def toggle_shadow_options(self, checked):
-        if checked: self.shadow_frame.show()
-        else: self.shadow_frame.hide()
-        self.update_output_preview()
-
-    def toggle_outline_options(self, checked):
-        self.outline_frame.setVisible(checked)
-        self.update_output_preview()
-
-    def pick_outline_color(self):
-        color = QColorDialog.getColor(self.outline_color, self, "Select Outline Colour")
-        if color.isValid():
-            self.outline_color = color
-            self.update_outline_color_button()
-            self.update_output_preview()
-
-    def update_outline_color_button(self):
-        self.btn_outline_color.setText(self.outline_color.name())
-        # Set text colour based on luminance for readability
-        text_color = "white" if self.outline_color.lightnessF() < 0.5 else "black"
-        self.btn_outline_color.setStyleSheet(
-            f"background-color: {self.outline_color.name()}; color: {text_color};"
-        )
-
-    def toggle_inner_glow_options(self, checked):
-        self.inner_glow_frame.setVisible(checked)
-        self.update_output_preview()
-
-    def pick_inner_glow_color(self):
-        color = QColorDialog.getColor(self.inner_glow_color, self, "Inner Glow Color")
-        if color.isValid():
-            self.inner_glow_color = color
-            self.update_inner_glow_color_button()
-            self.update_output_preview()
-
-    def update_inner_glow_color_button(self):
-        text_color = "white" if self.inner_glow_color.lightnessF() < 0.5 else "black"
-        self.btn_ig_color.setStyleSheet(f"background-color: {self.inner_glow_color.name()}; color: {text_color};")
-        self.btn_ig_color.setText(self.inner_glow_color.name())
-
-    def toggle_tint_options(self, checked):
-        self.tint_frame.setVisible(checked)
-        self.update_output_preview()
-
-    def pick_tint_color(self):
-        color = QColorDialog.getColor(self.tint_color, self, "Tint Color")
-        if color.isValid():
-            self.tint_color = color
-            self.update_tint_color_button()
-            self.update_output_preview()
-
-    def update_tint_color_button(self):
-        text_color = "white" if self.tint_color.lightnessF() < 0.5 else "black"
-        self.btn_tint_color.setStyleSheet(f"background-color: {self.tint_color.name()}; color: {text_color};")
-        self.btn_tint_color.setText(self.tint_color.name())
 
     def create_mask_action_panel(self):
         self.mask_action_panel = QFrame()
@@ -2113,10 +1784,6 @@ class BackgroundRemoverGUI(QMainWindow):
             msg_box.exec()
             return
         
-        # clear any previous mask or sam points
-        # ideally would be after inference, but on_inference_finished is shared by sam and auto models
-        # self.clear_overlay()
-
         use_2step = self.mask_tab.chk_2step_auto.isChecked()
         
         if use_2step:
@@ -2388,10 +2055,6 @@ class BackgroundRemoverGUI(QMainWindow):
             self.status_label.setText("Custom trimap updated.")
         self.update_trimap_preview()
 
-    def update_trimap_preview_throttled(self):
-        """Starts a timer to update the trimap preview, preventing too many updates."""
-        self.trimap_timer.start()
-    
     def handle_alpha_matting_toggle(self, checked):
         """Manages UI state when the main Alpha Matting checkbox is toggled."""
         self.refine_tab.alpha_matting_frame.setVisible(checked)
@@ -2472,8 +2135,6 @@ class BackgroundRemoverGUI(QMainWindow):
                 user_trimap_np = np.array(self.img_session.user_trimap)
 
 
-
-
         msg = " Alpha matting can take a while" if self.refine_tab.chk_alpha_matting.isChecked() else ""
         self.set_loading(True, "Refining mask..." + msg)
         
@@ -2516,11 +2177,6 @@ class BackgroundRemoverGUI(QMainWindow):
         self.btn_add.setEnabled(has_selection)
         self.btn_sub.setEnabled(has_selection)
     
-
-    def toggle_shadow_options(self, checked):
-        if checked: self.shadow_frame.show()
-        else: self.shadow_frame.hide()
-        self.update_output_preview()
 
     
 
@@ -2634,11 +2290,11 @@ class BackgroundRemoverGUI(QMainWindow):
             self.marching_ants_timer.stop()
 
         # Update the Auto-Trim visual overlay
-        if self.chk_export_trim.isChecked() and not self.chk_show_mask.isChecked():
-            bbox = get_current_crop_bbox(self.img_session.composite_mask, self.chk_shadow.isChecked(),
-                                         self.sl_s_x.value(),
-                                         self.sl_s_y.value(),
-                                         self.sl_s_r.value())
+        if self.export_tab.chk_export_trim.isChecked() and not self.chk_show_mask.isChecked():
+            bbox = get_current_crop_bbox(self.img_session.composite_mask, self.export_tab.chk_shadow.isChecked(),
+                                         self.export_tab.sl_s_x.value(),
+                                         self.export_tab.sl_s_y.value(),
+                                         self.export_tab.sl_s_r.value())
             if bbox:
                 # Create a path for the whole scene
                 full_rect = self.output_pixmap_item.boundingRect()
@@ -3026,7 +2682,7 @@ class BackgroundRemoverGUI(QMainWindow):
             )
             return
         
-        export_settings = self.get_export_settings()
+        export_settings = self.export_tab.get_export_settings()
         render_settings = self.get_render_settings()
 
         if quick_save:
@@ -3076,7 +2732,12 @@ class BackgroundRemoverGUI(QMainWindow):
 
         # If trimming is enabled, calculate the crop box and apply it.
         if trim:
-            bbox = get_current_crop_bbox(self.img_session.composite_mask, self.chk_shadow.isChecked(), self.sl_s_x.value(), self.sl_s_y.value(), self.sl_s_r.value())
+            bbox = get_current_crop_bbox(self.img_session.composite_mask,
+                                         self.export_tab.chk_shadow.isChecked(),
+                                         self.export_tab.sl_s_x.value(),
+                                         self.export_tab.sl_s_y.value(),
+                                         self.export_tab.sl_s_r.value()
+                                         )
             if bbox:
                 final_image = final_image.crop(bbox)
 

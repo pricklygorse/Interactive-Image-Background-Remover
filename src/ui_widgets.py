@@ -1,18 +1,13 @@
-from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
-                             QPushButton, QLabel, QComboBox, QCheckBox, QFileDialog, 
-                             QMessageBox, QGraphicsView, QGraphicsScene, QGraphicsPixmapItem, 
-                             QSlider, QFrame, QSplitter, QDialog, QScrollArea, 
-                             QGraphicsRectItem, QGraphicsEllipseItem, QGraphicsPathItem, 
-                             QTextEdit, QSizePolicy, QRadioButton, QButtonGroup, QInputDialog, 
-                             QProgressBar, QStyle, QSplitterHandle,
-                             QListWidget, QListWidgetItem, QListView, QAbstractItemView)
-from PyQt6.QtCore import Qt, QTimer, QPointF, QRectF, QSettings, QPropertyAnimation, QEasingCurve, QSize, pyqtSignal
-from PyQt6.QtGui import (QPixmap, QImage, QColor, QPainter, QPainterPath, QPen, QBrush,
-                         QKeySequence, QShortcut, QCursor, QIcon, QPalette)
-
 import os
-import PIL.Image as Image
 
+import PIL.Image as Image
+from PyQt6.QtCore import Qt, QPointF, QRectF, QPropertyAnimation, QEasingCurve, QSize, pyqtSignal
+from PyQt6.QtGui import (QPixmap, QImage, QColor, QPainter, QPen, QBrush,
+                         QIcon, QPalette)
+from PyQt6.QtWidgets import (QApplication, QVBoxLayout, QPushButton, QLabel, QGraphicsView, QFrame, QSplitter,
+                             QGraphicsRectItem, QGraphicsEllipseItem, QGraphicsPathItem,
+                             QStyle, QSplitterHandle,
+                             QListWidget, QListWidgetItem, QAbstractItemView)
 
 from src.constants import DEFAULT_ZOOM_FACTOR, PAINT_BRUSH_SCREEN_SIZE, MIN_SAM_BOX_SIZE
 
