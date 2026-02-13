@@ -70,15 +70,10 @@ def process_batch_image(file_path, output_dir, model_manager,
         # Prepare for save (Handle trim)
         if trim:
             shadow_cfg = render_settings.get("shadow", {})
-            drop_shadow = shadow_cfg.get("enabled", False)
-            sl_s_x = shadow_cfg.get("x", 0)
-            sl_s_y = shadow_cfg.get("y", 0)
-            sl_s_r = shadow_cfg.get("radius", 0)
-            
-            bbox = get_current_crop_bbox(final_mask, drop_shadow, sl_s_x, sl_s_y, sl_s_r)
+            bbox = get_current_crop_bbox(final_mask, shadow_cfg)
             if bbox:
                 final_image = final_image.crop(bbox)
-                if save_mask: final_mask = final_mask.crop(bbox) # trim mask too? usually yes
+                if save_mask: final_mask = final_mask.crop(bbox)
 
         # Handle JPEG background (White)
         if fmt == "jpeg":
@@ -349,7 +344,9 @@ class BatchProcessingDialog(QDialog):
         s.append(f"<b>Background:</b> {bg}")
         
         effects = []
-        if ren.get('shadow', {}).get('enabled'): effects.append("Drop Shadow")
+        if ren.get('shadow', {}).get('enabled'): 
+            mode = ren.get('shadow', {}).get('mode', 'Drop')
+            effects.append(f"{mode} Shadow")
         if ren.get('outline', {}).get('enabled'): effects.append("Outline")
         if ren.get('inner_glow', {}).get('enabled'): effects.append("Inner Glow")
         if ren.get('tint', {}).get('enabled'): effects.append("Subject Tint")

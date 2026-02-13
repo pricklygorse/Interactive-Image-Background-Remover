@@ -191,7 +191,7 @@ def calculate_saturation_matrix(sat):
 
 def generate_drop_shadow(mask_pil, opacity, blur_radius, offset_x, offset_y, shadow_downscale=0.25):
     """
-    Generates a shadow layer based on a mask. 
+    Generates a standard drop shadow layer based on a mask. 
     Optimised using numpy and downscaling for performance
     """
     w, h = mask_pil.size
@@ -237,6 +237,155 @@ def generate_drop_shadow(mask_pil, opacity, blur_radius, offset_x, offset_y, sha
     z = np.zeros((h, w), dtype=np.uint8)
     shadow_layer_np = cv2.merge([z, z, z, shifted_alpha])
     return Image.fromarray(shadow_layer_np)
+
+
+def generate_perspective_shadow(mask_pil, opacity, blur_radius, offset_x, offset_y, 
+                               v_scale=0.3, skew=0.0, perspective=0.0, falloff=0.5, 
+                               shadow_downscale=0.25):
+    """
+    Generates a 3D perspective / floor shadow.
+    The shadow is projected from the bottom of the mask's content (the 'feet').
+    """
+    w, h = mask_pil.size
+    if isinstance(mask_pil, np.ndarray):
+        m_np = mask_pil
+    else:
+        m_np = np.array(mask_pil)
+
+    # Find the bounding box of the mask to get the 'feet' position
+    mask_for_bbox = mask_pil if not isinstance(mask_pil, np.ndarray) else Image.fromarray(mask_pil)
+    bbox = mask_for_bbox.getbbox()
+    if not bbox:
+        return Image.new("RGBA", (w, h), (0, 0, 0, 0))
+    
+    _min_x, _min_y, _max_x, max_y = bbox
+    
+    # 1. Downscale for performance
+    ds = shadow_downscale
+    sw, sh = max(1, int(w * ds)), max(1, int(h * ds))
+    m_small = cv2.resize(m_np, (sw, sh), interpolation=cv2.INTER_AREA)
+
+    # 2. Define Perspective Transformation
+    # We want to warp the shadow so it anchors at the "feet" (max_y)
+    feet_y = max_y * ds
+    
+    # Points to warp: we'll warp the whole image but anchor the transformation at feet_y
+    src_pts = np.float32([[0, 0], [sw, 0], [sw, feet_y], [0, feet_y]])
+    
+    # Warped Points
+    v_ext = sh * v_scale
+    sk_px = sw * (skew / 100.0)
+    p_px = sw * perspective # convergence
+
+    dst_pts = np.float32([
+        [sk_px + p_px, feet_y - v_ext],      # New Top-Left
+        [sw + sk_px - p_px, feet_y - v_ext], # New Top-Right
+        [sw, feet_y],                        # Bottom-Right (anchored at feet)
+        [0, feet_y]                          # Bottom-Left (anchored at feet)
+    ])
+
+    M = cv2.getPerspectiveTransform(src_pts, dst_pts)
+    warped = cv2.warpPerspective(m_small, M, (sw, sh), flags=cv2.INTER_LINEAR)
+
+    # 3. Apply Falloff
+    if falloff > 0:
+        # Create a vertical gradient mask from feet_y upwards
+        # sh matches sw, sh
+        gradient = np.ones(sh, dtype=np.float32)
+        # Gradient should go from 1.0 (at feet_y) to 0.0 (at top of shadow)
+        # Top of shadow is at feet_y - v_ext
+        top_y = int(max(0, feet_y - v_ext))
+        bottom_y = int(min(sh-1, feet_y))
+        
+        if bottom_y > top_y:
+            grad_length = bottom_y - top_y
+            grad_vals = np.linspace(0.0, 1.0, grad_length, dtype=np.float32)
+            grad_vals = np.power(grad_vals, falloff * 2.0)
+            gradient[top_y:bottom_y] = grad_vals
+            gradient[0:top_y] = 0.0
+            
+        warped = (warped.astype(np.float32) * gradient[:, None]).astype(np.uint8)
+
+    # 4. Blur
+    rad = int(blur_radius * ds)
+    if rad % 2 == 0: rad += 1
+    if rad > 0:
+        warped = cv2.stackBlur(warped, (rad, rad))
+
+    # 5. Global Opacity
+    warped = cv2.convertScaleAbs(warped, alpha=opacity / 255.0)
+
+    # 6. Upscale
+    m_full = cv2.resize(warped, (w, h), interpolation=cv2.INTER_LINEAR)
+
+    # 7. Final Offset & Composite
+    z = np.zeros((h, w), dtype=np.uint8)
+    shifted_alpha = np.zeros((h, w), dtype=np.uint8)
+    src_y1, src_y2 = max(0, -offset_y), min(h, h - offset_y)
+    src_x1, src_x2 = max(0, -offset_x), min(w, w - offset_x)
+    dst_y1, dst_y2 = max(0, offset_y), min(h, h + offset_y)
+    dst_x1, dst_x2 = max(0, offset_x), min(w, w + offset_x)
+
+    if dst_y2 > dst_y1 and dst_x2 > dst_x1:
+        shifted_alpha[dst_y1:dst_y2, dst_x1:dst_x2] = m_full[src_y1:src_y2, src_x1:src_x2]
+
+    shadow_layer_np = cv2.merge([z, z, z, shifted_alpha])
+    return Image.fromarray(shadow_layer_np)
+
+
+def get_current_crop_bbox(mask, shadow_settings=None):
+    """
+    Calculates the bounding box of the current mask, including shadows if enabled.
+    Returns (min_x, min_y, max_x, max_y) or None if the mask is empty.
+    """
+    if not mask:
+        return None
+
+    bbox = mask.getbbox()
+    if not bbox:
+        return None
+
+    min_x, min_y, max_x, max_y = bbox
+
+    if shadow_settings and shadow_settings.get("enabled", False):
+        shadow_off_x = shadow_settings.get("x", 0)
+        shadow_off_y = shadow_settings.get("y", 0)
+        s_rad = shadow_settings.get("radius", 0)
+
+        if shadow_settings.get("mode") == "Perspective":
+            v_scale = shadow_settings.get("v_scale", 0.3)
+            skew_val = shadow_settings.get("skew", 0)
+            skew_px = abs(mask.size[0] * (skew_val / 100.0))
+            
+            # Perspective shadow projects from feet_y upwards: 
+            # It starts at max_y and extends back by mask.height * v_scale
+            s_min_x = min_x + shadow_off_x - s_rad - skew_px
+            s_min_y = max_y + shadow_off_y - (mask.size[1] * v_scale) - s_rad
+            s_max_x = max_x + shadow_off_x + s_rad + skew_px
+            s_max_y = max_y + shadow_off_y + s_rad
+        else:
+            # Standard drop shadow
+            s_min_x = min_x + shadow_off_x - s_rad
+            s_min_y = min_y + shadow_off_y - s_rad
+            s_max_x = max_x + shadow_off_x + s_rad
+            s_max_y = max_y + shadow_off_y + s_rad
+
+        min_x = min(min_x, s_min_x)
+        min_y = min(min_y, s_min_y)
+        max_x = max(max_x, s_max_x)
+        max_y = max(max_y, s_max_y)
+
+    # Clamp to image boundaries
+    orig_w, orig_h = mask.size
+    final_min_x = max(0, int(min_x))
+    final_min_y = max(0, int(min_y))
+    final_max_x = min(orig_w, int(max_x))
+    final_max_y = min(orig_h, int(max_y))
+
+    if final_max_x <= final_min_x or final_max_y <= final_min_y:
+        return None
+
+    return (final_min_x, final_min_y, final_max_x, final_max_y)
 
 
 def generate_blurred_background(image, mask, blur_radius):
@@ -300,47 +449,6 @@ def sanitise_filename_for_windows(path: str) -> str:
     return os.path.join(directory, cleaned)
 
 
-def get_current_crop_bbox(mask, drop_shadow, sl_s_x, sl_s_y, sl_s_r):
-    """
-    Calculates the bounding box of the current mask, including shadows if enabled.
-    Returns (min_x, min_y, max_x, max_y) or None if the mask is empty.
-    """
-    if not mask:
-        return None
-
-    bbox = mask.getbbox()
-    if not bbox:
-        return None
-
-    min_x, min_y, max_x, max_y = bbox
-
-    if drop_shadow:
-        shadow_off_x = sl_s_x
-        shadow_off_y = sl_s_y
-        s_rad = sl_s_r
-
-        # Expand bounding box to include the shadow and its blur radius
-        s_min_x = min_x + shadow_off_x - s_rad
-        s_min_y = min_y + shadow_off_y - s_rad
-        s_max_x = max_x + shadow_off_x + s_rad
-        s_max_y = max_y + shadow_off_y + s_rad
-
-        min_x = min(min_x, s_min_x)
-        min_y = min(min_y, s_min_y)
-        max_x = max(max_x, s_max_x)
-        max_y = max(max_y, s_max_y)
-
-    # Clamp to image boundaries
-    orig_w, orig_h = mask.size
-    final_min_x = max(0, int(min_x))
-    final_min_y = max(0, int(min_y))
-    final_max_x = min(orig_w, int(max_x))
-    final_max_y = min(orig_h, int(max_y))
-
-    if final_max_x <= final_min_x or final_max_y <= final_min_y:
-        return None
-
-    return (final_min_x, final_min_y, final_max_x, final_max_y)
 
 
 
@@ -685,14 +793,28 @@ def compose_final_image(original_image, mask, settings, model_manager=None,
     # Drop Shadow
     shadow_settings = settings.get("shadow", {})
     if shadow_settings.get("enabled", False):
-        shadow_layer = generate_drop_shadow(
-            current_mask,
-            opacity=shadow_settings.get("opacity"),
-            blur_radius=shadow_settings.get("radius"),
-            offset_x=shadow_settings.get("x"),
-            offset_y=shadow_settings.get("y"),
-            shadow_downscale=shadow_settings.get("downscale", 0.125)
-        )
+        if shadow_settings.get("mode") == "Perspective":
+             shadow_layer = generate_perspective_shadow(
+                current_mask,
+                opacity=shadow_settings.get("opacity"),
+                blur_radius=shadow_settings.get("radius"),
+                offset_x=shadow_settings.get("x"),
+                offset_y=shadow_settings.get("y"),
+                v_scale=shadow_settings.get("v_scale", 0.3),
+                skew=shadow_settings.get("skew", 0.0),
+                perspective=shadow_settings.get("perspective", 0.0),
+                falloff=shadow_settings.get("falloff", 0.5),
+                shadow_downscale=shadow_settings.get("downscale", 0.125)
+             )
+        else:
+            shadow_layer = generate_drop_shadow(
+                current_mask,
+                opacity=shadow_settings.get("opacity"),
+                blur_radius=shadow_settings.get("radius"),
+                offset_x=shadow_settings.get("x"),
+                offset_y=shadow_settings.get("y"),
+                shadow_downscale=shadow_settings.get("downscale", 0.125)
+            )
         foreground_layer = Image.alpha_composite(shadow_layer, foreground_layer)
 
     # Compose with Background

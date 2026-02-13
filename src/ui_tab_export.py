@@ -85,6 +85,15 @@ class ExportTab(QScrollArea):
         sf_layout = QVBoxLayout(self.shadow_frame)
         sf_layout.setContentsMargins(0,0,0,0)
         
+        # Shadow Type
+        h_type_layout = QHBoxLayout()
+        h_type_layout.addWidget(QLabel("Mode:"))
+        self.combo_shadow_type = QComboBox()
+        self.combo_shadow_type.addItems(["Drop", "Perspective"])
+        self.combo_shadow_type.currentTextChanged.connect(self.toggle_shadow_controls_visibility)
+        self.combo_shadow_type.currentTextChanged.connect(self.controller.update_output_preview)
+        h_type_layout.addWidget(self.combo_shadow_type)
+        sf_layout.addLayout(h_type_layout)
 
 
         self.lbl_s_op, self.sl_shadow_opacity, h_op_layout = make_slider_row("Opacity", 0, 255, 128)
@@ -92,13 +101,25 @@ class ExportTab(QScrollArea):
         self.lbl_s_y, self.sl_shadow_y, h_y_layout = make_slider_row("Y Offset", -100, 100, 30)
         self.lbl_s_r, self.sl_shadow_r, h_r_layout = make_slider_row("Blur Rad", 1, 200, 10)
         
+        # Perspective Sliders
+        self.lbl_s_vscale, self.sl_shadow_vscale, h_vs_layout = make_slider_row("V-Scale (%)", 1, 200, 30)
+        self.lbl_s_skew, self.sl_shadow_skew, h_sk_layout = make_slider_row("Skew", -100, 100, 0)
+        self.lbl_s_persp, self.sl_shadow_persp, h_p_layout = make_slider_row("Perspective", 0, 100, 0)
+        self.lbl_s_falloff, self.sl_shadow_falloff, h_fo_layout = make_slider_row("Falloff (%)", 0, 100, 100)
+
+        # Store layouts to hide/show
+        self.shadow_perspective_layouts = [h_vs_layout, h_sk_layout, h_p_layout, h_fo_layout]
+        
         sf_layout.addLayout(h_op_layout)
         sf_layout.addLayout(h_x_layout)
         sf_layout.addLayout(h_y_layout)
         sf_layout.addLayout(h_r_layout)
+        for l in self.shadow_perspective_layouts:
+            sf_layout.addLayout(l)
             
         layout.addWidget(self.shadow_frame)
         self.shadow_frame.hide()
+        self.toggle_shadow_controls_visibility()
 
         #layout.addSpacing(10)
 
@@ -280,7 +301,16 @@ class ExportTab(QScrollArea):
     def toggle_shadow_options(self, checked):
         if checked: self.shadow_frame.show()
         else: self.shadow_frame.hide()
+        self.toggle_shadow_controls_visibility()
         self.controller.update_output_preview()
+
+    def toggle_shadow_controls_visibility(self, *args):
+        is_perspective = self.combo_shadow_type.currentText() == "Perspective"
+        for layout in self.shadow_perspective_layouts:
+            for i in range(layout.count()):
+                widget = layout.itemAt(i).widget()
+                if widget:
+                    widget.setVisible(is_perspective)
 
     def toggle_outline_options(self, checked):
         self.outline_frame.setVisible(checked)

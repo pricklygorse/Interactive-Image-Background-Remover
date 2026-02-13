@@ -635,10 +635,15 @@ class BackgroundRemoverGUI(QMainWindow):
             },
             "shadow": {
                 "enabled": self.export_tab.chk_shadow.isChecked(),
+                "mode": self.export_tab.combo_shadow_type.currentText(),
                 "opacity": self.export_tab.sl_shadow_opacity.value(),
                 "radius": self.export_tab.sl_shadow_r.value(),
                 "x": self.export_tab.sl_shadow_x.value(),
-                "y": self.export_tab.sl_shadow_y.value()
+                "y": self.export_tab.sl_shadow_y.value(),
+                "v_scale": self.export_tab.sl_shadow_vscale.value() / 100.0,
+                "skew": self.export_tab.sl_shadow_skew.value(),
+                "perspective": self.export_tab.sl_shadow_persp.value() / 1000.0, # Small values for perspective
+                "falloff": self.export_tab.sl_shadow_falloff.value() / 100.0
             },
             "background": {
                 "type": self.export_tab.combo_bg_color.currentText(),
@@ -648,7 +653,9 @@ class BackgroundRemoverGUI(QMainWindow):
             "inner_glow": {
                 "enabled": self.export_tab.chk_inner_glow.isChecked(),
                 "size": self.export_tab.sl_ig_size.value(),
-                "color": (self.export_tab.inner_glow_color.red(), self.export_tab.inner_glow_color.green(), self.export_tab.inner_glow_color.blue()),
+                "color": (self.export_tab.inner_glow_color.red(), 
+                          self.export_tab.inner_glow_color.green(), 
+                          self.export_tab.inner_glow_color.blue()),
                 "threshold": self.export_tab.sl_ig_thresh.value(),
                 "opacity": self.export_tab.sl_ig_op.value()
             }
@@ -2284,10 +2291,8 @@ class BackgroundRemoverGUI(QMainWindow):
 
         # Update the Auto-Trim visual overlay
         if self.export_tab.chk_export_trim.isChecked() and not self.chk_show_mask.isChecked():
-            bbox = get_current_crop_bbox(self.img_session.composite_mask, self.export_tab.chk_shadow.isChecked(),
-                                         self.export_tab.sl_shadow_x.value(),
-                                         self.export_tab.sl_shadow_y.value(),
-                                         self.export_tab.sl_shadow_r.value())
+            render_settings = self.get_render_settings()
+            bbox = get_current_crop_bbox(self.img_session.composite_mask, render_settings["shadow"])
             if bbox:
                 # Create a path for the whole scene
                 full_rect = self.output_pixmap_item.boundingRect()
@@ -2726,10 +2731,7 @@ class BackgroundRemoverGUI(QMainWindow):
         # If trimming is enabled, calculate the crop box and apply it.
         if trim:
             bbox = get_current_crop_bbox(self.img_session.composite_mask,
-                                         self.export_tab.chk_shadow.isChecked(),
-                                         self.export_tab.sl_shadow_x.value(),
-                                         self.export_tab.sl_shadow_y.value(),
-                                         self.export_tab.sl_shadow_r.value()
+                                         render_settings["shadow"]
                                          )
             if bbox:
                 final_image = final_image.crop(bbox)
