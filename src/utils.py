@@ -762,7 +762,8 @@ def compose_final_image(original_image, mask, settings, model_manager=None,
         fg_settings = settings.get("foreground_correction", {})
         if fg_settings.get("enabled", False) and model_manager:
             algo = fg_settings.get("algorithm", "ml")
-            foreground_layer = model_manager.estimate_foreground(original_image, current_mask, algo)
+            radius = fg_settings.get("radius", 90)
+            foreground_layer = model_manager.estimate_foreground(original_image, current_mask, algo, radius)
         else:
             foreground_layer = original_image.convert("RGBA")
             foreground_layer.putalpha(current_mask)

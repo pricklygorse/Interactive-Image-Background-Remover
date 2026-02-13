@@ -168,7 +168,8 @@ class BatchProcessingDialog(QDialog):
         main_layout = QVBoxLayout(self)
 
         # Description Label
-        description_label = QLabel("Batch editor uses the values you set in the main window and applies to all the currently loaded images")
+        description_label = QLabel("Batch editor uses the values you set in the main window and applies to all the currently loaded images.\n'_nobg' is added to the end of the filename.")
+        description_label.setWordWrap(True)
         main_layout.addWidget(description_label)
 
         main_layout.addSpacing(10)
