@@ -2843,6 +2843,20 @@ Shortcuts:
         l.addWidget(t)
         d.exec()
 
+    def closeEvent(self, event):
+        if self.is_mask_modified():
+            reply = QMessageBox.question(
+                self,
+                "Unsaved Mask",
+                "The current mask has been modified. Closing now will discard those changes. Close anyway?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No
+            )
+            if reply != QMessageBox.StandardButton.Yes:
+                event.ignore()
+                return
+        event.accept()
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Interactive Image Background Remover")
     parser.add_argument("images", nargs="*", help="Paths to images")
