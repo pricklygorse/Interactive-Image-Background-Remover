@@ -870,10 +870,13 @@ class BackgroundRemoverGUI(QMainWindow):
 
         provider_data = self.mask_tab.combo_auto_model_EP.currentData()
         
-        # Viewport coordinates (for positioning result later)
-        _, vx, vy = self.get_viewport_crop()
+        # Resolve viewport crop on UI thread before launching worker.
+        image_crop, vx, vy = self.get_viewport_crop()
+        trimap_crop = None
+        if not use_tiled:
+            trimap_crop = self.img_session.user_trimap.crop((vx, vy, vx + image_crop.width, vy + image_crop.height))
 
-        def _do_matting_gen(model_manager, name, sess, prov, tiled):
+        def _do_matting_gen(model_manager, name, sess, prov, tiled, image_crop, trimap_crop):
             if tiled:
                 # Process full image
                 res_pil = model_manager.run_matting_tiled(
@@ -881,15 +884,23 @@ class BackgroundRemoverGUI(QMainWindow):
                 )
                 return {"mask": np.array(res_pil), "status": "Tiled Matting Complete", "is_full": True}
             else:
-                # Standard Viewport Crop
-                image_crop, x_off, y_off = self.get_viewport_crop()
-                trimap_crop = sess.user_trimap.crop((x_off, y_off, x_off + image_crop.width, y_off + image_crop.height))
+                # Standard viewport crop prepared on UI thread.
                 res_pil = model_manager.run_matting(
                     name, image_crop, np.array(trimap_crop), prov, longest_edge_limit=int(self.settings.value("matting_longest_edge", 1024))
                 )
                 return {"mask": np.array(res_pil), "status": "Viewport Matting Complete", "is_full": False}
 
-        self.worker = InferenceWorker(self, _do_matting_gen, self.model_manager, model_name, self.img_session, provider_data, use_tiled)
+        self.worker = InferenceWorker(
+            self,
+            _do_matting_gen,
+            self.model_manager,
+            model_name,
+            self.img_session,
+            provider_data,
+            use_tiled,
+            image_crop,
+            trimap_crop,
+        )
         
         # When tiled, x_off/y_off are 0 because the result is already full-size
         self.worker.result_ready.connect(lambda res: self._on_inference_finished(res, 0 if res["is_full"] else vx, 0 if res["is_full"] else vy))
@@ -1848,7 +1859,7 @@ class BackgroundRemoverGUI(QMainWindow):
 
         # Automatically start the refinement thread
         # Qtimer to allow the event loop to process status bar updates before starting the next thread
-        QTimer.singleShot(0, lambda: self.modify_mask())       
+        QTimer.singleShot(0, lambda: self.modify_mask())   
 
         self.update_commit_button_states()
 
