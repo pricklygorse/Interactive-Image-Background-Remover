@@ -34,11 +34,6 @@ from src.ui_styles import apply_theme
 from src.ui_widgets import SynchronisedGraphicsView, ThumbnailList, OrientationSplitter, MarchingAntsItem
 from src.ui_dialogs import InpaintingDialog
 
-from src.ui_tab_adjust import AdjustTab
-from src.ui_tab_maskgen import MaskGenTab
-from src.ui_tab_refine import RefineTab
-from src.ui_tab_export import ExportTab
-
 from src.trimap_editor import TrimapEditorDialog
 from src.utils import pil2pixmap, numpy_to_pixmap, apply_tone_sharpness, generate_blurred_background, sanitise_filename_for_windows, get_current_crop_bbox, generate_trimap_from_mask, clean_alpha, generate_alpha_map, \
     compose_final_image, refine_mask, generate_mask_outline_path, expand_contract_mask, guided_filter
@@ -50,6 +45,12 @@ if getattr(sys, "frozen", False):
 
 print("Loading pymatting. On first run this will take a minute or two as it compiles")
 from src.model_manager import ModelManager 
+
+from src.ui_tab_adjust import AdjustTab
+from src.ui_tab_maskgen import MaskGenTab
+from src.ui_tab_refine import RefineTab
+from src.ui_tab_export import ExportTab
+
 
 VIEW_IN_MSG = "Models run on current view. Zoom for more detail.   L-Click: Add Point | R-Click: Add Avoid Point | Drag: Box | M-Click: Pan | Scroll: Zoom (Ctrl+Scroll Touchpad) | [P]: Paintbrush"
 VIEW_OUT_MSG = "OUTPUT | M-Click: Pan | Scroll: Zoom | [A/S]: Add/Subtract Current Model Mask from Output"
@@ -571,7 +572,7 @@ class BackgroundRemoverGUI(QMainWindow):
         
         toolbar.addSeparator()
 
-        toolbar.addAction("Settings ⚙️").triggered.connect(self.open_settings)
+        toolbar.addAction("Settings").triggered.connect(self.open_settings)
 
         toolbar.addAction("Help/About").triggered.connect(self.show_help)
 

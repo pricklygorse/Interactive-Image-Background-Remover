@@ -31,7 +31,7 @@ class MaskGenTab(QScrollArea):
         h_models_header.addWidget(lbl_models)
         h_models_header.addStretch()
 
-        self.btn_download = QPushButton("Download AI Models 📥")
+        self.btn_download = QPushButton("Download AI Models ⤓")
         self.btn_download.setToolTip("Download Models...")
         self.btn_download.clicked.connect(self.controller.open_settings)
         layout.addWidget(self.btn_download)
