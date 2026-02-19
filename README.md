@@ -11,12 +11,24 @@ Interactive Background Remover is a user-friendly tool designed to remove backgr
 - **Interactive Model Support**: Utilise Segment Anything for detailed object selection by clicking or drawing boxes on the image.
 - **Automatic Whole-Image Model Support**: Apply models like u2net, disnet, rmbg, and BiRefNet for quick background removal across the entire image, which can be further refined.
 - **Zoom and Pan**: Zoom in on specific parts of the image and pan around for detailed editing. The models are only run on the viewed area so you can incrementally build up an image from higher resolution patches.
-- **Manual Paintbrush Mode**: Manually refine the background removal with a paintbrush tool for areas not covered by the models.
+
+![Object Selection](Images/select_object.jpg)
+
+- **Manual Paintbrush Mode**: Manually refine the background removal with a paintbrush tool for areas not covered by the models, including smart context aware refine.
+
+![Paintbrush](Images/paintbrush.jpg)
+
 - **Mask Refinement**: Smooth edges, filter anomalous areas and soften the mask for a natural look. You can directly edit the mask for high fidelity background removal.
 - **Alpha Matting and Trimap Editor**: Refine mask edges for improved accuracy with hair and similar features. You can use different matting models and also edit the trimap for higher quality results.
 - **Smart Refine Paintbrush**: Clean up the tricky parts of the output image such as hair
+
+![Trimap editing](Images/trimap.jpg)
+
 - **Batch Editing**: Utilising all the features of the app
-- **Drop Shadow, Glow, and more effects**: Basic drop shadow effect for the cutout object.
+- **Drop Shadow, Glow, and more effects**: Several effects and post processing options to make a perfect image.
+
+![Colour Bleed Correction](Images/colour_bleed.jpg)
+
 - **Background Options**: Choose from various background colours or apply a blurred background effect.
 - **Image Editing**: Includes a built-in image editor and cropper to preprocess images before background removal.
 - **Object Removal/Inpainting**: Using open weight models LaMa and DeepFillV2
