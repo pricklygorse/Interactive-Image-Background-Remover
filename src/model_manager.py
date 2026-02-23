@@ -7,7 +7,7 @@ import numpy as np
 import onnx
 import onnxruntime as ort
 from PIL import Image
-from pymatting import estimate_alpha_sm, estimate_foreground_ml, estimate_foreground_cf
+from pymatting import estimate_alpha_sm, estimate_alpha_cf, estimate_foreground_ml, estimate_foreground_cf
 
 from src.utils import estimate_fg_blur_fusion_optimised
 from .constants import SAM_TRT_WARMUP_POINTS
@@ -638,12 +638,18 @@ class ModelManager:
             session = self.get_matting_session(algorithm_name, provider_data)
             return self._run_withoutbg(session, img_resized, alpha_resized, image_pil.size)
         
-        else:
-            return self._run_pymatting(img_resized, tri_resized, image_pil.size)
+        elif "closed form" in name_lower:
+            return self._run_pymatting_closed_form(img_resized, tri_resized, image_pil.size)
 
-    def _run_pymatting(self, img_resized, tri_resized, original_size):
+        elif "shared matting" in name_lower or "pymatting" in name_lower:
+            return self._run_pymatting_shared_matting(img_resized, tri_resized, image_pil.size)
+
+        else:
+            return self._run_pymatting_shared_matting(img_resized, tri_resized, image_pil.size)
+
+    def _run_pymatting_shared_matting(self, img_resized, tri_resized, original_size):
         """
-        Calculates the alpha matte using the PyMatting library.
+        Calculates the alpha matte using PyMatting Shared Matting.
         Returns the alpha matte as a PIL Image.
         """
         s = timer()
@@ -657,6 +663,24 @@ class ModelManager:
             alpha = cv2.resize(alpha, original_size, interpolation=cv2.INTER_LINEAR)
             
         print(f"PyMatting Shared Matting | Size: {img_resized.shape[::-1]} | Time: {timer()-s:.1f}s")
+        return Image.fromarray(alpha, mode="L")
+
+    def _run_pymatting_closed_form(self, img_resized, tri_resized, original_size):
+        """
+        Calculates the alpha matte using PyMatting Closed Form.
+        Returns the alpha matte as a PIL Image.
+        """
+        s = timer()
+        img_normalised = img_resized / 255.0
+        trimap_normalised = tri_resized / 255.0
+
+        alpha = estimate_alpha_cf(img_normalised, trimap_normalised)
+        alpha = np.clip(alpha * 255, 0, 255).astype(np.uint8)
+
+        if alpha.shape[::-1] != original_size:
+            alpha = cv2.resize(alpha, original_size, interpolation=cv2.INTER_LINEAR)
+
+        print(f"PyMatting Closed Form | Size: {img_resized.shape[::-1]} | Time: {timer()-s:.1f}s")
         return Image.fromarray(alpha, mode="L")
 
     def _run_vitmatte_inference(self, session, img_resized, tri_resized, original_size):

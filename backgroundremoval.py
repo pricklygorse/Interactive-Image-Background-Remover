@@ -848,20 +848,27 @@ class BackgroundRemoverGUI(QMainWindow):
         model_name = self.mask_tab.combo_matting_gen.currentText()
         use_tiled = self.mask_tab.chk_tiled_matting.isChecked()
         
-        if "PyMatting" in model_name and not use_tiled:
+        name_lower = model_name.lower()
+        is_pymatting = (
+            "shared matting" in name_lower
+            or "closed form" in name_lower
+            or "pymatting" in name_lower  # backwards compatibility with older saved value
+        )
+
+        if is_pymatting and not use_tiled:
             ret = QMessageBox.question(
                 self, 
                 "Slow Model Warning", 
-                "PyMatting can be very slow for large images/large unknown areas.\n\n"
+                "PyMatting algorithms can be very slow for large images/large unknown areas.\n\n"
                 "For better results, download ViTMatte via Settings.\n\n"
-                "Do you want to proceed with PyMatting?",
+                f"Do you want to proceed with {model_name}?",
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
                 QMessageBox.StandardButton.Yes
             )
             if ret == QMessageBox.StandardButton.No:
                 return
-        elif "PyMatting" in model_name and use_tiled:
-            QMessageBox.information(self,"Error","PyMatting is incompatible with Tiled Matting. Please download VitMatte from the settings")
+        elif is_pymatting and use_tiled:
+            QMessageBox.information(self, "Error", "PyMatting is incompatible with Tiled Matting. Please download VitMatte from the settings")
             return
 
         
@@ -1380,9 +1387,10 @@ class BackgroundRemoverGUI(QMainWindow):
         if os.path.exists(os.path.join(self.model_root_dir, "withoutbg_focus_1.onnx")):
             found_models.append("withoutbg_focus_1")
 
-        # PyMatting is always an option, and often the worst option
-        # but i'm importing anyway for estimate_foreground_ml, may as well offer estimate_alpha_cf here
-        found_models.append("PyMatting (CPU)")
+        # PyMatting variants are always available (CPU).
+        # Shared matting first as it runs a bit quicker, perhaps not as good quality though
+        found_models.append("Shared Matting (CPU)")
+        found_models.append("Closed Form (CPU)")
 
         # Add items to all combos
         for cb in combos:
