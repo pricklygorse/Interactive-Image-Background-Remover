@@ -564,6 +564,9 @@ class SettingsDialog(QDialog):
         self.res_combo.currentTextChanged.connect(
             lambda v: self.settings.setValue("matting_longest_edge", v) if self.settings else None
         )
+        self.res_combo.currentTextChanged.connect(
+            self.main_app_instance.modify_mask
+        )
         
         res_layout.addWidget(res_label)
         res_layout.addWidget(self.res_combo)
