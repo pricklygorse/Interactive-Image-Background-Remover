@@ -1799,10 +1799,13 @@ class BackgroundRemoverGUI(QMainWindow):
         if "Select" in model_name or "No Models" in model_name:
             msg_box = QMessageBox()
             msg_box.setWindowTitle("No Models Found")
-            msg_box.setText("No models found. Please download models using the download manager or from the Github URL in the help box.")
+            msg_box.setText("No models found. Open Settings to download models?")
             msg_box.setIcon(QMessageBox.Icon.Information)
-            msg_box.addButton(QPushButton("OK"), QMessageBox.ButtonRole.AcceptRole)
+            open_settings_btn = msg_box.addButton("Open Settings", QMessageBox.ButtonRole.AcceptRole)
+            msg_box.addButton("Cancel", QMessageBox.ButtonRole.RejectRole)
             msg_box.exec()
+            if msg_box.clickedButton() == open_settings_btn:
+                self.open_settings()
             return
         
         use_2step = self.mask_tab.chk_2step_auto.isChecked()
