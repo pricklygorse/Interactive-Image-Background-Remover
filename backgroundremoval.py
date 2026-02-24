@@ -1242,7 +1242,7 @@ class BackgroundRemoverGUI(QMainWindow):
         super().dropEvent(event)
 
     def update_window_title(self):
-        base_title = "Interactive Image Background Remover"
+        base_title = "Interactive Image Background Remover v1.7"
         
         if not self.image_paths:
             self.setWindowTitle(base_title)
