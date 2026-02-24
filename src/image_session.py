@@ -60,14 +60,14 @@ class ImageSession:
         if self.source != "None":
             img = ImageOps.exif_transpose(img)
             self.image_exif = img.info.get('exif')
-        
-        # Extract initial mask if there's transparency
-        self.inherited_alpha = self._extract_source_alpha(img)
-        
+                
         # Convert to RGBA for internal processing
         self.source_image = img.convert("RGBA")
         self.active_image = self.source_image.copy()
         self.size = self.source_image.size
+
+        # Extract initial mask if there's transparency
+        self.inherited_alpha = self._extract_source_alpha(self.source_image)
         
         # Create NumPy buffer for the adjustment pipeline (BGRA for OpenCV compatibility)
         self.source_image_np = np.ascontiguousarray(
@@ -106,13 +106,11 @@ class ImageSession:
 
     def _extract_source_alpha(self, img):
         """Extracts the alpha channel as an initial mask if it contains transparency."""
-        has_alpha = 'A' in img.mode or (img.mode == 'P' and 'transparency' in img.info)
-        if has_alpha:
-            alpha = img.getchannel('A')
-            extrema = alpha.getextrema()
-            # If min is 255, the alpha is solid white (no transparency)
-            if extrema and extrema[0] < 255:
-                return alpha
+        alpha = img.getchannel('A')
+        extrema = alpha.getextrema()
+        # If min is 255, the alpha is solid white (no transparency)
+        if extrema and extrema[0] < 255:
+            return alpha
         return None
 
     def _get_current_state(self):
