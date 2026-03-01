@@ -51,7 +51,7 @@ from src.ui_tab_maskgen import MaskGenTab
 from src.ui_tab_refine import RefineTab
 from src.ui_tab_export import ExportTab
 
-
+WINDOW_TITLE = "Interactive Background Remover v1.7"
 VIEW_IN_MSG = "Models run on current view. Zoom for more detail.   L-Click: Add Point | R-Click: Add Avoid Point | Drag: Box | M-Click: Pan | Scroll: Zoom (Ctrl+Scroll Touchpad) | [P]: Paintbrush"
 VIEW_OUT_MSG = "OUTPUT | M-Click: Pan | Scroll: Zoom | [A/S]: Add/Subtract Current Model Mask from Output"
 VIEW_PAINT_MSG = "PAINTBRUSH | L-Click: Paint | R-Click: Erase | M-Click: Pan | Scroll: Zoom | [P]: Exit Paint"
@@ -106,7 +106,7 @@ class BackgroundRemoverGUI(QMainWindow):
 
         self.image_paths = image_paths if image_paths else []
         self.current_image_index = 0
-        self.setWindowTitle("Interactive Image Background Remover")
+        self.setWindowTitle(WINDOW_TITLE)
         self.resize(1600, 900)
 
         self.img_session = None # Current active image session
@@ -1242,24 +1242,23 @@ class BackgroundRemoverGUI(QMainWindow):
         super().dropEvent(event)
 
     def update_window_title(self):
-        base_title = "Interactive Image Background Remover v1.7"
         
         if not self.image_paths:
-            self.setWindowTitle(base_title)
+            self.setWindowTitle(WINDOW_TITLE)
             return
 
         total_count = len(self.image_paths)
         
         if total_count == 1 and self.image_paths[0] == "Clipboard":
-            title = f"{base_title} [Clipboard]"
+            title = f"{WINDOW_TITLE} [Clipboard]"
         elif total_count > 1:
             current = self.current_image_index + 1
             # Show the count and the current file name
             file_name = os.path.basename(self.image_paths[self.current_image_index])
-            title = f"{base_title} [{current}/{total_count}] - {file_name}"
+            title = f"{WINDOW_TITLE} [{current}/{total_count}] - {file_name}"
         else: # Single image from file/arg
             file_name = os.path.basename(self.image_paths[0])
-            title = f"{base_title} - {file_name}"
+            title = f"{WINDOW_TITLE} - {file_name}"
 
         self.setWindowTitle(title)
 
@@ -1844,8 +1843,20 @@ class BackgroundRemoverGUI(QMainWindow):
         self.worker.result_ready.connect(lambda res: (self.clear_overlay(), self._on_inference_finished(res, x_off, y_off)))
         self.worker.finished.connect(self.worker.deleteLater)
         self.worker.finished.connect(lambda: setattr(self, 'worker', None))
-        self.worker.error.connect(lambda msg: (self.set_loading(False), QMessageBox.critical(self, "Auto Model Error", msg)))
+        self.worker.error.connect(self._on_auto_model_error)
         self.worker.start()
+
+    def _on_auto_model_error(self, msg):
+        self.set_loading(False)
+        user_choice = QMessageBox.question(
+            self,
+            "Auto Model Error",
+            f"{msg}\n\nOpen Settings to download models?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.Yes,
+        )
+        if user_choice == QMessageBox.StandardButton.Yes:
+            self.open_settings()
 
     def _on_inference_finished(self, result, x_off, y_off):
         """Processes model output masks into a overlay, and updates UI"""
