@@ -237,7 +237,14 @@ class ExportTab(QScrollArea):
         self.combo_export_fmt.addItem("WebP (Lossless)", "webp_lossless")
         self.combo_export_fmt.addItem("WebP (Lossy)", "webp_lossy")
         self.combo_export_fmt.addItem("JPEG (No Transparency)", "jpeg")
+        saved_export_fmt = self.controller.settings.value("export_format", "png")
+        saved_export_fmt_idx = self.combo_export_fmt.findData(saved_export_fmt)
+        if saved_export_fmt_idx >= 0:
+            self.combo_export_fmt.setCurrentIndex(saved_export_fmt_idx)
         self.combo_export_fmt.currentIndexChanged.connect(self.toggle_export_quality_visibility)
+        self.combo_export_fmt.currentIndexChanged.connect(
+            lambda _: self.controller.settings.setValue("export_format", self.combo_export_fmt.currentData())
+        )
         fmt_layout.addWidget(self.combo_export_fmt)
         layout.addLayout(fmt_layout)
 
@@ -248,8 +255,15 @@ class ExportTab(QScrollArea):
         self.lbl_export_quality = QLabel("Quality: 90")
         self.sl_export_quality = QSlider(Qt.Orientation.Horizontal)
         self.sl_export_quality.setRange(1, 100)
-        self.sl_export_quality.setValue(90)
-        self.sl_export_quality.valueChanged.connect(lambda v: self.lbl_export_quality.setText(f"Quality: {v}"))
+        saved_export_quality = self.controller.settings.value("export_quality", 90, type=int)
+        self.sl_export_quality.setValue(saved_export_quality)
+        self.lbl_export_quality.setText(f"Quality: {saved_export_quality}")
+        self.sl_export_quality.valueChanged.connect(
+            lambda v: (
+                self.lbl_export_quality.setText(f"Quality: {v}"),
+                self.controller.settings.setValue("export_quality", v),
+            )
+        )
         q_layout.addWidget(self.lbl_export_quality)
         q_layout.addWidget(self.sl_export_quality)
         layout.addWidget(self.export_quality_frame)
@@ -261,8 +275,12 @@ class ExportTab(QScrollArea):
         layout.addWidget(self.chk_export_mask)
 
         self.chk_export_trim = QCheckBox("Trim Transparent Pixels (Auto-Crop)")
+        self.chk_export_trim.setChecked(self.controller.settings.value("export_trim", False, type=bool))
         self.chk_export_trim.toggled.connect(self.controller.update_output_preview)
-        self.chk_export_trim.setToolTip("If exporting the global mask with the image, the mask is <b>not<b> trimmed. This is to allow you to return to editing the original image.")
+        self.chk_export_trim.toggled.connect(
+            lambda checked: self.controller.settings.setValue("export_trim", checked)
+        )
+        self.chk_export_trim.setToolTip("If exporting the global mask with the image, the mask is <b>not<b> trimmed. This is to allow you to return to editing the original image.\nYou can use the crop feature in the Adjustment tab before saving to save a cropped image and mask.")
         layout.addWidget(self.chk_export_trim)
 
         # Initialize visibility

@@ -1552,10 +1552,25 @@ class BackgroundRemoverGUI(QMainWindow):
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Could not load from clipboard: {e}")
 
+    def _get_last_image_dir(self):
+        last_dir = self.settings.value("last_image_dir", "", type=str)
+        if last_dir and os.path.isdir(last_dir):
+            return last_dir
+        return os.path.expanduser("~")
+
+    def _save_last_image_dir(self, path):
+        if not path:
+            return
+        directory = os.path.dirname(path)
+        if directory and os.path.isdir(directory):
+            self.settings.setValue("last_image_dir", directory)
+
     def load_image_dialog(self):
         file_filter = "Images (*.png *.jpg *.jpeg *.webp *.bmp *.tif *.tiff *.PNG *.JPG *.JPEG *.WEBP *.BMP *.TIF *.TIFF);;All Files (*)"
-        fnames, _ = QFileDialog.getOpenFileNames(self, "Open", "", file_filter)
+        initial_dir = self._get_last_image_dir()
+        fnames, _ = QFileDialog.getOpenFileNames(self, "Open", initial_dir, file_filter)
         if fnames:
+            self._save_last_image_dir(fnames[0])
             self.image_paths = fnames
             self.current_image_index = 0
             self.update_thumbnail_strip()
@@ -2733,13 +2748,15 @@ class BackgroundRemoverGUI(QMainWindow):
         default_ext = ext_map[fmt]
         
         if not clipboard:
-            initial_name = os.path.splitext(self.image_paths[self.current_image_index])[0] + "_nobg." + default_ext
+            source_basename = os.path.splitext(os.path.basename(self.image_paths[self.current_image_index]))[0]
+            initial_name = os.path.join(self._get_last_image_dir(), f"{source_basename}_nobg.{default_ext}")
             initial_name = sanitise_filename_for_windows(initial_name)
 
             fname, _ = QFileDialog.getSaveFileName(self, "Export Image", initial_name, f"{default_ext.upper()} (*.{default_ext})")
             if not fname: return
 
             fname = sanitise_filename_for_windows(fname)
+            self._save_last_image_dir(fname)
             
             if not fname.lower().endswith(f".{default_ext}"): fname += f".{default_ext}"
 
