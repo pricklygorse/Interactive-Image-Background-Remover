@@ -1258,7 +1258,7 @@ class BackgroundRemoverGUI(QMainWindow):
             for url in event.mimeData().urls():
                 if url.isLocalFile():
                     path = url.toLocalFile()
-                    if os.path.splitext(path)[1].lower() in supported_exts:
+                    if os.path.isdir(path) or os.path.splitext(path)[1].lower() in supported_exts:
                         event.acceptProposedAction()
                         return
         super().dragEnterEvent(event)
@@ -1267,10 +1267,23 @@ class BackgroundRemoverGUI(QMainWindow):
         urls = event.mimeData().urls()
         if urls:
             supported_exts = ['.png', '.jpg', '.jpeg', '.webp', '.bmp', '.tif', '.tiff']
-            fnames = [url.toLocalFile() for url in urls if url.isLocalFile() and os.path.splitext(url.toLocalFile())[1].lower() in supported_exts]
+            fnames = []
+            for url in urls:
+                if not url.isLocalFile():
+                    continue
+                path = url.toLocalFile()
+                if os.path.isdir(path):
+                    for root, _dirs, files in os.walk(path):
+                        for name in files:
+                            ext = os.path.splitext(name)[1].lower()
+                            if ext in supported_exts:
+                                fnames.append(os.path.join(root, name))
+                elif os.path.splitext(path)[1].lower() in supported_exts:
+                    fnames.append(path)
             
             if fnames:
-                self.image_paths = sorted(fnames)
+                # Dedupe and keep ordering deterministic.
+                self.image_paths = sorted(set(fnames), key=lambda p: p.lower())
                 self.current_image_index = 0
                 self.update_thumbnail_strip()
                 self.load_image(self.image_paths[0])
