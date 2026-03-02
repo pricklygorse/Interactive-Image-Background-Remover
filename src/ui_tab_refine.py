@@ -186,6 +186,13 @@ class RefineTab(QScrollArea):
         self.chk_soften.toggled.connect(lambda checked: self.controller.settings.setValue("soften_mask", checked))
         self.chk_soften.toggled.connect(self.controller.trigger_refinement_update)
         indent_layout.addWidget(self.chk_soften)
+
+        self.chk_sharpen = QCheckBox("Sharpen Mask")
+        sharpen_checked = self.controller.settings.value("sharpen_mask", False, type=bool)
+        self.chk_sharpen.setChecked(sharpen_checked)
+        self.chk_sharpen.toggled.connect(lambda checked: self.controller.settings.setValue("sharpen_mask", checked))
+        self.chk_sharpen.toggled.connect(self.controller.trigger_refinement_update)
+        indent_layout.addWidget(self.chk_sharpen)
         
         indent_layout.addSpacing(20)
 

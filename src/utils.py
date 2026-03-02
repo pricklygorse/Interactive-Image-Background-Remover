@@ -866,7 +866,7 @@ def compose_final_image(original_image, mask, settings, model_manager=None,
 
 def refine_mask(base_mask, image, settings, model_manager, trimap_np=None):
     """
-    Refines a mask using alpha matting, softening, or binarisation.
+    Refines a mask using alpha matting, soften/sharpen filters, or binarisation.
     """
     processed_mask = base_mask
 
@@ -926,6 +926,16 @@ def refine_mask(base_mask, image, settings, model_manager, trimap_np=None):
     # Soften
     if settings.get("soften", False):
         processed_mask = processed_mask.filter(ImageFilter.GaussianBlur(radius=settings.get("soften_radius", 1.5)))
+
+    # Sharpen
+    if settings.get("sharpen", False):
+        processed_mask = processed_mask.filter(
+            ImageFilter.UnsharpMask(
+                radius=settings.get("sharpen_radius", 1.5),
+                percent=settings.get("sharpen_percent", 125),
+                threshold=settings.get("sharpen_threshold", 0),
+            )
+        )
 
     # Binarise
     if settings.get("binarise", False):

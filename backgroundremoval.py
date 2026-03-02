@@ -641,6 +641,10 @@ class BackgroundRemoverGUI(QMainWindow):
             },
             "soften": self.refine_tab.chk_soften.isChecked(),
             "soften_radius": 1.5, # Could be made configurable
+            "sharpen": self.refine_tab.chk_sharpen.isChecked(),
+            "sharpen_radius": 2,
+            "sharpen_percent": 200,
+            "sharpen_threshold": 0,
             "binarise": self.refine_tab.chk_binarise_mask.isChecked(),
             "expand_amount": self.refine_tab.sl_mask_expand.value(),
         }
