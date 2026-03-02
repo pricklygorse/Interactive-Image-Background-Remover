@@ -522,28 +522,6 @@ class SettingsDialog(QDialog):
         layout.addWidget(path_group)
 
 
-        # Paintbrush Settings
-        paint_group = QFrame()
-        paint_group.setFrameShape(QFrame.Shape.StyledPanel)
-        paint_layout = QVBoxLayout(paint_group)
-        
-        paint_label = QLabel("<b>Paintbrush Behaviour:</b>")
-        paint_layout.addWidget(paint_label)
-        
-        self.chk_paint_direct = QCheckBox("Paintbrush edits output mask directly")
-        self.chk_paint_direct.setToolTip(
-            "Checked: Paint strokes immediately modify the final output.\n"
-            "Unchecked: Paint strokes modify the blue model overlay (requires 'Add/Sub' to commit)."
-        )
-        
-        # Default to True
-        is_direct = self.settings.value("paint_edits_working_mask", True, type=bool) if self.settings else True
-        self.chk_paint_direct.setChecked(is_direct)
-        self.chk_paint_direct.toggled.connect(
-            lambda checked: self.settings.setValue("paint_edits_working_mask", checked) if self.settings else None
-        )
-
-
 
         # Refinement & Matting Settings
         refine_group = QFrame()
@@ -721,13 +699,6 @@ class SettingsDialog(QDialog):
         layout.addWidget(gf_group)
 
 
-
-
-
-
-        
-        paint_layout.addWidget(self.chk_paint_direct)
-        layout.addWidget(paint_group)
         
         scroll.setWidget(tab_content)
         self.tabs.addTab(scroll, "Settings")

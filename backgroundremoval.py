@@ -502,6 +502,14 @@ class BackgroundRemoverGUI(QMainWindow):
         self.chk_paint_soften.setChecked(self.settings.value("chk_paint_soften", True, type=bool))
         self.chk_paint_soften.toggled.connect(lambda checked: self.settings.setValue("chk_paint_soften", checked))
 
+        self.lbl_paint_target = QLabel("Editing: Output Mask")
+        self.lbl_paint_target.setToolTip("Paint/Erase edits the floating preview when available, otherwise the global composite mask.")
+        layout.addWidget(self.lbl_paint_target)
+
+        self.btn_draw_mode.toggled.connect(lambda _: self.update_paint_target_label())
+        self.btn_erase_mode.toggled.connect(lambda _: self.update_paint_target_label())
+        self.btn_smart_refine.toggled.connect(lambda _: self.update_paint_target_label())
+
         layout.addStretch()
         
         self.paint_settings_panel.hide()
@@ -509,6 +517,29 @@ class BackgroundRemoverGUI(QMainWindow):
         QTimer.singleShot(100, self.populate_matting_models)
         
         return self.paint_settings_panel
+
+    def paint_edits_preview_mask(self):
+        """
+        Paint/Erase targets the floating model preview mask when present.
+        Smart Refine always targets the global composite mask.
+        """
+        if self.is_smart_refine:
+            return False
+        return bool(self.img_session and self.img_session.model_output_mask is not None)
+
+    def update_paint_target_label(self):
+        if not hasattr(self, 'lbl_paint_target'):
+            return
+        if not self.img_session:
+            self.lbl_paint_target.setText("Editing: Global Composite Mask")
+            return
+        if hasattr(self, 'btn_smart_refine') and self.btn_smart_refine.isChecked():
+            self.lbl_paint_target.setText("Editing: Global Composite Mask (Smart Refine)")
+            return
+        if self.img_session.model_output_mask is not None:
+            self.lbl_paint_target.setText("Editing: Floating Preview Mask")
+        else:
+            self.lbl_paint_target.setText("Editing: Global Composite Mask")
 
     def update_paint_brush_size(self, val):
         self.brush_size = val
@@ -1900,6 +1931,7 @@ class BackgroundRemoverGUI(QMainWindow):
         QTimer.singleShot(0, lambda: self.modify_mask())   
 
         self.update_commit_button_states()
+        self.update_paint_target_label()
 
 
     def show_mask_overlay(self):
@@ -1977,6 +2009,7 @@ class BackgroundRemoverGUI(QMainWindow):
             self.scene_input.removeItem(item)
 
         self.input_pixmap_item.show()
+        self.update_paint_target_label()
 
     def clear_visible_area(self):
         if not self.img_session.composite_mask:
@@ -2025,6 +2058,7 @@ class BackgroundRemoverGUI(QMainWindow):
         self.update_output_preview()
         self.show_mask_overlay()
         self.update_commit_button_states()
+        self.update_paint_target_label()
 
     def clear_sam_points_from_ui(self):
         """Removes only the SAM point/box items from the scene."""
@@ -2217,6 +2251,7 @@ class BackgroundRemoverGUI(QMainWindow):
         self.show_mask_overlay()
         self.update_output_preview()  # Show temporary cutout on output canvas
         self.update_commit_button_states()
+        self.update_paint_target_label()
         
         self.set_loading(False, self.status_msg + ref_msg)
 
@@ -2407,6 +2442,7 @@ class BackgroundRemoverGUI(QMainWindow):
         
         if hasattr(self, 'paint_settings_panel'):
             self.paint_settings_panel.setVisible(enabled)
+            self.update_paint_target_label()
 
         # Update cursor on both views
         cursor_pos = self.view_input.mapFromGlobal(QCursor.pos())
@@ -2669,29 +2705,29 @@ class BackgroundRemoverGUI(QMainWindow):
             
             stroke_mask = Image.fromarray(stroke_mask_np, mode="L")
 
-            # Check preference for paint target
-            edits_working_directly = self.settings.value("paint_edits_working_mask", True, type=bool)
+            self.add_undo_step()
+            if self.paint_edits_preview_mask():
+                if self.is_erasing:
+                    self.img_session.model_output_mask = ImageChops.subtract(self.img_session.model_output_mask, stroke_mask)
+                else:
+                    self.img_session.model_output_mask = ImageChops.lighter(self.img_session.model_output_mask, stroke_mask)
 
-            if edits_working_directly:
-                self.add_undo_step()
+                # Rebuild refined preview from the edited model output.
+                self.img_session.model_output_refined = None
+                self.show_mask_overlay()
+                self.update_output_preview()
+                self.update_commit_button_states()
+                self.modify_mask()
+            else:
                 if self.is_erasing:
                     # Right Click: Remove from composite
                     self.img_session.composite_mask = ImageChops.subtract(self.img_session.composite_mask, stroke_mask)
                 else:
                     # Left Click: Add to composite (Paint from original image)
                     self.img_session.composite_mask = ImageChops.lighter(self.img_session.composite_mask, stroke_mask)
-                
+
                 self.update_output_preview()
-            else:
-                # Legacy behaviour: Edit the model output mask (blue overlay)
-                # This requires user to click 'Add' or 'Subtract' to commit to composite
-                if self.is_erasing:
-                    self.img_session.model_output_mask = ImageChops.subtract(self.img_session.model_output_mask, stroke_mask)
-                else:
-                    self.img_session.model_output_mask = ImageChops.lighter(self.img_session.model_output_mask, stroke_mask)
-                self.show_mask_overlay()
-            
-            self.update_output_preview()
+            self.update_paint_target_label()
             
         finally:
             if hasattr(self, 'current_path'): 
