@@ -37,7 +37,7 @@ from src.ui_dialogs import InpaintingDialog
 from src.trimap_editor import TrimapEditorDialog
 from src.utils import pil2pixmap, numpy_to_pixmap, apply_tone_sharpness, generate_blurred_background, sanitise_filename_for_windows, get_current_crop_bbox, generate_trimap_from_mask, clean_alpha, generate_alpha_map, \
     compose_final_image, refine_mask, generate_mask_outline_path, expand_contract_mask, guided_filter
-from src.constants import PAINT_BRUSH_SCREEN_SIZE, SOFTEN_RADIUS
+from src.constants import PAINT_BRUSH_SCREEN_SIZE
 
 if getattr(sys, "frozen", False): 
     try: pyi_splash.update_text("Loading pymatting (Compiles on first run, approx 1-2 minutes)") # type: ignore
@@ -490,17 +490,25 @@ class BackgroundRemoverGUI(QMainWindow):
         self.sl_brush_size = QSlider(Qt.Orientation.Horizontal)
         self.sl_brush_size.setRange(5, 200)
         self.sl_brush_size.setValue(PAINT_BRUSH_SCREEN_SIZE)
-        self.sl_brush_size.setFixedWidth(150)
+        self.sl_brush_size.setFixedWidth(110)
         self.sl_brush_size.valueChanged.connect(self.update_paint_brush_size)
                 
         layout.addWidget(self.sl_brush_size)
         
-        self.chk_paint_soften = QCheckBox("Soften Edges")
-        
-        layout.addWidget(self.chk_paint_soften)
-        
-        self.chk_paint_soften.setChecked(self.settings.value("chk_paint_soften", True, type=bool))
-        self.chk_paint_soften.toggled.connect(lambda checked: self.settings.setValue("chk_paint_soften", checked))
+        self.lbl_paint_hardness = QLabel("Brush Hardness:")
+        layout.addWidget(self.lbl_paint_hardness)
+
+        self.sl_paint_hardness = QSlider(Qt.Orientation.Horizontal)
+        self.sl_paint_hardness.setRange(0, 100)
+        self.sl_paint_hardness.setFixedWidth(110)
+        self.sl_paint_hardness.setValue(self.settings.value("paint_brush_hardness", 75, type=int))
+        self.sl_paint_hardness.valueChanged.connect(self.update_paint_hardness_label)
+        self.sl_paint_hardness.valueChanged.connect(lambda value: self.settings.setValue("paint_brush_hardness", value))
+        layout.addWidget(self.sl_paint_hardness)
+
+        self.lbl_paint_hardness_value = QLabel()
+        layout.addWidget(self.lbl_paint_hardness_value)
+        self.update_paint_hardness_label(self.sl_paint_hardness.value())
 
         self.lbl_paint_target = QLabel("Editing: Output Mask")
         self.lbl_paint_target.setToolTip("Paint/Erase edits the floating preview when available, otherwise the global composite mask.")
@@ -549,6 +557,16 @@ class BackgroundRemoverGUI(QMainWindow):
         scene_pos = self.view_input.mapToScene(cursor_pos)
         self.view_input.update_brush_cursor(scene_pos)
         self.view_output.update_brush_cursor(scene_pos)
+
+    def update_paint_hardness_label(self, val):
+        if hasattr(self, "lbl_paint_hardness_value"):
+            self.lbl_paint_hardness_value.setText(f"{val}%")
+
+    def get_paint_soften_sigma(self):
+        hardness = self.sl_paint_hardness.value() if hasattr(self, "sl_paint_hardness") else 75
+        # 100% hardness means no blur, 0% means the softest edge.
+        max_soften_radius = 8.0
+        return max_soften_radius * (100.0 - float(hardness)) / 100.0
 
     
     def create_global_toolbar(self):
@@ -2741,9 +2759,10 @@ class BackgroundRemoverGUI(QMainWindow):
                 self.worker.start()
                 return 
 
-            if self.chk_paint_soften.isChecked():
-                # ksize (0,0) allows OpenCV to compute the kernel size automatically from sigma
-                stroke_mask_np = cv2.GaussianBlur(stroke_mask_np, (0, 0), sigmaX=SOFTEN_RADIUS)
+            soften_sigma = self.get_paint_soften_sigma()
+            if soften_sigma > 0.01:
+                # ksize (0,0) allows OpenCV to compute the kernel size automatically from sigma.
+                stroke_mask_np = cv2.GaussianBlur(stroke_mask_np, (0, 0), sigmaX=soften_sigma)
             
             stroke_mask = Image.fromarray(stroke_mask_np, mode="L")
 
