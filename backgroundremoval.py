@@ -51,7 +51,7 @@ from src.ui_tab_maskgen import MaskGenTab
 from src.ui_tab_refine import RefineTab
 from src.ui_tab_export import ExportTab
 
-WINDOW_TITLE = "Interactive Background Remover v1.7"
+WINDOW_TITLE = "Interactive Background Remover v1.8.5"
 VIEW_IN_MSG = "Models run on current view. Zoom for more detail.   L-Click: Add Point | R-Click: Add Avoid Point | Drag: Box | M-Click: Pan | Scroll: Zoom (Ctrl+Scroll Touchpad) | [P]: Paintbrush"
 VIEW_OUT_MSG = "OUTPUT | M-Click: Pan | Scroll: Zoom | [A/S]: Add/Subtract Current Model Mask from Output"
 VIEW_PAINT_MSG = "PAINTBRUSH | L-Click: Paint | R-Click: Erase | M-Click: Pan | Scroll: Zoom | [P]: Exit Paint"
