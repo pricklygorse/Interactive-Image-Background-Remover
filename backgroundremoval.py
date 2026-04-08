@@ -1601,13 +1601,38 @@ class BackgroundRemoverGUI(QMainWindow):
             QMessageBox.critical(self, "Error", f"Could not load from clipboard: {e}")
 
     def _get_last_image_dir(self):
-        last_dir = self.settings.value("last_image_dir", "", type=str)
+        last_dir = self.settings.value("last_image_dir", "SOURCE_DIR", type=str)
+        if last_dir == "SOURCE_DIR":
+            source_dir = self._get_current_image_dir()
+            if source_dir:
+                return source_dir
+            return os.path.expanduser("~")
         if last_dir and os.path.isdir(last_dir):
             return last_dir
         return os.path.expanduser("~")
 
+    def _get_current_image_dir(self):
+        source = getattr(self.img_session, "source", None) if self.img_session else None
+        if source and source not in ("Clipboard", "None"):
+            directory = os.path.dirname(os.path.abspath(source))
+            if directory and os.path.isdir(directory):
+                return directory
+
+        if self.image_paths:
+            current_index = min(self.current_image_index, len(self.image_paths) - 1)
+            current_path = self.image_paths[current_index]
+            if current_path not in ("Clipboard", "None"):
+                directory = os.path.dirname(os.path.abspath(current_path))
+                if directory and os.path.isdir(directory):
+                    return directory
+
+        return None
+
     def _save_last_image_dir(self, path):
         if not path:
+            return
+        last_dir = self.settings.value("last_image_dir", "SOURCE_DIR", type=str)
+        if last_dir == "SOURCE_DIR":
             return
         directory = os.path.dirname(path)
         if directory and os.path.isdir(directory):

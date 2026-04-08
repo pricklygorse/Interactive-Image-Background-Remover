@@ -499,6 +499,32 @@ class SettingsDialog(QDialog):
         
         layout.addWidget(theme_group)
 
+        # File dialog initial folder
+        save_dir_group = QFrame()
+        save_dir_group.setFrameShape(QFrame.Shape.StyledPanel)
+        save_dir_layout = QHBoxLayout(save_dir_group)
+
+        save_dir_label = QLabel("<b>File Dialog Initial Folder:</b>")
+        save_dir_label.setToolTip("Choose whether Open and Save dialogs start in the current image folder or your last saved folder.")
+
+        self.save_dir_combo = QComboBox()
+        self.save_dir_combo.addItem("Same as current image folder", "SOURCE_DIR")
+        self.save_dir_combo.addItem("Remember last saved folder", "LAST_SAVED")
+
+        current_last_dir = self.settings.value("last_image_dir", "SOURCE_DIR", type=str) if self.settings else "SOURCE_DIR"
+        if current_last_dir == "SOURCE_DIR":
+            self.save_dir_combo.setCurrentIndex(0)
+        else:
+            self.save_dir_combo.setCurrentIndex(1)
+
+        self.save_dir_combo.currentIndexChanged.connect(self._on_save_dir_mode_changed)
+
+        save_dir_layout.addWidget(save_dir_label)
+        save_dir_layout.addWidget(self.save_dir_combo)
+        save_dir_layout.addStretch()
+
+        layout.addWidget(save_dir_group)
+
         # Model Download Location
         path_group = QFrame()
         path_group.setFrameShape(QFrame.Shape.StyledPanel)
@@ -706,6 +732,24 @@ class SettingsDialog(QDialog):
     def _on_theme_changed(self, theme_text):
         if self.main_app_instance:
             self.main_app_instance.set_theme(theme_text.lower())
+
+    def _on_save_dir_mode_changed(self, index):
+        if not self.settings:
+            return
+
+        mode = self.save_dir_combo.itemData(index)
+        if mode == "SOURCE_DIR":
+            self.settings.setValue("last_image_dir", "SOURCE_DIR")
+            return
+
+        current_dir = None
+        if self.main_app_instance:
+            current_dir = self.main_app_instance._get_current_image_dir()
+
+        if not current_dir:
+            current_dir = os.path.expanduser("~")
+
+        self.settings.setValue("last_image_dir", current_dir)
 
     def _on_browse_model_path(self):
         new_dir = QFileDialog.getExistingDirectory(
