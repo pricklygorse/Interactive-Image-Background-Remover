@@ -346,8 +346,8 @@ class BackgroundRemoverGUI(QMainWindow):
         self.view_output.viewport().installEventFilter(self)
 
         # Holds the views (top) and the thumbnails (bottom)
-        views_thumbs_widget = QWidget()
-        views_thumbs_layout = QVBoxLayout(views_thumbs_widget)
+        self.views_thumbs_widget = QWidget()
+        views_thumbs_layout = QVBoxLayout(self.views_thumbs_widget)
         views_thumbs_layout.setContentsMargins(0, 0, 0, 0)
         views_thumbs_layout.setSpacing(2) # Can add small gap between views and thumbnails
 
@@ -373,7 +373,6 @@ class BackgroundRemoverGUI(QMainWindow):
         
         bottom_strip_layout.addWidget(self.btn_batch)
 
-        # Add the settings panel + splitter to the top, thumbnails to the bottom
         views_thumbs_layout.addWidget(self.create_paint_settings_panel())
         views_thumbs_layout.addWidget(self.in_out_splitter, 1) # '1' ensures views take most space
         views_thumbs_layout.addWidget(bottom_strip_widget)
@@ -382,7 +381,7 @@ class BackgroundRemoverGUI(QMainWindow):
         self.main_splitter = QSplitter(Qt.Orientation.Horizontal)
         self.main_splitter.setHandleWidth(4)
         self.main_splitter.addWidget(self.sidebar_container)
-        self.main_splitter.addWidget(views_thumbs_widget)
+        self.main_splitter.addWidget(self.views_thumbs_widget)
         
         self.main_splitter.setStretchFactor(1, 1)
         self.main_splitter.setSizes([350, 1250])
@@ -781,8 +780,8 @@ class BackgroundRemoverGUI(QMainWindow):
         self.clear_overlay() # Clears points from screen
 
         # Ensure view bounds are updated for the new size
-        self.view_input.setSceneRect(self.input_pixmap_item.boundingRect())
         self.view_input.fitInView(self.input_pixmap_item, Qt.AspectRatioMode.KeepAspectRatio)
+        self.update_view_scene_rects(self.input_pixmap_item.boundingRect())
         
         self.status_label.setText(f"Image Cropped to {w}x{h}")
 
@@ -1711,7 +1710,6 @@ class BackgroundRemoverGUI(QMainWindow):
             # 1. Update the Pixmap
             self.input_pixmap_item.setPixmap(pil2pixmap(self.img_session.active_image))
             rect = self.input_pixmap_item.boundingRect()
-            self.view_input.setSceneRect(rect)
 
             if reset_zoom:
                 self.view_input.resetTransform()
@@ -1720,15 +1718,81 @@ class BackgroundRemoverGUI(QMainWindow):
                 self.view_input.scale(1, 1)
 
             if self.view_output:
-                self.view_output.setSceneRect(rect)
                 if reset_zoom:
                     self.view_output.setTransform(self.view_input.transform())
-            
+
+            self.update_view_scene_rects(rect)
             self.update_zoom_label()
 
     def update_zoom_label(self):
         zoom = self.view_input.transform().m11() * 100
         self.zoom_label.setText(f"Zoom: {int(zoom)}%")
+
+    def update_view_scene_rects(self, rect=None):
+        if rect is None:
+            if not hasattr(self, "input_pixmap_item"):
+                return
+            rect = self.input_pixmap_item.boundingRect()
+
+        if rect.isNull():
+            return
+
+        scene_rect = QRectF(rect)
+
+        if hasattr(self, "paint_settings_panel"):
+            zoom = self.view_input.transform().m11()
+            if zoom == 0:
+                zoom = 1.0
+
+            panel_height = self.paint_settings_panel.height()
+            views_layout = self.views_thumbs_widget.layout() if hasattr(self, "views_thumbs_widget") else None
+            if views_layout is not None:
+                panel_height += views_layout.spacing()
+            transformed_height = rect.height() * zoom
+
+            # When the image is shorter than the viewport, Qt centers it vertically.
+            # Bias the scene rect differently for hidden vs shown paint tools so the
+            # image's top edge stays visually fixed as the toolbar appears/disappears.
+            if panel_height > 0 and transformed_height < self.view_input.viewport().height():
+                total_vertical_padding = panel_height / zoom
+                top_padding = 0.0 if self.paint_mode else total_vertical_padding / 2.0
+                bottom_padding = total_vertical_padding - top_padding
+                scene_rect.adjust(0, -top_padding, 0, bottom_padding)
+
+        self.view_input.setSceneRect(scene_rect)
+        if self.view_output:
+            self.view_output.setSceneRect(scene_rect)
+
+    def capture_view_anchor(self):
+        if not self.img_session:
+            return None
+
+        global_pos = self.view_input.viewport().mapToGlobal(self.view_input.viewport().rect().center())
+        scene_pos = self.view_input.mapToScene(self.view_input.mapFromGlobal(global_pos))
+        return global_pos, scene_pos
+
+    def restore_view_anchor(self, anchor):
+        if not anchor or not self.img_session:
+            return
+
+        global_pos, scene_pos = anchor
+        target_view_pos = self.view_input.mapFromScene(scene_pos)
+        desired_view_pos = self.view_input.mapFromGlobal(global_pos)
+        delta = target_view_pos - desired_view_pos
+
+        if delta.x() or delta.y():
+            hs = self.view_input.horizontalScrollBar()
+            vs = self.view_input.verticalScrollBar()
+            hs.setValue(hs.value() + delta.x())
+            vs.setValue(vs.value() + delta.y())
+
+        self.view_output.horizontalScrollBar().setValue(self.view_input.horizontalScrollBar().value())
+        self.view_output.verticalScrollBar().setValue(self.view_input.verticalScrollBar().value())
+
+        cursor_pos = self.view_input.mapFromGlobal(QCursor.pos())
+        cursor_scene_pos = self.view_input.mapToScene(cursor_pos)
+        self.view_input.update_brush_cursor(cursor_scene_pos)
+        self.view_output.update_brush_cursor(cursor_scene_pos)
 
     def eventFilter(self, source, event):
         """Captures mouse entry into views to display control hints in the status bar."""
@@ -2419,7 +2483,7 @@ class BackgroundRemoverGUI(QMainWindow):
             final = self.render_output_preview()
         
         self.output_pixmap_item.setPixmap(pil2pixmap(final))
-        self.view_output.setSceneRect(self.view_input.sceneRect())
+        self.update_view_scene_rects()
 
         # Show marching ants around temporary preview mask if a model output exists
         # Use refined mask if available (from live preview), otherwise use model_output_mask
@@ -2495,6 +2559,8 @@ class BackgroundRemoverGUI(QMainWindow):
     def toggle_paint_mode(self, enabled):
         if enabled and self.crop_mode:
             self.adjust_tab.btn_toggle_crop.setChecked(False)
+
+        anchor = self.capture_view_anchor()
         
         self.paint_mode = enabled
         self.view_input.setCursor(Qt.CursorShape.CrossCursor if enabled else Qt.CursorShape.ArrowCursor)
@@ -2503,6 +2569,11 @@ class BackgroundRemoverGUI(QMainWindow):
         if hasattr(self, 'paint_settings_panel'):
             self.paint_settings_panel.setVisible(enabled)
             self.update_paint_target_label()
+
+        self.update_view_scene_rects()
+
+        if anchor:
+            QTimer.singleShot(0, lambda a=anchor: self.restore_view_anchor(a))
 
         # Update cursor on both views
         cursor_pos = self.view_input.mapFromGlobal(QCursor.pos())

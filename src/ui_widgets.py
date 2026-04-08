@@ -429,6 +429,10 @@ class SynchronisedGraphicsView(QGraphicsView):
         
         view_rect = self.viewport().rect()
         scene_rect = self.sceneRect()
+        if self.controller and hasattr(self.controller, "input_pixmap_item"):
+            pixmap = self.controller.input_pixmap_item.pixmap()
+            if not pixmap.isNull():
+                scene_rect = self.controller.input_pixmap_item.boundingRect()
         
         if scene_rect.width() > 0 and scene_rect.height() > 0:
             ratio_w = view_rect.width() / scene_rect.width()
@@ -450,6 +454,9 @@ class SynchronisedGraphicsView(QGraphicsView):
         
         self.scale(factor, factor)
         self.update_point_scales()
+
+        if self.controller and hasattr(self.controller, "update_view_scene_rects"):
+            self.controller.update_view_scene_rects()
         
         # Recenter zoom on mouse
         new_viewport_pos = self.mapFromScene(target_scene_pos)
